@@ -2,3 +2,9 @@
 .claude
 .templates
 /scripts
+
+# Local workspace files
+.tmp/
+.issues/
+.features/
+
