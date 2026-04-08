@@ -18,5 +18,5 @@ type SurgeonCommands interface {
 // SurgeonQueries defines the interface for querying the codebase AST.
 type SurgeonQueries interface {
 	FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
-	Graph(ctx context.Context, dir string, symbols bool) ([]domain.GraphPackage, error)
+	Graph(ctx context.Context, dir string, symbols, summary, deps, recursive, tests bool) ([]domain.GraphPackage, error)
 }

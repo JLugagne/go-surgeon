@@ -104,8 +104,15 @@ type LargeConfig struct {
 	require.NoError(t, os.MkdirAll(vendorDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(vendorDir, "skip.go"), []byte("package vendor\n"), 0644))
 
+	files := loadFiles(t, tmpDir)
+	return tmpDir, &mockFS{files: files}
+}
+
+// loadFiles walks dir and returns a map of path → content for all non-directory files.
+func loadFiles(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
 	files := make(map[string][]byte)
-	filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -113,15 +120,17 @@ type LargeConfig struct {
 		files[path] = data
 		return nil
 	})
-
-	return tmpDir, &mockFS{files: files}
+	require.NoError(t, err)
+	return files
 }
+
+// --- Package listing (symbols=false) ---
 
 func TestGraph_PackagesOnly(t *testing.T) {
 	tmpDir, fs := setupGraphFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false)
+	packages, err := handler.Graph(context.Background(), tmpDir, false, false, false, false, false)
 	require.NoError(t, err)
 
 	var paths []string
@@ -129,65 +138,86 @@ func TestGraph_PackagesOnly(t *testing.T) {
 		paths = append(paths, p.Path)
 	}
 
-	// Should contain our 3 packages
 	assert.Len(t, packages, 3)
 	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
 	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
 	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain", "repositories"))
 
-	// Should NOT contain hidden or vendor
 	for _, p := range paths {
 		assert.NotContains(t, p, ".hidden")
 		assert.NotContains(t, p, "vendor")
 	}
 
-	// Files should be empty when symbols=false
 	for _, pkg := range packages {
 		assert.Nil(t, pkg.Files)
 	}
 }
 
-func TestGraph_WithSymbols(t *testing.T) {
+func TestGraph_EmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	handler := queries.NewSurgeonQueriesHandler(&mockFS{files: map[string][]byte{}})
+
+	packages, err := handler.Graph(context.Background(), tmpDir, false, false, false, false, false)
+	require.NoError(t, err)
+	assert.Empty(t, packages)
+}
+
+// --- Symbols: non-recursive (default) ---
+
+func TestGraph_WithSymbols_NonRecursive(t *testing.T) {
 	tmpDir, fs := setupGraphFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	domainDir := filepath.Join(tmpDir, "pkg", "domain")
-	packages, err := handler.Graph(context.Background(), domainDir, true)
+	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, false, false)
 	require.NoError(t, err)
 
-	// Should find domain and domain/repositories
-	require.Len(t, packages, 2)
+	// Only the target directory — repositories sub-package is excluded.
+	require.Len(t, packages, 1)
+	assert.Equal(t, domainDir, packages[0].Path)
 
-	// First package: domain
-	domainPkg := packages[0]
-	assert.Equal(t, domainDir, domainPkg.Path)
-	require.Len(t, domainPkg.Files, 2) // book.go, errors.go (not book_test.go)
+	require.Len(t, packages[0].Files, 2) // book.go, errors.go (book_test.go skipped)
 
-	// book.go symbols
-	bookFile := domainPkg.Files[0]
+	bookFile := packages[0].Files[0]
 	assert.True(t, strings.HasSuffix(bookFile.Path, "book.go"))
-	require.Len(t, bookFile.Symbols, 3) // Book struct, BookID type, NewBook func (helperFunc is unexported)
-
-	// Book struct — compact (3 fields)
+	require.Len(t, bookFile.Symbols, 3)
 	assert.Equal(t, "type Book struct { ID BookID; Title string; Author string }", bookFile.Symbols[0])
-
-	// BookID type alias
 	assert.Equal(t, "type BookID string", bookFile.Symbols[1])
-
-	// NewBook function signature
 	assert.Equal(t, "func NewBook(title, author string) (*Book, error)", bookFile.Symbols[2])
 
-	// errors.go symbols
-	errFile := domainPkg.Files[1]
+	errFile := packages[0].Files[1]
 	assert.True(t, strings.HasSuffix(errFile.Path, "errors.go"))
-	require.Len(t, errFile.Symbols, 3) // Error struct, Error method, Unwrap method
-
-	// Error struct
+	require.Len(t, errFile.Symbols, 3)
 	assert.Equal(t, "type Error struct { Code string; Message string; Err error }", errFile.Symbols[0])
-
-	// Methods
 	assert.Equal(t, "func (e *Error) Error() string", errFile.Symbols[1])
 	assert.Equal(t, "func (e *Error) Unwrap() error", errFile.Symbols[2])
+}
+
+func TestGraph_WithSymbols_NonRecursive_NoSubDirFiles(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	repoDir := filepath.Join(tmpDir, "pkg", "domain", "repositories")
+	packages, err := handler.Graph(context.Background(), repoDir, true, false, false, false, false)
+	require.NoError(t, err)
+	require.Len(t, packages, 1)
+	require.Len(t, packages[0].Files, 1)
+	assert.Equal(t, "type BookRepository interface { Create; FindByID; Delete }", packages[0].Files[0].Symbols[0])
+}
+
+// --- Symbols: recursive (opt-in) ---
+
+func TestGraph_WithSymbols_Recursive(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	domainDir := filepath.Join(tmpDir, "pkg", "domain")
+	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, true, false)
+	require.NoError(t, err)
+
+	require.Len(t, packages, 2)
+	assert.Equal(t, domainDir, packages[0].Path)
+	assert.Equal(t, filepath.Join(domainDir, "repositories"), packages[1].Path)
 }
 
 func TestGraph_InterfaceFormatting(t *testing.T) {
@@ -195,7 +225,7 @@ func TestGraph_InterfaceFormatting(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	repoDir := filepath.Join(tmpDir, "pkg", "domain", "repositories")
-	packages, err := handler.Graph(context.Background(), repoDir, true)
+	packages, err := handler.Graph(context.Background(), repoDir, true, false, false, false, false)
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 	require.Len(t, packages[0].Files, 1)
@@ -210,7 +240,7 @@ func TestGraph_LargeStructMultiLine(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	appDir := filepath.Join(tmpDir, "pkg", "app")
-	packages, err := handler.Graph(context.Background(), appDir, true)
+	packages, err := handler.Graph(context.Background(), appDir, true, false, false, false, false)
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 	require.Len(t, packages[0].Files, 1)
@@ -218,7 +248,6 @@ func TestGraph_LargeStructMultiLine(t *testing.T) {
 	symbols := packages[0].Files[0].Symbols
 	require.Len(t, symbols, 1)
 
-	// 6 fields > 5, should be multi-line
 	expected := "type LargeConfig struct {\n" +
 		"    Host string\n" +
 		"    Port int\n" +
@@ -230,11 +259,278 @@ func TestGraph_LargeStructMultiLine(t *testing.T) {
 	assert.Equal(t, expected, symbols[0])
 }
 
-func TestGraph_EmptyDirectory(t *testing.T) {
-	tmpDir := t.TempDir()
-	handler := queries.NewSurgeonQueriesHandler(&mockFS{files: map[string][]byte{}})
+// --- Tests flag ---
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false)
+func setupTestsFixture(t *testing.T) (string, *mockFS) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
+	require.NoError(t, os.MkdirAll(pkgDir, 0755))
+
+	// Production file: exported symbols only.
+	prodCode := `package commands
+
+type CreateHandler struct{}
+
+func NewCreateHandler() *CreateHandler { return &CreateHandler{} }
+func (h *CreateHandler) Handle() error  { return nil }
+`
+
+	// Test file: exported test funcs + unexported helpers + unexported type.
+	testCode := `package commands
+
+import "testing"
+
+type mockDep struct{ called bool }
+
+func setupHandler(t *testing.T) (*CreateHandler, *mockDep) {
+	t.Helper()
+	return NewCreateHandler(), &mockDep{}
+}
+
+func TestHandle_Success(t *testing.T) {}
+func TestHandle_Error(t *testing.T)   {}
+`
+
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "create.go"), []byte(prodCode), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "create_test.go"), []byte(testCode), 0644))
+
+	files := loadFiles(t, tmpDir)
+	return tmpDir, &mockFS{files: files}
+}
+
+func TestGraph_WithTests_ExcludesTestFilesByDefault(t *testing.T) {
+	tmpDir, fs := setupTestsFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
+	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, false)
 	require.NoError(t, err)
-	assert.Empty(t, packages)
+	require.Len(t, packages, 1)
+
+	// Only create.go — test file excluded.
+	require.Len(t, packages[0].Files, 1)
+	assert.True(t, strings.HasSuffix(packages[0].Files[0].Path, "create.go"))
+}
+
+func TestGraph_WithTests_IncludesTestFiles(t *testing.T) {
+	tmpDir, fs := setupTestsFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
+	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, true)
+	require.NoError(t, err)
+	require.Len(t, packages, 1)
+
+	// Both create.go and create_test.go.
+	require.Len(t, packages[0].Files, 2)
+	assert.True(t, strings.HasSuffix(packages[0].Files[0].Path, "create.go"))
+	assert.True(t, strings.HasSuffix(packages[0].Files[1].Path, "create_test.go"))
+}
+
+func TestGraph_WithTests_UnexportedSymbolsInTestFile(t *testing.T) {
+	tmpDir, fs := setupTestsFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
+	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, true)
+	require.NoError(t, err)
+	require.Len(t, packages, 1)
+
+	// Find the test file's symbols.
+	var testFileSymbols []string
+	for _, f := range packages[0].Files {
+		if strings.HasSuffix(f.Path, "_test.go") {
+			testFileSymbols = f.Symbols
+		}
+	}
+	require.NotNil(t, testFileSymbols)
+
+	symNames := make(map[string]bool)
+	for _, s := range testFileSymbols {
+		symNames[s] = true
+	}
+
+	// Unexported type and function are visible.
+	assert.True(t, symNames["type mockDep struct { called bool }"], "mockDep type should be visible")
+	assert.Contains(t, strings.Join(testFileSymbols, "\n"), "func setupHandler")
+
+	// Exported test functions are visible.
+	assert.Contains(t, strings.Join(testFileSymbols, "\n"), "func TestHandle_Success")
+	assert.Contains(t, strings.Join(testFileSymbols, "\n"), "func TestHandle_Error")
+}
+
+func TestGraph_WithTests_ProductionFileUnexportedStillHidden(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// helperFunc is unexported in book.go (a production file).
+	// --tests should NOT expose it — unexported-in-test-files logic is test-file only.
+	domainDir := filepath.Join(tmpDir, "pkg", "domain")
+	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, false, true)
+	require.NoError(t, err)
+	require.Len(t, packages, 1)
+
+	// Production files still only show exported symbols.
+	for _, f := range packages[0].Files {
+		if strings.HasSuffix(f.Path, "book.go") {
+			for _, sym := range f.Symbols {
+				assert.NotContains(t, sym, "helperFunc", "unexported production func should remain hidden")
+			}
+		}
+	}
+}
+
+// --- Summary tests ---
+
+func setupSummaryFixture(t *testing.T) (string, *mockFS) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	withDocDir := filepath.Join(tmpDir, "pkg", "domain")
+	require.NoError(t, os.MkdirAll(withDocDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(withDocDir, "domain.go"), []byte(`// Package domain provides core entities and business rules.
+package domain
+
+type Book struct{}
+`), 0644))
+
+	withDocGoDir := filepath.Join(tmpDir, "pkg", "app")
+	require.NoError(t, os.MkdirAll(withDocGoDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(withDocGoDir, "aaa.go"), []byte(`// Package app wrong description from aaa.go.
+package app
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(withDocGoDir, "doc.go"), []byte(`// Package app provides CQRS use case handlers.
+package app
+`), 0644))
+
+	noDocDir := filepath.Join(tmpDir, "pkg", "infra")
+	require.NoError(t, os.MkdirAll(noDocDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(noDocDir, "infra.go"), []byte(`package infra
+
+type DB struct{}
+`), 0644))
+
+	bareDir := filepath.Join(tmpDir, "pkg", "bare")
+	require.NoError(t, os.MkdirAll(bareDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(bareDir, "bare.go"), []byte(`// Package bare
+package bare
+`), 0644))
+
+	files := loadFiles(t, tmpDir)
+	return tmpDir, &mockFS{files: files}
+}
+
+func TestGraph_Summary_ExtractsDocComment(t *testing.T) {
+	tmpDir, fs := setupSummaryFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), tmpDir, false, true, false, false, false)
+	require.NoError(t, err)
+	require.Len(t, packages, 4)
+
+	byPath := make(map[string]string)
+	for _, p := range packages {
+		byPath[p.Path] = p.Summary
+	}
+
+	assert.Equal(t, "provides core entities and business rules.", byPath[filepath.Join(tmpDir, "pkg", "domain")])
+	assert.Equal(t, "provides CQRS use case handlers.", byPath[filepath.Join(tmpDir, "pkg", "app")])
+	assert.Equal(t, "", byPath[filepath.Join(tmpDir, "pkg", "infra")])
+	assert.Equal(t, "", byPath[filepath.Join(tmpDir, "pkg", "bare")])
+}
+
+func TestGraph_Summary_DocGoPriority(t *testing.T) {
+	tmpDir, fs := setupSummaryFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), tmpDir, false, true, false, false, false)
+	require.NoError(t, err)
+
+	for _, p := range packages {
+		if p.Path == filepath.Join(tmpDir, "pkg", "app") {
+			assert.Equal(t, "provides CQRS use case handlers.", p.Summary)
+			return
+		}
+	}
+	t.Fatal("pkg/app not found")
+}
+
+// --- Deps tests ---
+
+func setupDepsFixture(t *testing.T) (string, *mockFS) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.com/myapp\n\ngo 1.21\n"), 0644))
+
+	domainDir := filepath.Join(tmpDir, "pkg", "domain")
+	require.NoError(t, os.MkdirAll(domainDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "domain.go"), []byte(`package domain
+
+type Book struct{}
+`), 0644))
+
+	appDir := filepath.Join(tmpDir, "pkg", "app")
+	require.NoError(t, os.MkdirAll(appDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(appDir, "service.go"), []byte(`package app
+
+import (
+	"context"
+
+	"example.com/myapp/pkg/domain"
+)
+
+func Handle(ctx context.Context, b domain.Book) {}
+`), 0644))
+
+	infraDir := filepath.Join(tmpDir, "pkg", "infra")
+	require.NoError(t, os.MkdirAll(infraDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(infraDir, "infra.go"), []byte(`package infra
+
+import (
+	"example.com/myapp/pkg/domain"
+	"example.com/myapp/pkg/app"
+)
+
+type Adapter struct{}
+
+func New() *Adapter { return &Adapter{} }
+
+var _ = domain.Book{}
+var _ = app.Handle
+`), 0644))
+
+	files := loadFiles(t, tmpDir)
+	return tmpDir, &mockFS{files: files}
+}
+
+func TestGraph_Deps_InternalImports(t *testing.T) {
+	tmpDir, fs := setupDepsFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), tmpDir, false, false, true, false, false)
+	require.NoError(t, err)
+	require.Len(t, packages, 3)
+
+	byPath := make(map[string][]string)
+	for _, p := range packages {
+		byPath[p.Path] = p.Deps
+	}
+
+	assert.Nil(t, byPath[filepath.Join(tmpDir, "pkg", "domain")])
+	assert.Equal(t, []string{"pkg/domain"}, byPath[filepath.Join(tmpDir, "pkg", "app")])
+	assert.Equal(t, []string{"pkg/app", "pkg/domain"}, byPath[filepath.Join(tmpDir, "pkg", "infra")])
+}
+
+func TestGraph_Deps_NoGoMod(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), tmpDir, false, false, true, false, false)
+	require.NoError(t, err)
+	for _, p := range packages {
+		assert.Nil(t, p.Deps)
+	}
 }

@@ -39,6 +39,9 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
+		if strings.HasSuffix(path, "_test.go") && !query.Tests {
+			return nil
+		}
 
 		src, err := h.fs.ReadFile(ctx, path)
 		if err != nil {
@@ -143,7 +146,7 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 
 	sigBytes := src[fset.Position(typeSpec.Pos()).Offset:endPos.Offset]
 	signature := strings.TrimSpace(string(sigBytes))
-	// For struct, signature is usually just the type definition. 
+	// For struct, signature is usually just the type definition.
 	// We'll treat the entire spec as signature.
 
 	codeLines := strings.Split(string(src[startPos.Offset:endPos.Offset]), "\n")
