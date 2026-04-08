@@ -52,13 +52,24 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 				return fmt.Errorf("ERROR (%s): %w", name, err)
 			}
 
+			fallback := false
 			for _, w := range result.Warnings {
 				fmt.Printf("WARNING (%s): %s\n", name, w)
 				if strings.Contains(w, "not found in") {
-					fmt.Printf("Hint: verify '--id %s' is the exact identifier. Use 'go-surgeon symbol %s' to confirm.\n", id, id)
+					fallback = true
+					fmt.Printf("Hint: '--id %s' not found; content was appended as a new declaration. Run 'go-surgeon graph -s -d <dir>' to verify what was written.\n", id)
 				}
 			}
-			fmt.Printf("SUCCESS (%s): %s\n", name, actionSuccessMessage(actionType, file, id, content))
+			
+			if fallback {
+				extracted := extractFirstIdentifier(content)
+				if extracted == "" {
+					extracted = "new declaration"
+				}
+				fmt.Printf("SUCCESS (%s): Added %s to %s\n", name, extracted, file)
+			} else {
+				fmt.Printf("SUCCESS (%s): %s\n", name, actionSuccessMessage(actionType, file, id, content))
+			}
 			return nil
 		},
 	}
