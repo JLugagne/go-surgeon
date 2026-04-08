@@ -21,31 +21,6 @@ const (
 	ActionTypeDeleteInterface ActionType = "delete_interface"
 )
 
-// Manifest defines the structure of the scaffolding manifest.
-type Manifest struct {
-	Commands []Command `yaml:"commands"`
-}
-
-// Command represents a single scaffolding command.
-type Command struct {
-	Name        string
-	Description string
-	Parameters  []Parameter
-	Files       []FileTemplate
-}
-
-// Parameter represents a parameter for a scaffolding command.
-type Parameter struct {
-	Name        string
-	Description string
-}
-
-// FileTemplate represents a template for a file to be scaffolded.
-type FileTemplate struct {
-	Path     string
-	Template string
-}
-
 // Action represents a single modification to the codebase.
 type Action struct {
 	Action      ActionType `yaml:"action"`
@@ -72,3 +47,28 @@ var (
 	// ErrEmptyPlan is returned when a plan contains no actions.
 	ErrEmptyPlan = errors.New("plan contains no actions")
 )
+
+type Template struct {
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Commands    []TemplateCommand `yaml:"commands"`
+}
+
+type TemplateCommand struct {
+	Command      string             `yaml:"command"`
+	Description  string             `yaml:"description"`
+	Variables    []TemplateVariable `yaml:"variables"`
+	Files        []TemplateFile     `yaml:"files"`
+	PostCommands []string           `yaml:"post_commands"`
+	Hint         string             `yaml:"hint"`
+}
+
+type TemplateVariable struct {
+	Key         string `yaml:"key"`
+	Description string `yaml:"description"`
+}
+
+type TemplateFile struct {
+	Source      string `yaml:"source"`
+	Destination string `yaml:"destination"`
+}

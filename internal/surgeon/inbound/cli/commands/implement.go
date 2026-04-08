@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -44,6 +45,9 @@ the interface file and its mock in one step.`,
 
 			results, err := surgeon.Implement(ctx, req)
 			if err != nil {
+				if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") || strings.Contains(err.Error(), "failed to read file") {
+					return fmt.Errorf("failed to implement interface: %w\nHint: create the target file first, or check the '--file' path.", err)
+				}
 				return fmt.Errorf("failed to implement interface: %w\nHint: use the full import path (e.g., 'github.com/myorg/myapp/domain.Interface'). For project-local interfaces, prefer 'add-interface'.", err)
 			}
 

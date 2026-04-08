@@ -69,7 +69,7 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 				}
 				return fmt.Errorf("ERROR (%s): %w", name, err)
 			}
-			fmt.Printf("SUCCESS: %s\n", result)
+			fmt.Printf("%s\n", result)
 			return nil
 		},
 	}

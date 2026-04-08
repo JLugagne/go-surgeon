@@ -46,9 +46,23 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		return "", err
 	}
 
-	msg := fmt.Sprintf("Updated %s in %s", req.Identifier, filepath.Base(req.FilePath))
-	if len(warnings) > 0 {
-		msg += " (WARNING: " + strings.Join(warnings, "; ") + ")"
+	var fallback bool
+	for _, w := range warnings {
+		if strings.Contains(w, "not found in") {
+			fallback = true
+			break
+		}
+	}
+
+	var msg string
+	if fallback {
+		extractedName := extractTypeName(req.Content)
+		if extractedName == "interface" {
+			extractedName = "new declaration"
+		}
+		msg = fmt.Sprintf("SUCCESS: Added %s to %s (NOTE: '--id %s' not found, content was appended as a new declaration)", extractedName, filepath.Base(req.FilePath), req.Identifier)
+	} else {
+		msg = fmt.Sprintf("SUCCESS: Updated %s in %s", req.Identifier, filepath.Base(req.FilePath))
 	}
 
 	if req.MockFile != "" && req.MockName != "" {
@@ -56,7 +70,11 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		if err != nil {
 			return "", fmt.Errorf("failed to regenerate mock: %w", err)
 		}
-		return msg + ", regenerated " + mockResult, nil
+		msg += ", regenerated " + mockResult
+	}
+
+	for _, w := range warnings {
+		msg += fmt.Sprintf("\nWARNING (update-interface): %s", w)
 	}
 
 	return msg, nil
@@ -72,7 +90,7 @@ func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.Int
 	if _, err := h.executeAction(ctx, action); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Deleted %s from %s", req.Identifier, filepath.Base(req.FilePath)), nil
+	return fmt.Sprintf("SUCCESS: Deleted %s from %s", req.Identifier, filepath.Base(req.FilePath)), nil
 }
 
 // extractTypeName extracts the type name from a Go type declaration source string.
