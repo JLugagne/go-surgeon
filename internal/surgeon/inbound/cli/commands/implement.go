@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
@@ -43,11 +44,13 @@ the interface file and its mock in one step.`,
 
 			results, err := surgeon.Implement(ctx, req)
 			if err != nil {
-				return fmt.Errorf("failed to implement interface: %w", err)
+				return fmt.Errorf("failed to implement interface: %w\nHint: use the full import path (e.g., 'github.com/myorg/myapp/domain.Interface'). For project-local interfaces, prefer 'add-interface'.", err)
 			}
 
 			if len(results) == 0 {
-				fmt.Println("All methods are already implemented!")
+				fmt.Println("All methods are already implemented.")
+				recv := strings.TrimPrefix(receiver, "*")
+				fmt.Printf("Hint: use 'go-surgeon symbol %s.<Method> --body' to inspect existing implementations.\n", recv)
 				return nil
 			}
 

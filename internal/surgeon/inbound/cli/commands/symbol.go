@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -73,12 +74,13 @@ Run this before editing a function — read the current body first.`,
 			}
 
 			if len(results) == 0 {
-				fmt.Printf("No matches found for symbol '%s'.\n", queryStr)
+				fmt.Printf("No matches found for '%s'.\n", queryStr)
+				fmt.Printf("Hint: run 'go-surgeon graph -s -d %s' to list available symbols, or check the Receiver.Method format.\n", targetDir)
 				return nil
 			}
 
 			if len(results) > 1 {
-				fmt.Printf("Found %d matches for symbol '%s'. Please refine your search:\n\n", len(results), queryStr)
+				fmt.Printf("Found %d matches for '%s'. Please refine your search:\n\n", len(results), queryStr)
 				var funcs, methods, structs []domain.SymbolResult
 				for _, r := range results {
 					if r.Receiver != "" {
@@ -110,7 +112,19 @@ Run this before editing a function — read the current body first.`,
 					}
 					fmt.Println()
 				}
-				fmt.Printf("Tip: Refine with 'go-surgeon symbol Receiver.Method' or add '--dir path/to/dir'.\n")
+				// Build a concrete example from the first available match.
+				var hintCmd string
+				if len(methods) > 0 {
+					first := methods[0]
+					hintCmd = fmt.Sprintf("go-surgeon symbol %s.%s", first.Receiver, first.Name)
+				} else if len(funcs) > 0 {
+					first := funcs[0]
+					hintCmd = fmt.Sprintf("go-surgeon symbol %s --dir %s", first.Name, filepath.Dir(first.File))
+				} else {
+					first := structs[0]
+					hintCmd = fmt.Sprintf("go-surgeon symbol %s --dir %s", first.Name, filepath.Dir(first.File))
+				}
+				fmt.Printf("Hint: refine with '%s', or scope with '--dir <path>'.\n", hintCmd)
 				return nil
 			}
 

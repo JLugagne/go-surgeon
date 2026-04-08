@@ -371,7 +371,7 @@ go-surgeon scaffold catalog --name orders --module github.com/myorg/myapp
 
 > **Deprecated.** Use individual subcommands instead — they provide better error messages and are easier to script. `execute` will print a deprecation notice when used.
 
-Reads a YAML plan file (or stdin) and executes all actions in order. Maximum 5 actions per plan.
+Reads a YAML plan file (or stdin) and executes all actions in order. No limit on the number of actions per plan.
 
 ```bash
 go-surgeon execute plan.yaml

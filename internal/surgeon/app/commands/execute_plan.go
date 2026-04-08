@@ -25,11 +25,7 @@ func NewExecutePlanHandler(fs filesystem.FileSystem) *ExecutePlanHandler {
 	return &ExecutePlanHandler{fs: fs}
 }
 
-// Handle executes the surgery plan and returns the result.
 func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
-	if len(plan.Actions) > domain.MaxActions {
-		return domain.PlanResult{}, domain.ErrPlanTooLarge
-	}
 	if len(plan.Actions) == 0 {
 		return domain.PlanResult{}, domain.ErrEmptyPlan
 	}

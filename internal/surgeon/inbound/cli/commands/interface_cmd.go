@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,6 +63,10 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 				return fmt.Errorf("ERROR (%s): unknown action type %s", name, actionType)
 			}
 			if err != nil {
+				hint := interfaceErrorHint(err, actionType, file, id)
+				if hint != "" {
+					return fmt.Errorf("ERROR (%s): %w\n%s", name, err, hint)
+				}
 				return fmt.Errorf("ERROR (%s): %w", name, err)
 			}
 			fmt.Printf("SUCCESS: %s\n", result)
@@ -161,4 +166,32 @@ func interfaceExample(actionType domain.ActionType) string {
 	default:
 		return ""
 	}
+}
+
+// interfaceErrorHint returns an actionable hint for known interface command errors.
+func interfaceErrorHint(err error, actionType domain.ActionType, file, id string) string {
+	var de *domain.Error
+	if !errors.As(err, &de) {
+		return ""
+	}
+	switch de.Code {
+	case "NODE_ALREADY_EXISTS":
+		if actionType == domain.ActionTypeAddInterface {
+			name := extractQuotedName(de.Message)
+			if name != "" {
+				return fmt.Sprintf("Hint: use 'update-interface --file %s --id %s' to replace it.", file, name)
+			}
+			return fmt.Sprintf("Hint: use 'update-interface --file %s --id <InterfaceName>' to replace it.", file)
+		}
+	case "NODE_NOT_FOUND":
+		if id != "" {
+			return fmt.Sprintf("Hint: use 'go-surgeon symbol %s' to verify the interface exists.", id)
+		}
+		return "Hint: use 'go-surgeon symbol <InterfaceName>' to verify the interface exists."
+	case "PARSE_ERROR":
+		return "Hint: stdin must contain a complete interface declaration: 'type MyInterface interface { Method() error }'."
+	case "FILE_NOT_FOUND":
+		return fmt.Sprintf("Hint: '%s' not found. Use 'go-surgeon graph' to list packages, or check the --file path.", file)
+	}
+	return ""
 }
