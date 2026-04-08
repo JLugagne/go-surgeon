@@ -13,6 +13,7 @@ type SurgeonCommands interface {
 	AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
 	UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
 	DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
+	GenerateTest(ctx context.Context, filePath, identifier string) (string, error)
 }
 
 // SurgeonQueries defines the interface for querying the codebase AST.
