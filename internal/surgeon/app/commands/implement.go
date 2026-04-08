@@ -23,10 +23,11 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 	}
 
 	// 1. Resolve the interface using go/packages
-	iface, err := resolveInterface(req.Interface)
+	resolved, err := resolveInterface(req.Interface)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve interface: %w", err)
 	}
+	iface := resolved.iface
 
 	// 2. Read the target file
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
@@ -185,42 +186,52 @@ func (h *ExecutePlanHandler) ReceiverBaseName(receiver string) string {
 	return strings.TrimPrefix(receiver, "*")
 }
 
-func resolveInterface(ifacePath string) (*types.Interface, error) {
+// resolvedIface holds the resolved interface along with its package metadata.
+type resolvedIface struct {
+	iface    *types.Interface
+	pkgName  string // e.g. "book"
+	typeName string // e.g. "BookRepository"
+}
+
+func resolveInterface(ifacePath string) (resolvedIface, error) {
 	parts := strings.Split(ifacePath, ".")
-	var pkgPath, name string
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid interface path (expected package.Interface): %s", ifacePath)
+		return resolvedIface{}, fmt.Errorf("invalid interface path (expected package.Interface): %s", ifacePath)
 	}
-	
-	name = parts[len(parts)-1]
-	pkgPath = strings.Join(parts[:len(parts)-1], ".")
+
+	name := parts[len(parts)-1]
+	pkgPath := strings.Join(parts[:len(parts)-1], ".")
 
 	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedImports | packages.NeedDeps}
 	pkgs, err := packages.Load(cfg, pkgPath)
 	if err != nil {
-		return nil, err
+		return resolvedIface{}, err
 	}
 
 	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("package %s not found", pkgPath)
+		return resolvedIface{}, fmt.Errorf("package %s not found", pkgPath)
 	}
 
 	pkg := pkgs[0]
 	if len(pkg.Errors) > 0 {
-		return nil, pkg.Errors[0]
+		return resolvedIface{}, pkg.Errors[0]
 	}
 
 	obj := pkg.Types.Scope().Lookup(name)
 	if obj == nil {
-		return nil, fmt.Errorf("symbol %s not found in package %s", name, pkgPath)
+		return resolvedIface{}, fmt.Errorf("symbol %s not found in package %s", name, pkgPath)
 	}
 
 	iface, ok := obj.Type().Underlying().(*types.Interface)
 	if !ok {
-		return nil, fmt.Errorf("%s is not an interface", ifacePath)
+		return resolvedIface{}, fmt.Errorf("%s is not an interface", ifacePath)
 	}
 
-	return iface, nil
+	return resolvedIface{
+		iface:    iface,
+		pkgName:  pkg.Types.Name(),
+		typeName: name,
+	}, nil
 }
 
 func extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, recv string) domain.SymbolResult {

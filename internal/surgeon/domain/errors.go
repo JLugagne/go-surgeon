@@ -42,6 +42,9 @@ var (
 	// ErrFileNotFound indicates that a target file could not be found.
 	ErrFileNotFound = &Error{Code: "FILE_NOT_FOUND", Message: "file not found"}
 
+	// ErrFileAlreadyExists indicates that a file already exists when create-file is used.
+	ErrFileAlreadyExists = &Error{Code: "FILE_ALREADY_EXISTS", Message: "file already exists"}
+
 	// ErrNodeNotFound indicates that a specific AST node (function, struct, etc.) was not found.
 	ErrNodeNotFound = &Error{Code: "NODE_NOT_FOUND", Message: "node not found"}
 )

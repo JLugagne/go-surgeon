@@ -52,8 +52,9 @@ func FreeFunc() {}
 			},
 		}
 
-		_, err := handler.ExecutePlan(context.Background(), plan)
+		result, err := handler.ExecutePlan(context.Background(), plan)
 		require.NoError(t, err)
+		assert.Empty(t, result.Warnings)
 
 		updated := string(fs.files[filePath])
 		assert.Contains(t, updated, `return fmt.Errorf("new")`)
@@ -75,8 +76,9 @@ func FreeFunc() {}
 			},
 		}
 
-		_, err := handler.ExecutePlan(context.Background(), plan)
+		result, err := handler.ExecutePlan(context.Background(), plan)
 		require.NoError(t, err)
+		assert.Empty(t, result.Warnings)
 
 		updated := string(fs.files[filePath])
 		assert.Contains(t, updated, `return fmt.Errorf("new2")`)
@@ -99,5 +101,29 @@ func FreeFunc() {}
 		updated := string(fs.files[filePath])
 		assert.NotContains(t, updated, `Save()`)
 		assert.Contains(t, updated, `func FreeFunc() {}`)
+	})
+
+	t.Run("Update func falls back to add when not found", func(t *testing.T) {
+		newContent := `func NewHelper() string {
+	return "hello"
+}`
+		plan := domain.Plan{
+			Actions: []domain.Action{
+				{
+					Action:     domain.ActionTypeUpdateFunc,
+					FilePath:   filePath,
+					Identifier: "NewHelper",
+					Content:    newContent,
+				},
+			},
+		}
+
+		result, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+		require.Len(t, result.Warnings, 1)
+		assert.Contains(t, result.Warnings[0], "treated as add_func")
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, `func NewHelper() string`)
 	})
 }
