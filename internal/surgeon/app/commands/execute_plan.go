@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
@@ -164,16 +165,50 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 }
 
 func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, int, bool) {
+	recvTarget, nameTarget := parseIdentifier(identifier)
+
 	for _, decl := range f.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == identifier && fn.Recv == nil {
-			startPos := fn.Pos()
-			if fn.Doc != nil {
-				startPos = fn.Doc.Pos()
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == nameTarget {
+			var recvName string
+			if fn.Recv != nil {
+				recvName = getRecvType(fn.Recv)
 			}
-			return fset.Position(startPos).Offset, fset.Position(fn.End()).Offset, true
+
+			if recvName == recvTarget {
+				startPos := fn.Pos()
+				if fn.Doc != nil {
+					startPos = fn.Doc.Pos()
+				}
+				return fset.Position(startPos).Offset, fset.Position(fn.End()).Offset, true
+			}
 		}
 	}
 	return 0, 0, false
+}
+
+func getRecvType(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+	switch t := recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		if ident, ok := t.X.(*ast.Ident); ok {
+			return ident.Name
+		}
+	}
+	return ""
+}
+
+func parseIdentifier(id string) (string, string) {
+	parts := strings.Split(id, ".")
+	if len(parts) == 1 {
+		return "", id
+	}
+	// Handle (*Receiver).Method or Receiver.Method
+	receiver := strings.Trim(parts[0], "()*")
+	return receiver, parts[1]
 }
 
 func findStructOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, int, bool) {
@@ -215,23 +250,7 @@ func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier st
 	// Find methods
 	for _, decl := range f.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv != nil {
-			isMethod := false
-			for _, field := range fn.Recv.List {
-				var typeIdent *ast.Ident
-				switch t := field.Type.(type) {
-				case *ast.Ident:
-					typeIdent = t
-				case *ast.StarExpr:
-					if ident, ok := t.X.(*ast.Ident); ok {
-						typeIdent = ident
-					}
-				}
-				if typeIdent != nil && typeIdent.Name == identifier {
-					isMethod = true
-					break
-				}
-			}
-			if isMethod {
+			if getRecvType(fn.Recv) == identifier {
 				start := fn.Pos()
 				if fn.Doc != nil {
 					start = fn.Doc.Pos()

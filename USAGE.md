@@ -56,6 +56,14 @@ actions:
       func MyFunc() {
           fmt.Println("Hello")
       }
+
+  - action: update_func      # Example updating a method with a receiver
+    file_path: user.go
+    identifier: (*User).Save # Supports 'Receiver.Method' or '(*Receiver).Method'
+    content: |
+      func (u *User) Save() error {
+          return db.Save(u)
+      }
 ```
 
 **Supported Actions:**
