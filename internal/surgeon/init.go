@@ -83,6 +83,7 @@ func Setup() Runner {
 			clicommands.NewImplementCommand(executePlanHandler),
 			clicommands.NewMockCommand(executePlanHandler),
 			clicommands.NewTestCommand(executePlanHandler),
+			clicommands.NewTagCommand(executePlanHandler),
 			clicommands.NewScaffoldCommand(scaffolderHandler),
 			clicommands.NewExecutePlanCommand(executePlanHandler),
 		)
