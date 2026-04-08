@@ -1,9 +1,10 @@
 package domain
 
-// GraphPackage represents a Go package found in the project.
 type GraphPackage struct {
-	Path  string
-	Files []GraphFile
+	Path    string
+	Files   []GraphFile
+	Summary string
+	Deps    []string
 }
 
 // GraphFile represents a Go source file with its exported symbols.

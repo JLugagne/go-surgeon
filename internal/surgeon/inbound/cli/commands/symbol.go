@@ -11,6 +11,7 @@ import (
 
 func NewSymbolCommand(queries service.SurgeonQueries) *cobra.Command {
 	var showBody bool
+	var tests bool
 	var targetDir string
 
 	cmd := &cobra.Command{
@@ -25,6 +26,9 @@ Query forms:
 With --body, the full source code is printed with line numbers (empty lines stripped).
 Without --body, only the declaration signature is shown.
 
+By default, _test.go files are excluded. Use --tests to include test functions and
+unexported helpers (e.g. setupTestApp, mockFS) that live in test files.
+
 If multiple matches are found, a disambiguation list is printed grouped by kind
 (methods, functions, structs). Refine with Receiver.Name or scope with --dir.
 
@@ -38,16 +42,14 @@ Run this before editing a function — read the current body first.`,
   # Print the full body with line numbers
   go-surgeon symbol NewBook --body
 
+  # Find a test helper or test function
+  go-surgeon symbol setupTestApp --tests --body --dir internal/catalog/app/commands
+
+  # Batch read: helper + one example test (saves a full-file Read)
+  go-surgeon symbol "setupTestApp|TestCreateBook_Success" -t -b -d internal/catalog/app/commands
+
   # Scope the search to a directory
   go-surgeon symbol Validate --dir internal/catalog/domain
-
-  # Typical workflow: read before you edit
-  go-surgeon symbol BookHandler.Handle --body
-  cat <<'EOF' | go-surgeon update-func --file internal/catalog/inbound/http/handler.go --id BookHandler.Handle
-  func (h *BookHandler) Handle(ctx context.Context, cmd CreateBookCommand) error {
-    // new implementation
-  }
-  EOF
 
   # Short flags
   go-surgeon symbol BookHandler.Handle -b -d internal/catalog`,
@@ -63,6 +65,7 @@ Run this before editing a function — read the current body first.`,
 			} else {
 				query.Name = parts[0]
 			}
+			query.Tests = tests
 
 			results, err := queries.FindSymbols(ctx, query, targetDir)
 			if err != nil {
@@ -130,6 +133,7 @@ Run this before editing a function — read the current body first.`,
 		},
 	}
 	cmd.Flags().BoolVarP(&showBody, "body", "b", false, "Show the full function/struct body")
+	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files in the search")
 	cmd.Flags().StringVarP(&targetDir, "dir", "d", ".", "Directory to search in")
 	return cmd
 }

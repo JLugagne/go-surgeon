@@ -4,6 +4,7 @@ package domain
 type SymbolQuery struct {
 	Receiver string // Empty if not a method
 	Name     string // Function or Struct name
+	Tests    bool   // Include _test.go files in the search
 }
 
 // SymbolResult represents the extracted information for a symbol.
