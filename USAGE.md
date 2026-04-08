@@ -347,22 +347,34 @@ Same mock pattern as `add-interface`. Use for interfaces you **don't own**.
 
 ## 7. Scaffolding (`scaffold`)
 
-Runs a named scaffolding template with the given parameters. With no argument, lists available commands.
+Template-driven project orchestration. Templates define a set of commands, variables, and file generation rules. They also support workflow chaining (`post_commands`) and context-aware `hints` to guide users or AI agents through the next steps of development.
+
+Templates are stored in `.surgeon-templates/<template-name>/manifest.yaml`. See `SCAFFOLDING.md` for a guide on creating your own templates.
 
 ```bash
-go-surgeon scaffold [command] [--param value ...]
-go-surgeon list      # alias for: go-surgeon scaffold
-```
+# List all available templates
+go-surgeon scaffold list-templates
 
-Template commands and their parameters are defined in YAML manifests under `.go-surgeon/scaffold/` in the project root.
+# Show documentation for a template (lists all its commands)
+go-surgeon scaffold doc <template>
+
+# Show documentation for a specific command (shows required variables)
+go-surgeon scaffold doc <template> <command>
+
+# Execute a command
+go-surgeon scaffold execute <template> <command> [--set Key=Value ...]
+```
 
 **Examples:**
 ```bash
-# List available templates
-go-surgeon scaffold
+# See what templates are available
+go-surgeon scaffold list-templates
 
-# Run a template
-go-surgeon scaffold catalog --name orders --module github.com/myorg/myapp
+# Read what the 'bootstrap' command of the 'hexagonal' template does
+go-surgeon scaffold doc hexagonal bootstrap
+
+# Execute it, passing the required variables
+go-surgeon scaffold execute hexagonal bootstrap --set AppName=catalog --set ModulePath=github.com/myorg/myapp
 ```
 
 ---
