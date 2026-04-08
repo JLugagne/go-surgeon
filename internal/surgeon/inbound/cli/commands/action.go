@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
@@ -43,11 +45,18 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 
 			result, err := surgeon.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{action}})
 			if err != nil {
+				hint := actionErrorHint(err, name, file, id)
+				if hint != "" {
+					return fmt.Errorf("ERROR (%s): %w\n%s", name, err, hint)
+				}
 				return fmt.Errorf("ERROR (%s): %w", name, err)
 			}
 
 			for _, w := range result.Warnings {
 				fmt.Printf("WARNING (%s): %s\n", name, w)
+				if strings.Contains(w, "not found in") {
+					fmt.Printf("Hint: verify '--id %s' is the exact identifier. Use 'go-surgeon symbol %s' to confirm.\n", id, id)
+				}
 			}
 			fmt.Printf("SUCCESS (%s): %s\n", name, actionSuccessMessage(actionType, file, id, content))
 			return nil
@@ -306,4 +315,42 @@ func indexOfAnyByte(s string, chars string) int {
 		}
 	}
 	return -1
+}
+
+// actionErrorHint returns a hint line for a known domain error, or "" if no hint applies.
+func actionErrorHint(err error, cmdName, file, id string) string {
+	var de *domain.Error
+	if !errors.As(err, &de) {
+		return ""
+	}
+	switch de.Code {
+	case "NODE_ALREADY_EXISTS":
+		updateCmd := strings.Replace(cmdName, "add", "update", 1)
+		name := extractQuotedName(de.Message)
+		if name != "" {
+			return fmt.Sprintf("Hint: use '%s --file %s --id %s' to replace it.", updateCmd, file, name)
+		}
+		return fmt.Sprintf("Hint: use '%s --file %s --id <name>' to replace it.", updateCmd, file)
+	case "NODE_NOT_FOUND":
+		if id != "" {
+			return fmt.Sprintf("Hint: use 'go-surgeon symbol %s' to locate it, or verify the --id format.", id)
+		}
+		return "Hint: use 'go-surgeon symbol <name>' to locate the identifier."
+	case "FILE_NOT_FOUND":
+		return fmt.Sprintf("Hint: '%s' not found. Use 'go-surgeon graph' to list packages, or 'create-file' to create it.", file)
+	}
+	return ""
+}
+
+// extractQuotedName returns the first double-quoted substring in s, or "".
+func extractQuotedName(s string) string {
+	start := strings.Index(s, "\"")
+	if start == -1 {
+		return ""
+	}
+	end := strings.Index(s[start+1:], "\"")
+	if end == -1 {
+		return ""
+	}
+	return s[start+1 : start+1+end]
 }

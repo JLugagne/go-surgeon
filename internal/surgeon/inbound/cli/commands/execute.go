@@ -1,11 +1,13 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/inbound/converters"
 	"github.com/spf13/cobra"
@@ -38,7 +40,7 @@ Plan file schema:
       mock_file: <mock output path, for add/update_interface>
       mock_name: <mock struct name, for add/update_interface>
 
-Maximum 5 actions per plan file. Total actions across all files is unlimited.`,
+There is no limit on the number of actions per plan file.`,
 		Example: `  # Execute a plan from a file
   go-surgeon execute plan.yaml
 
@@ -73,11 +75,15 @@ Maximum 5 actions per plan file. Total actions across all files is unlimited.`,
 					plan, err := converters.ToDomainPlan(data)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Plan files retained for debugging: %s\n", strings.Join(files, ", "))
-						return fmt.Errorf("plan %d (%s): %w", i+1, filePath, err)
+						return fmt.Errorf("plan %d (%s): %w\nHint: check YAML indentation — use '|' for multi-line content blocks, indented 2+ spaces from 'content:'.", i+1, filePath, err)
 					}
 					result, err := surgeon.ExecutePlan(ctx, plan)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Plan files retained for debugging: %s\n", strings.Join(files, ", "))
+						hint := executeErrorHint(err)
+						if hint != "" {
+							return fmt.Errorf("plan %d (%s): %w\n%s", i+1, filePath, err, hint)
+						}
 						return fmt.Errorf("plan %d (%s): %w", i+1, filePath, err)
 					}
 					for _, w := range result.Warnings {
@@ -116,11 +122,15 @@ Maximum 5 actions per plan file. Total actions across all files is unlimited.`,
 
 			plan, err := converters.ToDomainPlan(data)
 			if err != nil {
-				return err
+				return fmt.Errorf("%w\nHint: check YAML indentation — use '|' for multi-line content blocks, indented 2+ spaces from 'content:'.", err)
 			}
 
 			result, err := surgeon.ExecutePlan(ctx, plan)
 			if err != nil {
+				hint := executeErrorHint(err)
+				if hint != "" {
+					return fmt.Errorf("%w\n%s", err, hint)
+				}
 				return err
 			}
 
@@ -135,4 +145,23 @@ Maximum 5 actions per plan file. Total actions across all files is unlimited.`,
 	cmd.Flags().StringArrayVarP(&files, "file", "f", nil, "plan YAML file to execute (repeatable; auto-cleanup on success)")
 	cmd.Flags().BoolVarP(&keep, "keep", "k", false, "retain plan files even on success (only applies with --file/-f)")
 	return cmd
+}
+
+// executeErrorHint returns an actionable hint for known plan execution errors.
+func executeErrorHint(err error) string {
+	var de *domain.Error
+	if !errors.As(err, &de) {
+		return ""
+	}
+	switch de.Code {
+	case "NODE_ALREADY_EXISTS":
+		return "Hint: use 'update_func' or 'update_struct' instead of 'add_func'/'add_struct' to replace an existing declaration."
+	case "NODE_NOT_FOUND":
+		return "Hint: use 'go-surgeon symbol <identifier>' to verify it exists, or check the 'identifier:' field in your plan."
+	case "FILE_NOT_FOUND":
+		return "Hint: check the 'file:' path in your plan. Use 'go-surgeon graph' to list available packages."
+	case "PARSE_ERROR":
+		return "Hint: check that 'content:' is valid Go source. Omit the 'package' declaration and imports — goimports handles them."
+	}
+	return ""
 }

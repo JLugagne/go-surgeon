@@ -2,6 +2,9 @@ package commands
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
@@ -61,6 +64,11 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 			}
 
 			if !symbols {
+				if len(packages) == 0 {
+					fmt.Printf("No Go packages found in '%s'.\n", dir)
+					fmt.Printf("Hint: check that you're in the project root, or use '--dir <path>' to target a subdirectory.\n")
+					return nil
+				}
 				for _, pkg := range packages {
 					line := pkg.Path
 					if summary {
@@ -116,6 +124,19 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 					}
 				}
 			}
+
+			// When non-recursive symbols mode, hint at direct sub-packages containing .go files.
+			if !recursive {
+				subPkgs := findDirectSubPackages(dir)
+				if len(subPkgs) > 0 {
+					fmt.Printf("\nSub-packages (use -r to include): %s\n", strings.Join(subPkgs, ", "))
+				} else if first {
+					// Nothing was printed at all — no .go files in this dir.
+					fmt.Printf("No Go files found in '%s'.\n", dir)
+					fmt.Printf("Hint: use '--dir <path>' to target a package directory, or '-r' to walk sub-packages.\n")
+				}
+			}
+
 			return nil
 		},
 	}
@@ -127,3 +148,33 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 	cmd.Flags().StringVarP(&dir, "dir", "d", ".", "Directory to walk")
 	return cmd
 }
+
+// findDirectSubPackages returns the names of direct child directories of dir
+// that contain at least one .go file (non-test files suffice).
+func findDirectSubPackages(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var result []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		subDir := filepath.Join(dir, entry.Name())
+		subEntries, err := os.ReadDir(subDir)
+		if err != nil {
+			continue
+		}
+		for _, sub := range subEntries {
+			if !sub.IsDir() && strings.HasSuffix(sub.Name(), ".go") {
+				result = append(result, entry.Name())
+				break
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+type Dummy struct{}

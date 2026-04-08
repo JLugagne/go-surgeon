@@ -68,12 +68,7 @@ type Plan struct {
 	Actions []Action
 }
 
-// MaxActions is the maximum number of actions allowed in a single plan.
-const MaxActions = 5
-
 var (
-	// ErrPlanTooLarge is returned when a plan contains more than MaxActions.
-	ErrPlanTooLarge = errors.New("plan contains too many actions")
 	// ErrEmptyPlan is returned when a plan contains no actions.
 	ErrEmptyPlan = errors.New("plan contains no actions")
 )
