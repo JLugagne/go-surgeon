@@ -1,0 +1,30 @@
+commands:
+  - name: create
+    description: "Generates the standard hexagonal directory structure for a new domain."
+    parameters:
+      - name: name
+        description: "The name of the domain (e.g., 'catalog')"
+    files:
+      - path: "internal/{{.Name}}/domain/service/.gitkeep"
+        template: ""
+      - path: "internal/{{.Name}}/domain/repositories/.gitkeep"
+        template: ""
+      - path: "internal/{{.Name}}/app/commands/.gitkeep"
+        template: ""
+      - path: "internal/{{.Name}}/app/queries/.gitkeep"
+        template: ""
+      - path: "internal/{{.Name}}/inbound/converters/.gitkeep"
+        template: ""
+
+  - name: add
+    description: "Generates a complete Vertical Slice for a CQRS use case."
+    parameters:
+      - name: name
+        description: "The name of the feature (e.g., 'CreateBook')"
+      - name: type
+        description: "Must be 'command' or 'query'"
+      - name: domain
+        description: "The target domain folder"
+    files:
+      - path: "internal/{{.Domain}}/app/{{.Type}}s/{{.Name | lower}}.go"
+        template: "feature/command/internal/{{.Domain}}/app/commands/{{.Name | lower}}.go.tmpl"
