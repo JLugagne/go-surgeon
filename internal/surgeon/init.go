@@ -15,18 +15,42 @@ import (
 type Runner func(ctx context.Context, args []string) error
 
 func Setup() Runner {
-	fs := filesystem.NewFileSystem()
-
-	executePlanHandler := appcommands.NewExecutePlanHandler(fs)
-	scaffolderHandler := appcommands.NewScaffolderHandler(fs)
-	queriesHandler := appqueries.NewSurgeonQueriesHandler(fs)
-
 	return func(ctx context.Context, args []string) error {
+		realFS := filesystem.NewFileSystem()
+		proxyFS := &filesystem.ProxyFileSystem{Active: realFS}
+
+		executePlanHandler := appcommands.NewExecutePlanHandler(proxyFS)
+		scaffolderHandler := appcommands.NewScaffolderHandler(proxyFS)
+		queriesHandler := appqueries.NewSurgeonQueriesHandler(proxyFS)
+
 		rootCmd := &cobra.Command{
 			Use:           "go-surgeon",
 			Short:         "AST-based Go code editor",
 			SilenceErrors: true,
 			SilenceUsage:  true,
+		}
+
+		var dryRun bool
+		var diffAlias bool
+		rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Preview changes as unified diff instead of writing to disk")
+		rootCmd.PersistentFlags().BoolVar(&diffAlias, "diff", false, "Alias for --dry-run")
+		rootCmd.PersistentFlags().MarkHidden("diff")
+
+		var dryRunFS *filesystem.DryRunFileSystem
+
+		rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+			if dryRun || diffAlias {
+				dryRunFS = filesystem.NewDryRunFileSystem(realFS)
+				proxyFS.Active = dryRunFS
+			}
+			return nil
+		}
+
+		rootCmd.PersistentPostRunE = func(cmd *cobra.Command, args []string) error {
+			if (dryRun || diffAlias) && dryRunFS != nil {
+				return dryRunFS.PrintDiffs(ctx)
+			}
+			return nil
 		}
 
 		// Query commands
