@@ -1,17 +1,16 @@
-# go-surgeon: The AST-Based Code Editor for Go
+# go-surgeon: The AI-Native AST Code Editor for Go
 
-## Motivation
+AI agents and LLMs waste massive amounts of context window tokens and time trying to modify existing Go code using generic text replacement tools (like diff blocks or regex). These methods are inherently fragile, prone to indentation hallucinations, and often trap the AI in an endless loop of syntax errors.
 
-AI agents (LLMs) currently waste massive amounts of time and tokens trying to modify existing Go code using generic text replacement tools. These methods are inherently fragile, prone to indentation hallucinations, and often result in loops of syntax errors.
+**go-surgeon** solves this by providing a deterministic, CLI-first interface built on Go's Abstract Syntax Tree (go/ast). It acts as a lightweight Language Server and a byte-range replacement engine, empowering AI agents to read, explore, and modify code with absolute surgical precision.
 
-**go-surgeon** solves this by providing a deterministic CLI that uses Go's Abstract Syntax Tree (go/ast) to locate code and a byte-range replacement engine to modify it with surgical precision.
+## Why your AI agent needs go-surgeon
 
-**Key Benefits:**
-- **Zero Indentation Errors:** We locate the exact byte offsets and let `goimports` handle the formatting and imports automatically.
-- **Perfect Context Preservation:** Unlike standard AST mutation, our byte-range engine preserves all internal comments and allows seamless updates to Godoc (documentation) blocks.
-- **Turn Efficiency:** Drastically reduces the number of conversational turns needed for LLMs to explore a codebase and perform complex refactors.
-- **Smart Navigation:** Acts as a CLI-based LSP, allowing AI to query function signatures and bodies without loading entire files into context.
-- **Architecture Enforcement:** Deterministic scaffolding ensures AI agents follow established architectural patterns instead of improvising.
+- **Zero Indentation Errors:** We locate the exact byte offsets in the AST. Your agent just streams the raw code block, and `goimports` handles formatting and imports automatically.
+- **Perfect Context Preservation:** Standard AST mutations strip away internal comments. Our byte-range engine preserves all surrounding comments and seamlessly updates Godoc blocks.
+- **Maximized Context Window:** Acts as a CLI-based LSP (`graph` and `symbol` commands). Agents can query function signatures, docs, and bodies without loading entire 2000-line files into their context window.
+- **Drastic Turn Reduction:** Atomically update complex methods, interfaces, or structs in a single shot. No more "hunk matching" failures.
+- **Workflow Orchestration:** The `scaffold` command provides a built-in workflow engine. Templates emit context-aware `hints` (Task Lists) that guide the AI step-by-step through building complex architectures (like Hexagonal/DDD) instead of letting it improvise.
 
 ## Core Features
 
