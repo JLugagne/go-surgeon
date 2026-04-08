@@ -8,14 +8,17 @@ import (
 type ActionType string
 
 const (
-	ActionTypeCreateFile   ActionType = "create_file"
-	ActionTypeReplaceFile  ActionType = "replace_file"
-	ActionTypeUpdateFunc   ActionType = "update_func"
-	ActionTypeAddFunc      ActionType = "add_func"
-	ActionTypeAddStruct    ActionType = "add_struct"
-	ActionTypeUpdateStruct ActionType = "update_struct"
-	ActionTypeDeleteFunc   ActionType = "delete_func"
-	ActionTypeDeleteStruct ActionType = "delete_struct"
+	ActionTypeCreateFile      ActionType = "create_file"
+	ActionTypeReplaceFile     ActionType = "replace_file"
+	ActionTypeUpdateFunc      ActionType = "update_func"
+	ActionTypeAddFunc         ActionType = "add_func"
+	ActionTypeAddStruct       ActionType = "add_struct"
+	ActionTypeUpdateStruct    ActionType = "update_struct"
+	ActionTypeDeleteFunc      ActionType = "delete_func"
+	ActionTypeDeleteStruct    ActionType = "delete_struct"
+	ActionTypeAddInterface    ActionType = "add_interface"
+	ActionTypeUpdateInterface ActionType = "update_interface"
+	ActionTypeDeleteInterface ActionType = "delete_interface"
 )
 
 // Manifest defines the structure of the scaffolding manifest.
@@ -45,11 +48,19 @@ type FileTemplate struct {
 
 // Action represents a single modification to the codebase.
 type Action struct {
-	Action      ActionType
-	FilePath    string
-	PackagePath string
-	Identifier  string
-	Content     string
+	Action      ActionType `yaml:"action"`
+	FilePath    string     `yaml:"file"`
+	PackagePath string     `yaml:"package"`
+	Identifier  string     `yaml:"identifier"`
+	Content     string     `yaml:"content"`
+	MockFile    string     `yaml:"mock_file"`
+	MockName    string     `yaml:"mock_name"`
+}
+
+// PlanResult contains the outcome of executing a plan.
+type PlanResult struct {
+	FilesModified int
+	Warnings      []string
 }
 
 // Plan is a collection of actions to be executed.

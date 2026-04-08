@@ -1,0 +1,164 @@
+package commands
+
+import (
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
+	"github.com/spf13/cobra"
+)
+
+func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.ActionType, name string) *cobra.Command {
+	var file string
+	var id string
+	var mockFile string
+	var mockName string
+
+	isDelete := actionType == domain.ActionTypeDeleteInterface
+	needsID := actionType == domain.ActionTypeUpdateInterface || isDelete
+
+	cmd := &cobra.Command{
+		Use:     name,
+		Short:   interfaceShortDesc(actionType),
+		Long:    interfaceLongDesc(actionType),
+		Example: interfaceExample(actionType),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			var content string
+			if !isDelete {
+				stat, err := os.Stdin.Stat()
+				if err == nil && (stat.Mode()&os.ModeCharDevice) != 0 {
+					return fmt.Errorf("ERROR (%s): interface source required on stdin\nExample: cat iface.go | go-surgeon %s --file <path>", name, name)
+				}
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return fmt.Errorf("ERROR (%s): failed to read stdin: %w", name, err)
+				}
+				content = string(data)
+			}
+
+			req := domain.InterfaceActionRequest{
+				FilePath:   file,
+				Identifier: id,
+				Content:    content,
+				MockFile:   mockFile,
+				MockName:   mockName,
+			}
+
+			var (
+				result string
+				err    error
+			)
+			switch actionType {
+			case domain.ActionTypeAddInterface:
+				result, err = surgeon.AddInterface(ctx, req)
+			case domain.ActionTypeUpdateInterface:
+				result, err = surgeon.UpdateInterface(ctx, req)
+			case domain.ActionTypeDeleteInterface:
+				result, err = surgeon.DeleteInterface(ctx, req)
+			default:
+				return fmt.Errorf("ERROR (%s): unknown action type %s", name, actionType)
+			}
+			if err != nil {
+				return fmt.Errorf("ERROR (%s): %w", name, err)
+			}
+			fmt.Printf("SUCCESS: %s\n", result)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&file, "file", "f", "", "File containing the interface (required)")
+	_ = cmd.MarkFlagRequired("file")
+	cmd.Flags().StringVarP(&id, "id", "i", "", "Interface name (required for update/delete)")
+	if needsID {
+		_ = cmd.MarkFlagRequired("id")
+	}
+	if !isDelete {
+		cmd.Flags().StringVarP(&mockFile, "mock-file", "m", "", "Target file for the generated mock")
+		cmd.Flags().StringVarP(&mockName, "mock-name", "n", "", "Name of the mock struct")
+	}
+	return cmd
+}
+
+func interfaceShortDesc(actionType domain.ActionType) string {
+	switch actionType {
+	case domain.ActionTypeAddInterface:
+		return "Add a new interface and generate its mock"
+	case domain.ActionTypeUpdateInterface:
+		return "Update an interface and regenerate its mock"
+	case domain.ActionTypeDeleteInterface:
+		return "Delete an interface"
+	default:
+		return "Manage an interface"
+	}
+}
+
+func interfaceLongDesc(actionType domain.ActionType) string {
+	switch actionType {
+	case domain.ActionTypeAddInterface:
+		return `Reads an interface definition from stdin and writes it to --file, then generates
+a function-field mock at --mock-file.
+
+The mock struct has a FuncField per method, delegation methods that call the field, and
+a compile-time check (var _ MyInterface = (*MockMyInterface)(nil)).
+
+Omit --mock-file and --mock-name to skip mock generation.`
+	case domain.ActionTypeUpdateInterface:
+		return `Replaces the interface identified by --id in --file with the source read from stdin,
+then regenerates the mock at --mock-file from scratch.
+
+--id is the interface name as it appears in the source (e.g. "BookRepository").
+Omit --mock-file and --mock-name to skip mock regeneration.`
+	case domain.ActionTypeDeleteInterface:
+		return `Removes the interface identified by --id from --file.
+
+The mock file is NOT automatically deleted — the compile-time check
+(var _ MyInterface = (*Mock)(nil)) will cause a build failure until the mock is
+cleaned up manually. This is intentional: it forces you to explicitly handle
+dependent tests.`
+	default:
+		return ""
+	}
+}
+
+func interfaceExample(actionType domain.ActionType) string {
+	switch actionType {
+	case domain.ActionTypeAddInterface:
+		return `  cat <<'EOF' | go-surgeon add-interface \
+    --file internal/domain/repositories/book.go \
+    --mock-file internal/domain/repositories/booktest/mock.go \
+    --mock-name MockBookRepository
+  type BookRepository interface {
+    Create(ctx context.Context, book domain.Book) error
+    FindByID(ctx context.Context, id domain.BookID) (*domain.Book, error)
+  }
+  EOF
+
+  # Without mock generation
+  cat <<'EOF' | go-surgeon add-interface --file internal/domain/repositories/book.go
+  type BookRepository interface {
+    Create(ctx context.Context, book domain.Book) error
+  }
+  EOF`
+	case domain.ActionTypeUpdateInterface:
+		return `  cat <<'EOF' | go-surgeon update-interface \
+    --file internal/domain/repositories/book.go \
+    --id BookRepository \
+    --mock-file internal/domain/repositories/booktest/mock.go \
+    --mock-name MockBookRepository
+  type BookRepository interface {
+    Create(ctx context.Context, book domain.Book) error
+    FindByID(ctx context.Context, id domain.BookID) (*domain.Book, error)
+    Delete(ctx context.Context, id domain.BookID) error
+  }
+  EOF`
+	case domain.ActionTypeDeleteInterface:
+		return `  go-surgeon delete-interface \
+    --file internal/domain/repositories/book.go \
+    --id BookRepository`
+	default:
+		return ""
+	}
+}
