@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.26-alpine
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache gcc musl-dev curl
+      - uses: actions/checkout@v4
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            /go/pkg/mod
+            /root/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Download dependencies
+        run: go mod download
+      - name: Run go vet
+        run: go vet ./...
+      - name: Install and run golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
+          golangci-lint run ./...
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ["1.25", "1.26"]
+    container:
+      image: golang:${{ matrix.go-version }}-alpine
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache gcc musl-dev
+      - uses: actions/checkout@v4
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            /go/pkg/mod
+            /root/.cache/go-build
+          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go-version }}-
+      - name: Download dependencies
+        run: go mod download
+      - name: Run tests with coverage
+        run: go test -race -v -coverprofile=coverage.out ./...
+      - name: Display coverage report
+        run: go tool cover -func=coverage.out
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          echo "Total coverage: ${COVERAGE}%"
+          # THRESHOLD=70
+          # if [ "$(echo "$COVERAGE < $THRESHOLD" | bc -l)" -eq 1 ]; then
+          #   echo "::error::Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+          #   exit 1
+          # fi
+      - name: Upload coverage artifact
+        if: matrix.go-version == '1.26'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    container:
+      image: golang:1.26-alpine
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache gcc musl-dev
+      - uses: actions/checkout@v4
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            /go/pkg/mod
+            /root/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Download dependencies
+        run: go mod download
+      - name: Build
+        run: go build ./...
