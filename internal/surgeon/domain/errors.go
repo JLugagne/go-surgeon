@@ -47,4 +47,7 @@ var (
 
 	// ErrNodeNotFound indicates that a specific AST node (function, struct, etc.) was not found.
 	ErrNodeNotFound = &Error{Code: "NODE_NOT_FOUND", Message: "node not found"}
+
+	// ErrNodeAlreadyExists indicates that a function or struct already exists when add-func/add-struct is used.
+	ErrNodeAlreadyExists = &Error{Code: "NODE_ALREADY_EXISTS", Message: "node already exists"}
 )

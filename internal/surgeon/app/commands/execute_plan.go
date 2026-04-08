@@ -158,7 +158,36 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			updated = true
 			warnings = append(warnings, fmt.Sprintf("update_func: identifier %q not found in %s, treated as add_func", action.Identifier, action.FilePath))
 		}
-	case domain.ActionTypeAddFunc, domain.ActionTypeAddStruct:
+	case domain.ActionTypeAddFunc:
+		if !isFileNew {
+			if funcID, parseErr := extractFuncIdentifierFromContent(action.Content); parseErr == nil && funcID != "" {
+				if start, end, ok := findFuncOffsets(fset, f, funcID); ok {
+					existingBody := strings.TrimSpace(string(src[start:end]))
+					return nil, &domain.Error{
+						Code:    "NODE_ALREADY_EXISTS",
+						Message: fmt.Sprintf("function %q already declared in %s:\n\n%s", funcID, action.FilePath, existingBody),
+					}
+				}
+			}
+		}
+		updatedSrc = append([]byte(nil), src...)
+		if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
+			updatedSrc = append(updatedSrc, '\n')
+		}
+		updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
+		updated = true
+	case domain.ActionTypeAddStruct:
+		if !isFileNew {
+			if structName, parseErr := extractStructNameFromContent(action.Content); parseErr == nil && structName != "" {
+				if start, end, ok := findStructOffsets(fset, f, structName); ok {
+					existingBody := strings.TrimSpace(string(src[start:end]))
+					return nil, &domain.Error{
+						Code:    "NODE_ALREADY_EXISTS",
+						Message: fmt.Sprintf("struct %q already declared in %s:\n\n%s", structName, action.FilePath, existingBody),
+					}
+				}
+			}
+		}
 		updatedSrc = append([]byte(nil), src...)
 		if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
 			updatedSrc = append(updatedSrc, '\n')
@@ -324,4 +353,42 @@ func deleteRanges(src []byte, ranges [][2]int) []byte {
 		result = append(result[:r[0]], result[r[1]:]...)
 	}
 	return result
+}
+
+func extractFuncIdentifierFromContent(content string) (string, error) {
+	src := "package p\n" + content
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			recv := getRecvType(fn.Recv)
+			if recv != "" {
+				return recv + "." + fn.Name.Name, nil
+			}
+			return fn.Name.Name, nil
+		}
+	}
+	return "", nil
+}
+
+func extractStructNameFromContent(content string) (string, error) {
+	src := "package p\n" + content
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, decl := range f.Decls {
+		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+			for _, spec := range gen.Specs {
+				if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+					return typeSpec.Name.Name, nil
+				}
+			}
+		}
+	}
+	return "", nil
 }
