@@ -250,7 +250,8 @@ func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, 
 				recvName = getRecvType(fn.Recv)
 			}
 
-			if recvName == recvTarget {
+			// Match if receiver matches, or if recvTarget is the package name and it's a global function
+			if recvName == recvTarget || (recvName == "" && recvTarget == f.Name.Name) {
 				startPos := fn.Pos()
 				if fn.Doc != nil {
 					startPos = fn.Doc.Pos()
@@ -282,16 +283,33 @@ func parseIdentifier(id string) (string, string) {
 	if len(parts) == 1 {
 		return "", id
 	}
-	// Handle (*Receiver).Method or Receiver.Method
+	
+	if len(parts) == 3 {
+		// pkg.Receiver.Method
+		receiver := strings.Trim(parts[1], "()*")
+		return receiver, parts[2]
+	}
+
+	// Two parts: could be pkg.Func or Receiver.Method
+	// We'll treat the first part as receiver. If it's a package name, 
+	// the caller (findFuncOffsets) might need to handle the fallback.
+	// But usually, receivers are what we want in a single file.
 	receiver := strings.Trim(parts[0], "()*")
 	return receiver, parts[1]
 }
 
 func findStructOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, int, bool) {
+	pkgTarget, nameTarget := parseIdentifier(identifier)
+	if pkgTarget != "" && pkgTarget != f.Name.Name {
+		// If it has a package part and it doesn't match the current file's package, skip.
+		// NOTE: This allows the same logic to work for both Func and Struct.
+		return 0, 0, false
+	}
+
 	for _, decl := range f.Decls {
 		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
 			for _, spec := range gen.Specs {
-				if typeSpec, ok := spec.(*ast.TypeSpec); ok && typeSpec.Name.Name == identifier {
+				if typeSpec, ok := spec.(*ast.TypeSpec); ok && typeSpec.Name.Name == nameTarget {
 					startPos := typeSpec.Pos()
 					if typeSpec.Doc != nil {
 						startPos = typeSpec.Doc.Pos()
