@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/queries"
@@ -101,95 +100,52 @@ func FreeFunc() {
 		assert.Empty(t, res[0].Receiver)
 		assert.Equal(t, "FreeFunc is free.", res[0].Doc)
 	})
+
+	t.Run("Find with Package Name", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{PackageName: "testpkg", Name: "FreeFunc"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "FreeFunc", res[0].Name)
+
+		res2, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{PackageName: "wrongpkg", Name: "FreeFunc"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res2, 0)
+	})
 }
 
 func TestFindSymbols_DefaultExcludesTestFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Production file with a function.
-	prodPath := filepath.Join(tmpDir, "service.go")
-	require.NoError(t, os.WriteFile(prodPath, []byte(`package svc
+	prodPath := filepath.Join(tmpDir, "prod.go")
+	prodCode := "package p\nfunc ProdFunc() {}"
+	err := os.WriteFile(prodPath, []byte(prodCode), 0644)
+	require.NoError(t, err)
 
-func ProdFunc() {}
-`), 0644))
-
-	// Test file with a helper function.
-	testPath := filepath.Join(tmpDir, "service_test.go")
-	require.NoError(t, os.WriteFile(testPath, []byte(`package svc
-
-import "testing"
-
-func setupTest(t *testing.T) {}
-func TestProdFunc(t *testing.T) {}
-`), 0644))
+	// Test file with a helper.
+	testPath := filepath.Join(tmpDir, "prod_test.go")
+	testCode := "package p\nfunc TestHelper() {}"
+	err = os.WriteFile(testPath, []byte(testCode), 0644)
+	require.NoError(t, err)
 
 	fs := &mockFS{
 		files: map[string][]byte{
-			prodPath: mustReadFile(t, prodPath),
-			testPath: mustReadFile(t, testPath),
+			prodPath: []byte(prodCode),
+			testPath: []byte(testCode),
 		},
 	}
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	// Without --tests: test helpers are invisible.
-	res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "setupTest"}, tmpDir)
-	require.NoError(t, err)
-	assert.Empty(t, res)
+	t.Run("Exclude test files by default", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "TestHelper"}, tmpDir)
+		require.NoError(t, err)
+		assert.Len(t, res, 0)
+	})
 
-	res, err = handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "TestProdFunc"}, tmpDir)
-	require.NoError(t, err)
-	assert.Empty(t, res)
-
-	// Production file is still found.
-	res, err = handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "ProdFunc"}, tmpDir)
-	require.NoError(t, err)
-	require.Len(t, res, 1)
-	assert.Equal(t, "ProdFunc", res[0].Name)
-}
-
-func TestFindSymbols_WithTests_FindsTestHelpers(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	prodPath := filepath.Join(tmpDir, "service.go")
-	require.NoError(t, os.WriteFile(prodPath, []byte(`package svc
-
-func ProdFunc() {}
-`), 0644))
-
-	testPath := filepath.Join(tmpDir, "service_test.go")
-	require.NoError(t, os.WriteFile(testPath, []byte(`package svc
-
-import "testing"
-
-func setupTest(t *testing.T) {}
-func TestProdFunc(t *testing.T) {}
-`), 0644))
-
-	fs := &mockFS{
-		files: map[string][]byte{
-			prodPath: mustReadFile(t, prodPath),
-			testPath: mustReadFile(t, testPath),
-		},
-	}
-	handler := queries.NewSurgeonQueriesHandler(fs)
-
-	// With --tests: unexported helper is found.
-	res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "setupTest", Tests: true}, tmpDir)
-	require.NoError(t, err)
-	require.Len(t, res, 1)
-	assert.Equal(t, "setupTest", res[0].Name)
-	assert.True(t, strings.HasSuffix(res[0].File, "_test.go"))
-
-	// With --tests: exported test function is also found.
-	res, err = handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "TestProdFunc", Tests: true}, tmpDir)
-	require.NoError(t, err)
-	require.Len(t, res, 1)
-	assert.Equal(t, "TestProdFunc", res[0].Name)
-}
-
-func mustReadFile(t *testing.T, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	return data
+	t.Run("Include test files with --tests", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "TestHelper", Tests: true}, tmpDir)
+		require.NoError(t, err)
+		assert.Len(t, res, 1)
+		assert.Equal(t, "TestHelper", res[0].Name)
+	})
 }

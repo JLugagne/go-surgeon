@@ -54,6 +54,10 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 			return nil
 		}
 
+		if query.PackageName != "" && f.Name.Name != query.PackageName {
+			return nil
+		}
+
 		for _, decl := range f.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok {
 				var recvName string

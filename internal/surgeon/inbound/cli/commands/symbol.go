@@ -58,21 +58,39 @@ Run this before editing a function — read the current body first.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			queryStr := args[0]
-			var query domain.SymbolQuery
-			parts := strings.SplitN(queryStr, ".", 2)
+			
+			var allResults []domain.SymbolResult
+			
+			parts := strings.Split(queryStr, ".")
+			
+			// 1. Exact Name: "MyFunc"
+			if len(parts) == 1 {
+				query := domain.SymbolQuery{Name: parts[0], Tests: tests}
+				results, _ := queries.FindSymbols(ctx, query, targetDir)
+				allResults = append(allResults, results...)
+			}
+			
+			// 2. Two parts: "pkg.Func" or "Receiver.Method"
 			if len(parts) == 2 {
-				query.Receiver = parts[0]
-				query.Name = parts[1]
-			} else {
-				query.Name = parts[0]
+				// Try Receiver.Method
+				query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests}
+				results1, _ := queries.FindSymbols(ctx, query1, targetDir)
+				allResults = append(allResults, results1...)
+				
+				// Try pkg.Name
+				query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests}
+				results2, _ := queries.FindSymbols(ctx, query2, targetDir)
+				allResults = append(allResults, results2...)
 			}
-			query.Tests = tests
-
-			results, err := queries.FindSymbols(ctx, query, targetDir)
-			if err != nil {
-				return fmt.Errorf("failed to search symbols: %w", err)
+			
+			// 3. Three parts: "pkg.Receiver.Method"
+			if len(parts) == 3 {
+				query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests}
+				results, _ := queries.FindSymbols(ctx, query, targetDir)
+				allResults = append(allResults, results...)
 			}
 
+			results := allResults
 			if len(results) == 0 {
 				fmt.Printf("No matches found for '%s'.\n", queryStr)
 				fmt.Printf("Hint: run 'go-surgeon graph -s -d %s' to list available symbols, or check the Receiver.Method format.\n", targetDir)
