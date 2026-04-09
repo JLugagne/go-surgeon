@@ -119,7 +119,7 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 	currentLine := startPos.Line
 	for _, line := range codeLines {
 		if strings.TrimSpace(line) != "" {
-			buf.WriteString(fmt.Sprintf("%d: %s\n", currentLine, line))
+			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		}
 		currentLine++
 	}
@@ -158,7 +158,7 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 	currentLine := startPos.Line
 	for _, line := range codeLines {
 		if strings.TrimSpace(line) != "" {
-			buf.WriteString(fmt.Sprintf("%d: %s\n", currentLine, line))
+			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		}
 		currentLine++
 	}

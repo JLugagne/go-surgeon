@@ -32,8 +32,8 @@ func NewTestCommand(surgeon service.SurgeonCommands) *cobra.Command {
 
 	cmd.Flags().StringVarP(&filePath, "file", "f", "", "Target Go file containing the function")
 	cmd.Flags().StringVarP(&identifier, "id", "i", "", "Function or method identifier (e.g. NewApp, (*App).Start)")
-	cmd.MarkFlagRequired("file")
-	cmd.MarkFlagRequired("id")
+	_ = cmd.MarkFlagRequired("file")
+	_ = cmd.MarkFlagRequired("id")
 
 	return cmd
 }

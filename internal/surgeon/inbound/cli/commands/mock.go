@@ -45,7 +45,7 @@ the interface and its mock in one step.`,
 
 			result, err := surgeon.Mock(ctx, req)
 			if err != nil {
-				return fmt.Errorf("failed to generate mock: %w\nHint: use the full import path. For project-local interfaces, use 'go-surgeon graph -s -d <dir>' to find the package path.", err)
+				return fmt.Errorf("failed to generate mock: %w [hint: use the full import path, for project-local interfaces use 'go-surgeon graph -s -d <dir>' to find the package path]", err)
 			}
 			fmt.Printf("SUCCESS: %s\n", result)
 			return nil

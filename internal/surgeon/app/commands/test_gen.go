@@ -235,10 +235,6 @@ func typeToString(expr ast.Expr, src []byte, fset *token.FileSet) string {
 	return ""
 }
 
-func isContext(t string) bool {
-	return t == "context.Context"
-}
-
 // capitalizeFirst uppercases the first rune of s, leaving the rest unchanged.
 // Unlike cases.Title, this preserves interior casing (e.g. "doWork" → "DoWork").
 func capitalizeFirst(s string) string {
