@@ -90,6 +90,46 @@ func warnUnresolvedImports(path string, src []byte) {
 		imported[name] = true
 	}
 
+	// Collect all locally declared identifiers so we don't mistake variable names
+	// (e.g. "sc", "cmdBuf") for unresolved package names.
+	declared := make(map[string]bool)
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			if v.Tok == token.DEFINE {
+				for _, lhs := range v.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						declared[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, name := range v.Names {
+				declared[name.Name] = true
+			}
+		case *ast.Field:
+			for _, name := range v.Names {
+				declared[name.Name] = true
+			}
+		case *ast.RangeStmt:
+			if id, ok := v.Key.(*ast.Ident); ok {
+				declared[id.Name] = true
+			}
+			if v.Value != nil {
+				if id, ok := v.Value.(*ast.Ident); ok {
+					declared[id.Name] = true
+				}
+			}
+		case *ast.TypeSpec:
+			declared[v.Name.Name] = true
+		case *ast.FuncDecl:
+			if v.Name != nil {
+				declared[v.Name.Name] = true
+			}
+		}
+		return true
+	})
+
 	// Collect package-qualified identifiers not backed by an import.
 	unresolved := make(map[string]bool)
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -102,7 +142,7 @@ func warnUnresolvedImports(path string, src []byte) {
 			return true
 		}
 		pkg := ident.Name
-		if !imported[pkg] && pkg != f.Name.Name {
+		if !imported[pkg] && pkg != f.Name.Name && !declared[pkg] {
 			unresolved[pkg] = true
 		}
 		return true
