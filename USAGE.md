@@ -8,20 +8,36 @@ All flags use the standard `--long-name` form. Single-character short aliases ar
 
 ## 1. Package Graph (`graph`)
 
-Walks all Go packages and prints their import paths. The fastest way to orient in an unfamiliar codebase.
+Walks all Go packages and prints their import paths. The fastest way to orient in an unfamiliar codebase. Context window management flags let agents progressively zoom in without overwhelming their token budget.
 
 ```bash
-go-surgeon graph [--symbols] [--dir <path>]
+go-surgeon graph [--symbols] [--dir <path>] [--depth N] [--focus <path>] [--exclude <glob>] [--token-budget N]
 ```
+
+### Core flags
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--symbols` | `-s` | false | Include exported symbols per file |
+| `--summary` | `-S` | false | Append package doc comment summary |
+| `--deps` | `-D` | false | Show internal import dependencies |
+| `--recursive` | `-r` | false | Walk sub-packages when `--symbols` is set |
+| `--tests` | `-t` | false | Include `_test.go` files (shows unexported helpers) |
 | `--dir` | `-d` | `.` | Directory to walk |
 
-`--symbols` requires `--dir` to prevent overwhelming output on large projects.
+`--symbols` requires `--dir` (or `--focus`) to prevent overwhelming output on large projects.
 
-**Examples:**
+### Context window management flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--depth` | `0` (unlimited) | Limit directory recursion depth. `1` = target dir only, `2` = immediate children. |
+| `--focus` | (none) | Package path for full detail (symbols + summary); all other packages show path only. Implies `--symbols --summary -r`. |
+| `--exclude` | (none) | Glob pattern for directories to skip. Repeatable (e.g. `--exclude vendor --exclude "*legacy*"`). |
+| `--token-budget` | `0` (unlimited) | Approximate max tokens in output. Progressively truncates: summaries → deps → symbols → files → package list. |
+
+### Examples
+
 ```bash
 # List all packages
 go-surgeon graph
@@ -31,9 +47,34 @@ go-surgeon graph --symbols --dir internal/catalog/domain
 
 # Short flags
 go-surgeon graph -s -d internal/catalog/domain
+
+# High-level overview with summaries and dependency graph
+go-surgeon graph --summary --deps
+
+# Limit depth to 2 directory levels
+go-surgeon graph --summary --depth 2
+
+# Zoom into a single package with full detail, path-only for the rest
+go-surgeon graph --focus internal/catalog/domain
+
+# Exclude vendor and legacy directories
+go-surgeon graph --exclude vendor --exclude "*legacy*"
+
+# Fit output within ~2000 tokens (progressive truncation)
+go-surgeon graph --summary --deps --token-budget 2000
 ```
 
-**Output (default):**
+### Progressive discovery strategy
+
+For large codebases, use the context management flags to adopt a zoom-in workflow:
+
+1. **High-level map:** `go-surgeon graph --summary --depth 2` — see top-level packages and their descriptions.
+2. **Zoom in:** `go-surgeon graph --focus internal/catalog/domain` — full symbols for the target package, path-only for the rest.
+3. **Deep dive:** `go-surgeon graph -s -d internal/catalog/domain` — detailed symbols in one subtree.
+
+### Output examples
+
+**Default (package paths only):**
 ```
 internal/catalog/domain
 internal/catalog/domain/repositories/book
@@ -41,8 +82,22 @@ internal/catalog/app/commands
 internal/catalog/inbound/http
 ```
 
-**Output (--symbols):**
+**With `--symbols`:**
 ```
+internal/catalog/domain/book.go
+  type Book struct { ID BookID; Title string; Author string }
+  type BookID string
+  func NewBook(title, author string) (*Book, error)
+
+internal/catalog/domain/repositories/book/book.go
+  type BookRepository interface { Create; FindByID; Delete }
+```
+
+**With `--focus internal/catalog/domain`:**
+```
+internal/catalog/app/commands
+internal/catalog/inbound/http
+
 internal/catalog/domain/book.go
   type Book struct { ID BookID; Title string; Author string }
   type BookID string
@@ -409,7 +464,10 @@ cat plan.yaml | go-surgeon execute
 
 ```bash
 go-surgeon graph                                      # packages map
+go-surgeon graph --summary --depth 2                  # high-level overview
+go-surgeon graph --focus internal/catalog/domain      # zoom into one package
 go-surgeon graph --symbols --dir internal/catalog     # symbols in a subtree
+go-surgeon graph --summary --deps --token-budget 2000 # fit within token budget
 go-surgeon symbol BookHandler                         # find a specific symbol
 go-surgeon symbol BookHandler.Handle --body           # read its body
 ```
