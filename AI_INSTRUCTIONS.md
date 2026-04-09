@@ -14,10 +14,14 @@ You are managing a Go codebase. To read, navigate, and modify Go code, you MUST 
 `go-surgeon` is a deterministic AST-based byte-range editor. It automatically runs `goimports`, meaning you NEVER need to worry about formatting or import statements when writing code.
 
 ## 1. Orientation & Navigation
-Always start by exploring the codebase using `go-surgeon` rather than reading full files.
+Always start by exploring the codebase using `go-surgeon` rather than reading full files. Use context window management flags to avoid blowing up your token budget on large projects.
 
 - **List all packages:** `go-surgeon graph`
+- **High-level overview:** `go-surgeon graph --summary --depth 2`
+- **Zoom into one package:** `go-surgeon graph --focus <package_path>` (full detail for the target, path-only for the rest)
 - **List all exported symbols in a package:** `go-surgeon graph -s -d <relative_dir>`
+- **Exclude directories:** `go-surgeon graph --exclude vendor --exclude "*legacy*"`
+- **Fit within token budget:** `go-surgeon graph --summary --deps --token-budget 2000`
 - **Read a function, struct, or method:** `go-surgeon symbol <Name> --body` (Use `Receiver.Method` for precise method lookups).
 
 ## 2. Editing Code

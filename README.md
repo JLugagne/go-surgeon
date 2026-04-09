@@ -15,7 +15,7 @@ AI agents and LLMs waste massive amounts of context window tokens and time tryin
 ## Core Features
 
 ### 1. Package & Symbol Graph (`graph`)
-Walk all Go packages and print their import paths. With `--symbols --dir`, list every exported type, function, and method in a subtree — a structural map in one command.
+Walk all Go packages and print their import paths. With `--symbols --dir`, list every exported type, function, and method in a subtree — a structural map in one command. Context window management flags (`--depth`, `--focus`, `--exclude`, `--token-budget`) let agents progressively zoom in without overwhelming their token budget.
 
 ### 2. Code Exploration (`symbol`)
 Query the AST to extract function signatures, documentation, or full bodies with empty lines stripped to save LLM tokens. Supports precise `Receiver.Method` lookups to cut through noise.
@@ -53,6 +53,11 @@ go-surgeon completion zsh > "${fpath[1]}/_go-surgeon"             # zsh
 # Orient yourself — packages map, then symbols in a subtree
 go-surgeon graph
 go-surgeon graph --symbols --dir internal/catalog/domain
+
+# Progressive discovery — zoom in without blowing up context
+go-surgeon graph --summary --depth 2
+go-surgeon graph --focus internal/catalog/domain
+go-surgeon graph --summary --deps --token-budget 2000
 
 # Read a symbol before editing it
 go-surgeon symbol BookHandler.Handle --body
