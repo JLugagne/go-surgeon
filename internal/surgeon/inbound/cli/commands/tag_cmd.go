@@ -37,8 +37,8 @@ func NewTagCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	cmd.Flags().StringVar(&req.SetTag, "set", "", "Exact tag string to set/append")
 	cmd.Flags().StringVar(&req.AutoFormat, "auto", "", "Auto-generate tags for exported fields (e.g. json, bson)")
 
-	cmd.MarkFlagRequired("file")
-	cmd.MarkFlagRequired("id")
+	_ = cmd.MarkFlagRequired("file")
+	_ = cmd.MarkFlagRequired("id")
 
 	return cmd
 }
