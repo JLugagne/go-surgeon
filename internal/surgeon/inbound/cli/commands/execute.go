@@ -19,13 +19,8 @@ func NewExecutePlanCommand(surgeon service.SurgeonCommands) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:        "execute [plan.yaml]",
-		Short:      "Execute a YAML plan file (deprecated: use individual subcommands)",
-		Deprecated: "use individual subcommands instead (add-func, update-struct, etc.)",
+		Short: "Execute a YAML plan file",
 		Long: `Reads a YAML plan file (or stdin) and executes all listed actions in order.
-
-This command is deprecated. Use the individual subcommands (add-func, update-func,
-delete-func, add-struct, etc.) instead — they provide clearer error messages, better
-help, and are easier to use from scripts and LLM agents.
 
 Plan file schema:
   actions:
