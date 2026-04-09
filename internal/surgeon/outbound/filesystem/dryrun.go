@@ -36,6 +36,7 @@ func (f *DryRunFileSystem) WriteFile(ctx context.Context, path string, content [
 		if err == nil {
 			content = formatted
 		}
+		warnUnresolvedImports(path, content)
 	}
 	f.files[path] = content
 	return nil
