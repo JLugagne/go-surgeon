@@ -42,6 +42,11 @@ Generates standard architecture components from local templates. Features a buil
 go build -o go-surgeon ./cmd/go-surgeon
 ```
 
+### Install
+```bash
+go install github.com/JLugagne/go-surgeon/cmd/go-surgeon@latest
+```
+
 ### Shell completion (optional)
 ```bash
 go-surgeon completion bash > /etc/bash_completion.d/go-surgeon   # bash
