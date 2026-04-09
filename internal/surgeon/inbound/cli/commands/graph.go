@@ -137,9 +137,6 @@ then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
 				if !hasHeader && !hasFiles {
 					// In focus mode, still print unfocused package paths.
 					if focus != "" {
-						if !first {
-							// No blank line between path-only entries.
-						}
 						fmt.Println(pkg.Path)
 						first = false
 						continue

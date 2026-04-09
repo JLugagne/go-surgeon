@@ -11,6 +11,8 @@ import (
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 )
 
@@ -120,7 +122,7 @@ func getFuncMap() template.FuncMap {
 	return template.FuncMap{
 		"lower": strings.ToLower,
 		"upper": strings.ToUpper,
-		"title": strings.Title,
+		"title": cases.Title(language.English).String,
 	}
 }
 
@@ -159,7 +161,7 @@ func (h *ScaffolderHandler) Execute(ctx context.Context, templateName, commandNa
 			return nil
 		}
 		visited[cmdName] = true
-		
+
 		cmd := cmdMap[cmdName]
 
 		for _, fileTmpl := range cmd.Files {

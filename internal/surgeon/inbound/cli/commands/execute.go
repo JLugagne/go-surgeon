@@ -75,7 +75,7 @@ There is no limit on the number of actions per plan file.`,
 					plan, err := converters.ToDomainPlan(data)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Plan files retained for debugging: %s\n", strings.Join(files, ", "))
-						return fmt.Errorf("plan %d (%s): %w\nHint: check YAML indentation — use '|' for multi-line content blocks, indented 2+ spaces from 'content:'.", i+1, filePath, err)
+						return fmt.Errorf("plan %d (%s): %w [hint: check YAML indentation, use '|' for multi-line content blocks indented 2+ spaces from 'content:']", i+1, filePath, err)
 					}
 					result, err := surgeon.ExecutePlan(ctx, plan)
 					if err != nil {
@@ -93,7 +93,7 @@ There is no limit on the number of actions per plan file.`,
 				}
 				if !keep {
 					for _, filePath := range files {
-						os.Remove(filePath)
+						_ = os.Remove(filePath)
 					}
 					fmt.Printf("SUCCESS: %d files modified (%d plans). Cleaned up %d plan files.\n", totalFilesModified, len(files), len(files))
 				} else {
@@ -109,7 +109,7 @@ There is no limit on the number of actions per plan file.`,
 				if err != nil {
 					return fmt.Errorf("failed to open file: %w", err)
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				input = f
 			} else {
 				input = os.Stdin
@@ -122,7 +122,7 @@ There is no limit on the number of actions per plan file.`,
 
 			plan, err := converters.ToDomainPlan(data)
 			if err != nil {
-				return fmt.Errorf("%w\nHint: check YAML indentation — use '|' for multi-line content blocks, indented 2+ spaces from 'content:'.", err)
+				return fmt.Errorf("%w [hint: check YAML indentation, use '|' for multi-line content blocks indented 2+ spaces from 'content:']", err)
 			}
 
 			result, err := surgeon.ExecutePlan(ctx, plan)

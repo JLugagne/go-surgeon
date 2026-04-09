@@ -34,7 +34,7 @@ func Setup() Runner {
 		var diffAlias bool
 		rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Preview changes as unified diff instead of writing to disk")
 		rootCmd.PersistentFlags().BoolVar(&diffAlias, "diff", false, "Alias for --dry-run")
-		rootCmd.PersistentFlags().MarkHidden("diff")
+		_ = rootCmd.PersistentFlags().MarkHidden("diff")
 
 		var dryRunFS *filesystem.DryRunFileSystem
 
