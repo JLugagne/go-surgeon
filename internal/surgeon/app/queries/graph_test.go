@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/queries"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -130,7 +131,7 @@ func TestGraph_PackagesOnly(t *testing.T) {
 	tmpDir, fs := setupGraphFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir})
 	require.NoError(t, err)
 
 	var paths []string
@@ -157,7 +158,7 @@ func TestGraph_EmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := queries.NewSurgeonQueriesHandler(&mockFS{files: map[string][]byte{}})
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir})
 	require.NoError(t, err)
 	assert.Empty(t, packages)
 }
@@ -169,7 +170,7 @@ func TestGraph_WithSymbols_NonRecursive(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	domainDir := filepath.Join(tmpDir, "pkg", "domain")
-	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: domainDir, Symbols: true})
 	require.NoError(t, err)
 
 	// Only the target directory — repositories sub-package is excluded.
@@ -198,7 +199,7 @@ func TestGraph_WithSymbols_NonRecursive_NoSubDirFiles(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	repoDir := filepath.Join(tmpDir, "pkg", "domain", "repositories")
-	packages, err := handler.Graph(context.Background(), repoDir, true, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: repoDir, Symbols: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 	require.Len(t, packages[0].Files, 1)
@@ -212,7 +213,7 @@ func TestGraph_WithSymbols_Recursive(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	domainDir := filepath.Join(tmpDir, "pkg", "domain")
-	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, true, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: domainDir, Symbols: true, Recursive: true})
 	require.NoError(t, err)
 
 	require.Len(t, packages, 2)
@@ -225,7 +226,7 @@ func TestGraph_InterfaceFormatting(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	repoDir := filepath.Join(tmpDir, "pkg", "domain", "repositories")
-	packages, err := handler.Graph(context.Background(), repoDir, true, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: repoDir, Symbols: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 	require.Len(t, packages[0].Files, 1)
@@ -240,7 +241,7 @@ func TestGraph_LargeStructMultiLine(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	appDir := filepath.Join(tmpDir, "pkg", "app")
-	packages, err := handler.Graph(context.Background(), appDir, true, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: appDir, Symbols: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 	require.Len(t, packages[0].Files, 1)
@@ -305,7 +306,7 @@ func TestGraph_WithTests_ExcludesTestFilesByDefault(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
-	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: pkgDir, Symbols: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 
@@ -319,7 +320,7 @@ func TestGraph_WithTests_IncludesTestFiles(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
-	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, true)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: pkgDir, Symbols: true, Tests: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 
@@ -334,7 +335,7 @@ func TestGraph_WithTests_UnexportedSymbolsInTestFile(t *testing.T) {
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
 	pkgDir := filepath.Join(tmpDir, "pkg", "commands")
-	packages, err := handler.Graph(context.Background(), pkgDir, true, false, false, false, true)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: pkgDir, Symbols: true, Tests: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 
@@ -368,7 +369,7 @@ func TestGraph_WithTests_ProductionFileUnexportedStillHidden(t *testing.T) {
 	// helperFunc is unexported in book.go (a production file).
 	// --tests should NOT expose it — unexported-in-test-files logic is test-file only.
 	domainDir := filepath.Join(tmpDir, "pkg", "domain")
-	packages, err := handler.Graph(context.Background(), domainDir, true, false, false, false, true)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: domainDir, Symbols: true, Tests: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
 
@@ -426,7 +427,7 @@ func TestGraph_Summary_ExtractsDocComment(t *testing.T) {
 	tmpDir, fs := setupSummaryFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, true, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Summary: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 4)
 
@@ -445,7 +446,7 @@ func TestGraph_Summary_DocGoPriority(t *testing.T) {
 	tmpDir, fs := setupSummaryFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, true, false, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Summary: true})
 	require.NoError(t, err)
 
 	for _, p := range packages {
@@ -510,7 +511,7 @@ func TestGraph_Deps_InternalImports(t *testing.T) {
 	tmpDir, fs := setupDepsFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, false, true, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Deps: true})
 	require.NoError(t, err)
 	require.Len(t, packages, 3)
 
@@ -528,9 +529,264 @@ func TestGraph_Deps_NoGoMod(t *testing.T) {
 	tmpDir, fs := setupGraphFixture(t)
 	handler := queries.NewSurgeonQueriesHandler(fs)
 
-	packages, err := handler.Graph(context.Background(), tmpDir, false, false, true, false, false)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Deps: true})
 	require.NoError(t, err)
 	for _, p := range packages {
 		assert.Nil(t, p.Deps)
 	}
+}
+
+// --- Depth tests ---
+
+func TestGraph_Depth_LimitsRecursion(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// depth=2 should reach pkg/domain and pkg/app but NOT pkg/domain/repositories (depth 3)
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Depth: 2})
+	require.NoError(t, err)
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
+	assert.NotContains(t, paths, filepath.Join(tmpDir, "pkg", "domain", "repositories"))
+}
+
+func TestGraph_Depth_Zero_Unlimited(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// depth=0 means unlimited — should include all packages
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Depth: 0})
+	require.NoError(t, err)
+	assert.Len(t, packages, 3) // pkg/app, pkg/domain, pkg/domain/repositories
+}
+
+// --- Exclude tests ---
+
+func TestGraph_Exclude_SkipsMatchingDirs(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:     tmpDir,
+		Exclude: []string{"repositories"},
+	})
+	require.NoError(t, err)
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
+	assert.NotContains(t, paths, filepath.Join(tmpDir, "pkg", "domain", "repositories"))
+}
+
+func TestGraph_Exclude_GlobPattern(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Exclude anything starting with "d"
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:     tmpDir,
+		Exclude: []string{"d*"},
+	})
+	require.NoError(t, err)
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
+	assert.NotContains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
+}
+
+func TestGraph_Exclude_MultiplePatterns(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:     tmpDir,
+		Exclude: []string{"app", "repositories"},
+	})
+	require.NoError(t, err)
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Len(t, packages, 1)
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
+}
+
+// --- Focus tests ---
+
+func TestGraph_Focus_FullDetailForFocused_PathOnlyForRest(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	focusDir := filepath.Join(tmpDir, "pkg", "app")
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:       tmpDir,
+		Symbols:   true,
+		Summary:   true,
+		Recursive: true,
+		Focus:     focusDir,
+	})
+	require.NoError(t, err)
+
+	for _, pkg := range packages {
+		if pkg.Path == focusDir {
+			// Focused package has symbols
+			assert.NotEmpty(t, pkg.Files, "focused package should have symbols")
+		} else {
+			// Non-focused packages have no symbols, no summary
+			assert.Empty(t, pkg.Files, "non-focused package %s should have no symbols", pkg.Path)
+			assert.Empty(t, pkg.Summary, "non-focused package %s should have no summary", pkg.Path)
+		}
+	}
+}
+
+func TestGraph_Focus_IncludesSubPackages(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Focus on pkg/domain — should give full detail for domain AND domain/repositories
+	focusDir := filepath.Join(tmpDir, "pkg", "domain")
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:       tmpDir,
+		Symbols:   true,
+		Recursive: true,
+		Focus:     focusDir,
+	})
+	require.NoError(t, err)
+
+	focusedCount := 0
+	for _, pkg := range packages {
+		if pkg.Path == focusDir || strings.HasPrefix(pkg.Path, focusDir+"/") {
+			assert.NotEmpty(t, pkg.Files, "focused package %s should have symbols", pkg.Path)
+			focusedCount++
+		}
+	}
+	assert.Equal(t, 2, focusedCount) // domain + domain/repositories
+}
+
+func TestGraph_Focus_EmptyMeansAllDetailed(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// No focus → same as before, all packages with symbols
+	domainDir := filepath.Join(tmpDir, "pkg", "domain")
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:       domainDir,
+		Symbols:   true,
+		Recursive: true,
+		Focus:     "",
+	})
+	require.NoError(t, err)
+
+	for _, pkg := range packages {
+		assert.NotEmpty(t, pkg.Files, "all packages should have symbols when focus is empty")
+	}
+}
+
+// --- Token budget tests ---
+
+func TestGraph_TokenBudget_LargeEnough_NoTruncation(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Very large budget — no truncation
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:         tmpDir,
+		Summary:     true,
+		Deps:        true,
+		TokenBudget: 100000,
+	})
+	require.NoError(t, err)
+	assert.Len(t, packages, 3)
+}
+
+func TestGraph_TokenBudget_StripsSummariesFirst(t *testing.T) {
+	tmpDir, fs := setupSummaryFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Get full output with summaries
+	full, err := handler.Graph(context.Background(), domain.GraphOptions{Dir: tmpDir, Summary: true})
+	require.NoError(t, err)
+
+	// Compute a budget that fits paths-only but not paths+summaries.
+	pathOnlyTokens := 0
+	fullTokens := 0
+	for _, pkg := range full {
+		pathOnlyTokens += len(pkg.Path) / 4
+		fullTokens += (len(pkg.Path) + len(pkg.Summary)) / 4
+	}
+	// Budget between path-only and full → summaries should be stripped.
+	budget := pathOnlyTokens + (fullTokens-pathOnlyTokens)/2
+	require.Greater(t, budget, pathOnlyTokens, "budget should exceed path-only size")
+
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:         tmpDir,
+		Summary:     true,
+		TokenBudget: budget,
+	})
+	require.NoError(t, err)
+	assert.Len(t, packages, len(full)) // same package count
+	for _, pkg := range packages {
+		assert.Empty(t, pkg.Summary, "summaries should be stripped to fit budget")
+	}
+}
+
+func TestGraph_TokenBudget_TruncatesPackageList(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Extremely small budget — forces package list truncation
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:         tmpDir,
+		TokenBudget: 1,
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(packages), 1, "should truncate package list to fit tiny budget")
+}
+
+func TestGraph_TokenBudget_Zero_Unlimited(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Budget=0 means unlimited
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:         tmpDir,
+		TokenBudget: 0,
+	})
+	require.NoError(t, err)
+	assert.Len(t, packages, 3)
+}
+
+// --- Combined flags ---
+
+func TestGraph_DepthAndExclude_Combined(t *testing.T) {
+	tmpDir, fs := setupGraphFixture(t)
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// depth=3 allows all, but exclude "app" removes it
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:     tmpDir,
+		Depth:   3,
+		Exclude: []string{"app"},
+	})
+	require.NoError(t, err)
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain"))
+	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain", "repositories"))
+	assert.NotContains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
 }

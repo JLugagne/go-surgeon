@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,10 @@ func NewGraphCommand(queries service.SurgeonQueries) *cobra.Command {
 	var recursive bool
 	var tests bool
 	var dir string
+	var depth int
+	var focus string
+	var exclude []string
+	var tokenBudget int
 
 	cmd := &cobra.Command{
 		Use:   "graph",
@@ -34,8 +39,14 @@ setup functions) are shown for test files since they are the primary reason to r
 With --summary, appends a one-line package description derived from the Go package comment.
 With --deps, shows the internal import dependencies between packages (project-module only).
 
+Context window management flags:
+  --depth N        Limit directory recursion depth (1 = target dir only, 2 = immediate children)
+  --focus PATH     Full detail for focused package; path-only for everything else
+  --exclude GLOB   Skip directories matching pattern (repeatable)
+  --token-budget N Truncate output to fit approximate token count
+
 Use "graph" for project orientation, "graph -s -d <pkg>" for that package's symbols,
-then "graph -s -d <sub-pkg>" to zoom in further.`,
+then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
 		Example: `  # List all packages in the project
   go-surgeon graph
 
@@ -52,18 +63,51 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
   go-surgeon graph --summary --deps
 
   # Full architectural overview
-  go-surgeon graph --summary --deps --symbols --dir internal/catalog`,
+  go-surgeon graph --summary --deps --symbols --dir internal/catalog
+
+  # Limit recursion depth to 2 levels
+  go-surgeon graph --summary --depth 2
+
+  # Focus on a single package with full detail, path-only for the rest
+  go-surgeon graph --summary --symbols --focus internal/catalog/domain
+
+  # Exclude vendor and legacy directories
+  go-surgeon graph --exclude vendor --exclude "*legacy*"
+
+  # Fit output within ~2000 tokens
+  go-surgeon graph --summary --deps --token-budget 2000`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if symbols && !cmd.Flags().Changed("dir") {
-				return fmt.Errorf("--symbols requires --dir to scope the output")
+			if symbols && !cmd.Flags().Changed("dir") && focus == "" {
+				return fmt.Errorf("--symbols requires --dir (or --focus) to scope the output")
 			}
-			packages, err := queries.Graph(ctx, dir, symbols, summary, deps, recursive, tests)
+
+			opts := domain.GraphOptions{
+				Dir:         dir,
+				Symbols:     symbols,
+				Summary:     summary,
+				Deps:        deps,
+				Recursive:   recursive,
+				Tests:       tests,
+				Depth:       depth,
+				Focus:       focus,
+				Exclude:     exclude,
+				TokenBudget: tokenBudget,
+			}
+
+			// --focus implies symbols + summary for the focused package.
+			if focus != "" {
+				opts.Symbols = true
+				opts.Summary = true
+				opts.Recursive = true
+			}
+
+			packages, err := queries.Graph(ctx, opts)
 			if err != nil {
 				return fmt.Errorf("failed to build graph: %w", err)
 			}
 
-			if !symbols {
+			if !opts.Symbols {
 				if len(packages) == 0 {
 					fmt.Printf("No Go packages found in '%s'.\n", dir)
 					fmt.Printf("Hint: check that you're in the project root, or use '--dir <path>' to target a subdirectory.\n")
@@ -71,15 +115,13 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 				}
 				for _, pkg := range packages {
 					line := pkg.Path
-					if summary {
+					if pkg.Summary != "" {
 						line += " — " + pkg.Summary
 					}
-					if deps {
-						if len(pkg.Deps) > 0 {
-							line += " → " + strings.Join(pkg.Deps, ", ")
-						} else {
-							line += " → (none)"
-						}
+					if len(pkg.Deps) > 0 {
+						line += " → " + strings.Join(pkg.Deps, ", ")
+					} else if deps {
+						line += " → (none)"
 					}
 					fmt.Println(line)
 				}
@@ -91,7 +133,17 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 			first := true
 			for _, pkg := range packages {
 				hasFiles := len(pkg.Files) > 0
-				if !showHeader && !hasFiles {
+				hasHeader := showHeader && (pkg.Summary != "" || len(pkg.Deps) > 0)
+				if !hasHeader && !hasFiles {
+					// In focus mode, still print unfocused package paths.
+					if focus != "" {
+						if !first {
+							// No blank line between path-only entries.
+						}
+						fmt.Println(pkg.Path)
+						first = false
+						continue
+					}
 					continue
 				}
 
@@ -102,7 +154,7 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 
 				if showHeader {
 					line := pkg.Path
-					if summary {
+					if pkg.Summary != "" {
 						line += " — " + pkg.Summary
 					}
 					if deps {
@@ -125,13 +177,12 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 				}
 			}
 
-			// When non-recursive symbols mode, hint at direct sub-packages containing .go files.
-			if !recursive {
+			// When non-recursive symbols mode (and no focus), hint at direct sub-packages.
+			if !recursive && focus == "" {
 				subPkgs := findDirectSubPackages(dir)
 				if len(subPkgs) > 0 {
 					fmt.Printf("\nSub-packages (use -r to include): %s\n", strings.Join(subPkgs, ", "))
 				} else if first {
-					// Nothing was printed at all — no .go files in this dir.
 					fmt.Printf("No Go files found in '%s'.\n", dir)
 					fmt.Printf("Hint: use '--dir <path>' to target a package directory, or '-r' to walk sub-packages.\n")
 				}
@@ -146,6 +197,10 @@ then "graph -s -d <sub-pkg>" to zoom in further.`,
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "Walk sub-packages when --symbols is set (default: target dir only)")
 	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files (shows unexported helpers too)")
 	cmd.Flags().StringVarP(&dir, "dir", "d", ".", "Directory to walk")
+	cmd.Flags().IntVar(&depth, "depth", 0, "Limit directory recursion depth (0 = unlimited)")
+	cmd.Flags().StringVar(&focus, "focus", "", "Package path for full detail; others show path only")
+	cmd.Flags().StringArrayVar(&exclude, "exclude", nil, "Glob patterns for directories to skip (repeatable)")
+	cmd.Flags().IntVar(&tokenBudget, "token-budget", 0, "Approximate max tokens in output (0 = unlimited)")
 	return cmd
 }
 
