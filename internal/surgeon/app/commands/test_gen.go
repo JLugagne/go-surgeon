@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 )
@@ -98,26 +99,26 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 				results = append(results, paramInfo{Name: fmt.Sprintf("want%d", i), Type: typStr})
 			} else {
 				for _, name := range field.Names {
-					results = append(results, paramInfo{Name: "want" + strings.Title(name.Name), Type: typStr})
+					results = append(results, paramInfo{Name: "want" + capitalizeFirst(name.Name), Type: typStr})
 				}
 			}
 		}
 	}
 
 	// Construct test skeleton
-	testName := "Test" + strings.Title(funcName)
+	testName := "Test" + capitalizeFirst(funcName)
 	if recvName != "" {
-		testName = "Test" + strings.Title(recvName) + "_" + strings.Title(funcName)
+		testName = "Test" + capitalizeFirst(recvName) + "_" + capitalizeFirst(funcName)
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("func %s(t *testing.T) {\n", testName))
+	fmt.Fprintf(&buf, "func %s(t *testing.T) {\n", testName)
 
 	// args struct
 	if len(params) > 0 {
 		buf.WriteString("\ttype args struct {\n")
 		for _, p := range params {
-			buf.WriteString(fmt.Sprintf("\t\t%s %s\n", p.Name, p.Type))
+			fmt.Fprintf(&buf, "\t\t%s %s\n", p.Name, p.Type)
 		}
 		buf.WriteString("\t}\n")
 	}
@@ -126,13 +127,13 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	buf.WriteString("\t\tname string\n")
 	if recvType != "" {
 		// Just a placeholder or setup func for receiver
-		buf.WriteString(fmt.Sprintf("\t\t%s %s\n", recvVar, recvType))
+		fmt.Fprintf(&buf, "\t\t%s %s\n", recvVar, recvType)
 	}
 	if len(params) > 0 {
 		buf.WriteString("\t\targs args\n")
 	}
 	for _, r := range results {
-		buf.WriteString(fmt.Sprintf("\t\t%s %s\n", r.Name, r.Type))
+		fmt.Fprintf(&buf, "\t\t%s %s\n", r.Name, r.Type)
 	}
 	if returnsError {
 		buf.WriteString("\t\twantErr bool\n")
@@ -167,14 +168,12 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	callStr := fmt.Sprintf("%s(%s)", funcName, strings.Join(callArgs, ", "))
 	if recvVar != "" {
 		callStr = fmt.Sprintf("tt.%s.%s(%s)", recvVar, funcName, strings.Join(callArgs, ", "))
-	} else if len(params) > 0 && isContext(params[0].Type) && len(callArgs) == 1 {
-		// minor fix, if it needs context and it's the only arg
 	}
 
 	if len(assignVars) > 0 {
-		buf.WriteString(fmt.Sprintf("\t\t\t%s := %s\n", strings.Join(assignVars, ", "), callStr))
+		fmt.Fprintf(&buf, "\t\t\t%s := %s\n", strings.Join(assignVars, ", "), callStr)
 	} else {
-		buf.WriteString(fmt.Sprintf("\t\t\t%s\n", callStr))
+		fmt.Fprintf(&buf, "\t\t\t%s\n", callStr)
 	}
 
 	if returnsError {
@@ -222,9 +221,7 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		return "", &domain.Error{Code: "WRITE_ERROR", Message: "failed to write test file", Err: err}
 	}
 
-	if err := h.fs.ExecuteGoImports(ctx, []string{testFile}); err != nil {
-		// Ignore goimports error, file is written anyway
-	}
+	_ = h.fs.ExecuteGoImports(ctx, []string{testFile})
 
 	return testFile, nil
 }
@@ -240,4 +237,15 @@ func typeToString(expr ast.Expr, src []byte, fset *token.FileSet) string {
 
 func isContext(t string) bool {
 	return t == "context.Context"
+}
+
+// capitalizeFirst uppercases the first rune of s, leaving the rest unchanged.
+// Unlike cases.Title, this preserves interior casing (e.g. "doWork" → "DoWork").
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }

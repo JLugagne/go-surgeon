@@ -118,15 +118,9 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 
 			continue // Already implemented (counts match)
 		}
-		
+
 		params := types.TypeString(sig.Params(), qualifier)
 		results := types.TypeString(sig.Results(), qualifier)
-		
-		if results != "" && !strings.HasPrefix(results, "(") {
-			// e.g. "error" becomes "(error)", but go/types TypeString might just return "error"
-			// Actually, let's keep it simple, but we need to know what TypeString returns.
-			// TypesString on a Tuple returns "(x int, y string)"
-		}
 
 		methodStr := fmt.Sprintf("\n// %s implements %s.\nfunc (r %s) %s%s %s {\n\t// TODO: implement %s\n\tpanic(\"not implemented\")\n}\n",
 			m.Name(), req.Interface, req.Receiver, m.Name(), params, results, m.Name())
@@ -255,7 +249,7 @@ func extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, 
 	currentLine := startPos.Line
 	for _, line := range codeLines {
 		if strings.TrimSpace(line) != "" {
-			buf.WriteString(fmt.Sprintf("%d: %s\n", currentLine, line))
+			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		}
 		currentLine++
 	}

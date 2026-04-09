@@ -138,7 +138,7 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 	if err := h.fs.WriteFile(ctx, req.FilePath, updatedSrc); err != nil {
 		return &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
+	_ = h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
 	return nil
 }
@@ -147,7 +147,7 @@ func mergeTags(existing, addition string) string {
 	if existing == "" {
 		return addition
 	}
-	
+
 	// simple merge: just append if not present.
 	// Extract the key from addition (e.g. `json:"foo"` -> `json`)
 	parts := strings.SplitN(addition, ":", 2)
@@ -158,7 +158,7 @@ func mergeTags(existing, addition string) string {
 			return existing // already exists, don't overwrite
 		}
 	}
-	
+
 	return existing + " " + addition
 }
 
@@ -174,7 +174,7 @@ func formatFieldName(name, format string) string {
 	}
 	// snake case
 	var matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")
-	var matchAllCap   = regexp.MustCompile("([a-z0-9])([A-Z])")
+	var matchAllCap = regexp.MustCompile("([a-z0-9])([A-Z])")
 
 	snake := matchFirstCap.ReplaceAllString(name, "${1}_${2}")
 	snake = matchAllCap.ReplaceAllString(snake, "${1}_${2}")

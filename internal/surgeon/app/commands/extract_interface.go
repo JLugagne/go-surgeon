@@ -64,7 +64,7 @@ func (h *ExecutePlanHandler) ExtractInterface(ctx context.Context, req domain.Ex
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("type %s interface {\n", req.InterfaceName))
+	fmt.Fprintf(&buf, "type %s interface {\n", req.InterfaceName)
 	for _, m := range methods {
 		buf.WriteString(m + "\n")
 	}

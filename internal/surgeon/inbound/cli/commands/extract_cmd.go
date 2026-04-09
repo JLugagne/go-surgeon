@@ -36,9 +36,9 @@ func NewExtractInterfaceCommand(surgeon service.SurgeonCommands) *cobra.Command 
 	cmd.Flags().StringVarP(&req.MockFile, "mock-file", "m", "", "Optional: generate mock file path")
 	cmd.Flags().StringVar(&req.MockName, "mock-name", "", "Optional: name of the mock struct")
 
-	cmd.MarkFlagRequired("file")
-	cmd.MarkFlagRequired("id")
-	cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("file")
+	_ = cmd.MarkFlagRequired("id")
+	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }
