@@ -15,21 +15,49 @@ import (
 )
 
 // Graph walks the directory tree and returns a structural map of Go packages.
-// When symbols is true, each package includes its files with exported symbol signatures.
-// When summary is true, each package includes a one-line description from its package doc comment.
-// When deps is true, each package includes its internal import dependencies (filtered to the project module).
-// When symbols is true and recursive is false, only the target directory is inspected (no sub-packages).
-// When symbols is false, all packages under dir are always returned regardless of recursive.
-// When tests is true, _test.go files are included; unexported symbols in test files are always shown.
-func (h *SurgeonQueriesHandler) Graph(ctx context.Context, dir string, symbols, summary, deps, recursive, tests bool) ([]domain.GraphPackage, error) {
+//
+// Filtering options in GraphOptions:
+//   - Depth: limits how many directory levels deep the walk goes (0 = unlimited).
+//   - Exclude: glob patterns matched against directory names to skip during walk.
+//   - Focus: when set, only the focused package gets full detail (symbols, summary, deps);
+//     all other packages appear as path-only entries.
+//   - TokenBudget: when set, output is progressively truncated to fit within the approximate
+//     token count (see truncateToTokenBudget).
+func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
+	dir := opts.Dir
+	symbols := opts.Symbols
+	summary := opts.Summary
+	deps := opts.Deps
+	recursive := opts.Recursive
+	tests := opts.Tests
+
 	packageFiles := make(map[string][]string)
 
 	isTestFile := func(name string) bool {
 		return strings.HasSuffix(name, "_test.go")
 	}
 
+	// matchesExclude checks if a directory name matches any exclude glob pattern.
+	matchesExclude := func(name string) bool {
+		for _, pattern := range opts.Exclude {
+			if matched, _ := filepath.Match(pattern, name); matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	// relativeDepth returns the depth of path relative to baseDir.
+	// e.g. baseDir=".", path="internal/foo" => depth 2
+	relativeDepth := func(baseDir, path string) int {
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil || rel == "." {
+			return 0
+		}
+		return strings.Count(rel, string(filepath.Separator)) + 1
+	}
+
 	if symbols && !recursive {
-		// Non-recursive: only .go files directly in dir.
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err
@@ -55,6 +83,12 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, dir string, symbols, 
 			if info.IsDir() {
 				name := info.Name()
 				if name == "vendor" || (strings.HasPrefix(name, ".") && path != dir) {
+					return filepath.SkipDir
+				}
+				if matchesExclude(name) {
+					return filepath.SkipDir
+				}
+				if opts.Depth > 0 && relativeDepth(dir, path) > opts.Depth {
 					return filepath.SkipDir
 				}
 				return nil
@@ -86,6 +120,14 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, dir string, symbols, 
 	}
 	sort.Strings(pkgPaths)
 
+	// When --focus is set, determine which packages get full detail.
+	isFocused := func(pkgPath string) bool {
+		if opts.Focus == "" {
+			return true // no focus means all packages get full detail
+		}
+		return pkgPath == opts.Focus || strings.HasPrefix(pkgPath, opts.Focus+"/")
+	}
+
 	var packages []domain.GraphPackage
 	for _, pkgPath := range pkgPaths {
 		pkg := domain.GraphPackage{Path: pkgPath}
@@ -93,15 +135,17 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, dir string, symbols, 
 		files := packageFiles[pkgPath]
 		sort.Strings(files)
 
-		if summary {
+		focused := isFocused(pkgPath)
+
+		if summary && focused {
 			pkg.Summary = h.extractPackageSummary(ctx, files)
 		}
 
-		if deps {
+		if deps && focused {
 			pkg.Deps = h.extractPackageDeps(ctx, files, modulePath)
 		}
 
-		if symbols {
+		if symbols && focused {
 			for _, filePath := range files {
 				includeUnexported := tests && isTestFile(filepath.Base(filePath))
 				gf, err := h.extractGraphSymbols(ctx, filePath, includeUnexported)
@@ -115,6 +159,10 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, dir string, symbols, 
 		}
 
 		packages = append(packages, pkg)
+	}
+
+	if opts.TokenBudget > 0 {
+		packages = truncateToTokenBudget(packages, opts.TokenBudget)
 	}
 
 	return packages, nil
@@ -373,4 +421,77 @@ func findModulePath(startDir string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// estimateTokens approximates the token count of the graph output.
+// Uses the rough heuristic of 1 token ≈ 4 characters for code/English.
+func estimateTokens(packages []domain.GraphPackage) int {
+	total := 0
+	for _, pkg := range packages {
+		total += len(pkg.Path)
+		total += len(pkg.Summary)
+		for _, dep := range pkg.Deps {
+			total += len(dep) + 2 // separator
+		}
+		for _, file := range pkg.Files {
+			total += len(file.Path)
+			for _, sym := range file.Symbols {
+				total += len(sym)
+			}
+		}
+	}
+	return total / 4
+}
+
+// truncateToTokenBudget progressively reduces graph detail to fit within
+// the given token budget. Truncation levels, applied in order:
+//  1. Strip doc summaries
+//  2. Strip dependency lists
+//  3. Strip symbol signatures (keep file paths)
+//  4. Strip file lists (keep package paths only)
+//  5. Truncate package list from the end
+func truncateToTokenBudget(packages []domain.GraphPackage, budget int) []domain.GraphPackage {
+	if estimateTokens(packages) <= budget {
+		return packages
+	}
+
+	// Level 1: strip summaries.
+	for i := range packages {
+		packages[i].Summary = ""
+	}
+	if estimateTokens(packages) <= budget {
+		return packages
+	}
+
+	// Level 2: strip deps.
+	for i := range packages {
+		packages[i].Deps = nil
+	}
+	if estimateTokens(packages) <= budget {
+		return packages
+	}
+
+	// Level 3: strip symbols, keep file paths.
+	for i := range packages {
+		for j := range packages[i].Files {
+			packages[i].Files[j].Symbols = nil
+		}
+	}
+	if estimateTokens(packages) <= budget {
+		return packages
+	}
+
+	// Level 4: strip files entirely.
+	for i := range packages {
+		packages[i].Files = nil
+	}
+	if estimateTokens(packages) <= budget {
+		return packages
+	}
+
+	// Level 5: truncate package list.
+	for len(packages) > 1 && estimateTokens(packages) > budget {
+		packages = packages[:len(packages)-1]
+	}
+	return packages
 }
