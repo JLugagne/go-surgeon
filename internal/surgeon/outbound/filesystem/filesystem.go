@@ -2,6 +2,10 @@ package filesystem
 
 import (
 	"context"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"strings"
@@ -29,6 +33,7 @@ func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte)
 		if err == nil {
 			content = formatted
 		}
+		warnUnresolvedImports(path, content)
 	}
 	return os.WriteFile(path, content, 0644)
 }
@@ -60,6 +65,52 @@ func (f *FileSystem) IsDir(ctx context.Context, path string) (bool, error) {
 // MkdirAll creates a directory and all necessary parents.
 func (f *FileSystem) MkdirAll(ctx context.Context, path string) error {
 	return os.MkdirAll(path, 0755)
+}
+
+// warnUnresolvedImports parses the Go source and warns to stderr about any
+// package-qualified identifiers (e.g. domainerror.New) that have no matching import.
+// This catches cases where goimports silently drops unresolvable packages.
+func warnUnresolvedImports(path string, src []byte) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+	if err != nil {
+		return
+	}
+
+	imported := make(map[string]bool)
+	for _, imp := range f.Imports {
+		name := ""
+		if imp.Name != nil {
+			name = imp.Name.Name
+		} else {
+			p := strings.Trim(imp.Path.Value, `"`)
+			parts := strings.Split(p, "/")
+			name = parts[len(parts)-1]
+		}
+		imported[name] = true
+	}
+
+	// Collect package-qualified identifiers not backed by an import.
+	unresolved := make(map[string]bool)
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		pkg := ident.Name
+		if !imported[pkg] && pkg != f.Name.Name {
+			unresolved[pkg] = true
+		}
+		return true
+	})
+
+	for pkg := range unresolved {
+		fmt.Fprintf(os.Stderr, "WARNING: goimports could not resolve package %q referenced in %s — you may need to add the import manually.\n", pkg, path)
+	}
 }
 
 // ExecuteGoImports executes goimports -w on the provided files.
