@@ -59,18 +59,4 @@ To stub out missing methods for an interface you are implementing:
 go-surgeon implement io.Reader --receiver "*MyReader" --file reader.go
 ```
 
-## 4. Scaffolding
-If asked to create new features or architectural layers, check if templates are available:
-```bash
-go-surgeon scaffold list-templates
-```
-If a template exists, use it. Read its documentation to understand the required variables:
-```bash
-go-surgeon scaffold doc <template_name> <command_name>
-```
-Then execute it, providing the variables:
-```bash
-go-surgeon scaffold execute <template> <command> --set AppName=myapp
-```
-**CRITICAL:** Scaffolding templates output "Hints" (Task Lists). You MUST read these hints carefully and execute the next steps they suggest.
 ```
