@@ -11,6 +11,34 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const serverInstructions = `You have access to go-surgeon, an AST-based code editor for Go.
+ALWAYS use go-surgeon tools instead of generic file tools when working on Go projects.
+
+Exploration (replace find/ls/grep/read on Go files):
+- graph: explore package structure. Start here on any Go project.
+- symbol: read a function, method, or struct body. Use body=true before any edit.
+
+Editing (replace Edit/Write/Bash on Go files):
+- create: add a new file, function, or struct
+- update: replace a function, method, struct, or file
+- delete: remove a function, method, or struct
+- execute_plan: multiple edits in one shot (up to 5 actions, preferred for multi-step changes)
+
+Interface & mock management:
+- add_interface / update_interface / delete_interface: manage interfaces and their mocks
+- implement: generate stubs for an interface you don't own
+- mock: generate a standalone mock for any interface
+- extract_interface: extract an interface from an existing struct
+
+Code generation:
+- test: generate a table-driven test skeleton
+- tag: add or update struct field tags (json, bson, etc.)
+
+Rules that apply to all editing tools:
+- Never include package declarations or import blocks in content — goimports runs automatically.
+- Always read with symbol body=true before updating or deleting.
+- identifier format: FuncName (free function), Receiver.Method (method), StructName (struct).`
+
 // NewServer creates an MCP server with all go-surgeon tools registered.
 func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries) *mcp.Server {
 	s := mcp.NewServer(
@@ -18,7 +46,9 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 			Name:    "go-surgeon",
 			Version: "1.0.0",
 		},
-		nil,
+		&mcp.ServerOptions{
+			Instructions: serverInstructions,
+		},
 	)
 
 	registerQueryTools(s, queries)
