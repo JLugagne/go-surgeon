@@ -248,3 +248,215 @@ type Bar struct{ X int }
 		assert.Equal(t, initialCode, string(fs.files[filePath]))
 	})
 }
+
+func TestUpdateFunc_DocHandling(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "doc.go")
+
+	initialCode := `package main
+
+// Save persists the user to the database.
+func (u *User) Save() error {
+	return nil
+}
+
+func NoDoc() {}
+`
+
+	t.Run("default preserves existing doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   filePath,
+			Identifier: "User.Save",
+			Content:    "func (u *User) Save() error {\n\treturn fmt.Errorf(\"updated\")\n}",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, "// Save persists the user to the database.")
+		assert.Contains(t, updated, `return fmt.Errorf("updated")`)
+	})
+
+	t.Run("strip_doc removes existing doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   filePath,
+			Identifier: "User.Save",
+			Content:    "func (u *User) Save() error {\n\treturn nil\n}",
+			StripDoc:   true,
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.NotContains(t, updated, "// Save persists")
+		assert.Contains(t, updated, "func (u *User) Save() error")
+	})
+
+	t.Run("doc replaces existing doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   filePath,
+			Identifier: "User.Save",
+			Content:    "func (u *User) Save() error {\n\treturn nil\n}",
+			Doc:        "Save writes user data.",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.NotContains(t, updated, "// Save persists")
+		assert.Contains(t, updated, "// Save writes user data.")
+		assert.Contains(t, updated, "func (u *User) Save() error")
+	})
+
+	t.Run("doc adds doc comment to function without one", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   filePath,
+			Identifier: "NoDoc",
+			Content:    "func NoDoc() {}",
+			Doc:        "NoDoc does nothing.",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, "// NoDoc does nothing.")
+		assert.Contains(t, updated, "func NoDoc() {}")
+	})
+
+	t.Run("strip_doc on function without doc is a no-op", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   filePath,
+			Identifier: "NoDoc",
+			Content:    "func NoDoc() { return }",
+			StripDoc:   true,
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, "func NoDoc() { return }")
+		assert.NotContains(t, updated, "// NoDoc")
+	})
+}
+
+func TestUpdateStruct_DocHandling(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "doc.go")
+
+	initialCode := `package main
+
+// Config holds application configuration.
+type Config struct {
+	Port int
+}
+
+type Plain struct {
+	X int
+}
+`
+
+	t.Run("default preserves existing struct doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   filePath,
+			Identifier: "Config",
+			Content:    "type Config struct {\n\tPort int\n\tHost string\n}",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, "// Config holds application configuration.")
+		assert.Contains(t, updated, "Host string")
+	})
+
+	t.Run("strip_doc removes existing struct doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   filePath,
+			Identifier: "Config",
+			Content:    "type Config struct {\n\tPort int\n}",
+			StripDoc:   true,
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.NotContains(t, updated, "// Config holds")
+		assert.Contains(t, updated, "type Config struct")
+	})
+
+	t.Run("doc replaces existing struct doc comment", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   filePath,
+			Identifier: "Config",
+			Content:    "type Config struct {\n\tPort int\n}",
+			Doc:        "Config stores server settings.",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.NotContains(t, updated, "// Config holds")
+		assert.Contains(t, updated, "// Config stores server settings.")
+		assert.Contains(t, updated, "type Config struct")
+	})
+
+	t.Run("doc adds doc comment to struct without one", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+		handler := commands.NewExecutePlanHandler(fs)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   filePath,
+			Identifier: "Plain",
+			Content:    "type Plain struct {\n\tX int\n}",
+			Doc:        "Plain is a simple struct.",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		assert.Contains(t, updated, "// Plain is a simple struct.")
+		assert.Contains(t, updated, "type Plain struct")
+	})
+}
