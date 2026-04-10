@@ -16,9 +16,12 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 	var id string
 	var mockFile string
 	var mockName string
+	var doc string
+	var stripDoc bool
 
 	isDelete := actionType == domain.ActionTypeDeleteInterface
-	needsID := actionType == domain.ActionTypeUpdateInterface || isDelete
+	isUpdate := actionType == domain.ActionTypeUpdateInterface
+	needsID := isUpdate || isDelete
 
 	cmd := &cobra.Command{
 		Use:     name,
@@ -46,6 +49,8 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 				Content:    content,
 				MockFile:   mockFile,
 				MockName:   mockName,
+				Doc:        doc,
+				StripDoc:   stripDoc,
 			}
 
 			var (
@@ -83,6 +88,10 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 	if !isDelete {
 		cmd.Flags().StringVarP(&mockFile, "mock-file", "m", "", "Target file for the generated mock")
 		cmd.Flags().StringVarP(&mockName, "mock-name", "n", "", "Name of the mock struct")
+	}
+	if isUpdate {
+		cmd.Flags().StringVar(&doc, "doc", "", "Set or replace the doc comment (raw text, // prefix added automatically)")
+		cmd.Flags().BoolVar(&stripDoc, "strip-doc", false, "Remove the existing doc comment")
 	}
 	return cmd
 }

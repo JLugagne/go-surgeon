@@ -15,6 +15,10 @@ import (
 func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionType, name string, needsID, needsStdin bool) *cobra.Command {
 	var file string
 	var id string
+	var doc string
+	var stripDoc bool
+
+	isUpdate := actionType == domain.ActionTypeUpdateFunc || actionType == domain.ActionTypeUpdateStruct
 
 	cmd := &cobra.Command{
 		Use:     name,
@@ -41,6 +45,8 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 				FilePath:   file,
 				Identifier: id,
 				Content:    content,
+				Doc:        doc,
+				StripDoc:   stripDoc,
 			}
 
 			result, err := surgeon.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{action}})
@@ -60,7 +66,7 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 					fmt.Printf("Hint: '--id %s' not found; content was appended as a new declaration. Run 'go-surgeon graph -s -d <dir>' to verify what was written.\n", id)
 				}
 			}
-			
+
 			if fallback {
 				extracted := extractFirstIdentifier(content)
 				if extracted == "" {
@@ -79,6 +85,10 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 	cmd.Flags().StringVarP(&id, "id", "i", "", "AST identifier, e.g. FuncName or Receiver.Method")
 	if needsID {
 		_ = cmd.MarkFlagRequired("id")
+	}
+	if isUpdate {
+		cmd.Flags().StringVar(&doc, "doc", "", "Set or replace the doc comment (raw text, // prefix added automatically)")
+		cmd.Flags().BoolVar(&stripDoc, "strip-doc", false, "Remove the existing doc comment")
 	}
 	return cmd
 }

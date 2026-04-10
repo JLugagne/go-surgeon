@@ -40,6 +40,8 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		FilePath:   req.FilePath,
 		Identifier: req.Identifier,
 		Content:    req.Content,
+		Doc:        req.Doc,
+		StripDoc:   req.StripDoc,
 	}
 	warnings, err := h.executeAction(ctx, action)
 	if err != nil {

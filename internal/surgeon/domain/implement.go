@@ -21,4 +21,6 @@ type InterfaceActionRequest struct {
 	Content    string // stdin: interface type declaration source (add/update)
 	MockFile   string // --mock-file: target file for the generated mock (add/update)
 	MockName   string // --mock-name: name of the mock struct (add/update)
+	Doc        string // --doc: replacement doc comment (update only)
+	StripDoc   bool   // --strip-doc: remove existing doc comment (update only)
 }

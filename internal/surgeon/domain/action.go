@@ -30,6 +30,8 @@ type Action struct {
 	Content     string     `yaml:"content"`
 	MockFile    string     `yaml:"mock_file"`
 	MockName    string     `yaml:"mock_name"`
+	Doc         string     `yaml:"doc"`
+	StripDoc    bool       `yaml:"strip_doc"`
 }
 
 // PlanResult contains the outcome of executing a plan.

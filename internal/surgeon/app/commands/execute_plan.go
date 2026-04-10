@@ -74,6 +74,8 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			Content:    action.Content,
 			MockFile:   action.MockFile,
 			MockName:   action.MockName,
+			Doc:        action.Doc,
+			StripDoc:   action.StripDoc,
 		}
 		_, err := h.UpdateInterface(ctx, req)
 		return nil, err
@@ -138,27 +140,32 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 
 	switch action.Action {
 	case domain.ActionTypeUpdateFunc:
-		start, end, ok := findFuncOffsets(fset, f, action.Identifier)
+		offsets, ok := findFuncOffsets(fset, f, action.Identifier)
 		if ok {
+			start, replacement := resolveDocReplacement(offsets, action.Content, action.Doc, action.StripDoc)
 			updatedSrc = append([]byte(nil), src[:start]...)
-			updatedSrc = append(updatedSrc, []byte(action.Content)...)
-			updatedSrc = append(updatedSrc, src[end:]...)
+			updatedSrc = append(updatedSrc, []byte(replacement)...)
+			updatedSrc = append(updatedSrc, src[offsets.End:]...)
 			updated = true
 		} else {
 			// Fall back to add_func behavior
+			content := action.Content
+			if action.Doc != "" {
+				content = formatDocComment(action.Doc) + "\n" + content
+			}
 			updatedSrc = append([]byte(nil), src...)
 			if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
 				updatedSrc = append(updatedSrc, '\n')
 			}
-			updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
+			updatedSrc = append(updatedSrc, []byte("\n"+content+"\n")...)
 			updated = true
 			warnings = append(warnings, fmt.Sprintf("update_func: identifier %q not found in %s, treated as add_func", action.Identifier, action.FilePath))
 		}
 	case domain.ActionTypeAddFunc:
 		if !isFileNew {
 			if funcID, parseErr := extractFuncIdentifierFromContent(action.Content); parseErr == nil && funcID != "" {
-				if start, end, ok := findFuncOffsets(fset, f, funcID); ok {
-					existingBody := strings.TrimSpace(string(src[start:end]))
+				if offsets, ok := findFuncOffsets(fset, f, funcID); ok {
+					existingBody := strings.TrimSpace(string(src[offsets.DocStart:offsets.End]))
 					return nil, &domain.Error{
 						Code:    "NODE_ALREADY_EXISTS",
 						Message: fmt.Sprintf("function %q already declared in %s:\n\n%s", funcID, action.FilePath, existingBody),
@@ -175,8 +182,8 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	case domain.ActionTypeAddStruct:
 		if !isFileNew {
 			if structName, parseErr := extractStructNameFromContent(action.Content); parseErr == nil && structName != "" {
-				if start, end, ok := findStructOffsets(fset, f, structName); ok {
-					existingBody := strings.TrimSpace(string(src[start:end]))
+				if offsets, ok := findStructOffsets(fset, f, structName); ok {
+					existingBody := strings.TrimSpace(string(src[offsets.DocStart:offsets.End]))
 					return nil, &domain.Error{
 						Code:    "NODE_ALREADY_EXISTS",
 						Message: fmt.Sprintf("struct %q already declared in %s:\n\n%s", structName, action.FilePath, existingBody),
@@ -191,27 +198,32 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
 		updated = true
 	case domain.ActionTypeUpdateStruct:
-		start, end, ok := findStructOffsets(fset, f, action.Identifier)
+		offsets, ok := findStructOffsets(fset, f, action.Identifier)
 		if ok {
+			start, replacement := resolveDocReplacement(offsets, action.Content, action.Doc, action.StripDoc)
 			updatedSrc = append([]byte(nil), src[:start]...)
-			updatedSrc = append(updatedSrc, []byte(action.Content)...)
-			updatedSrc = append(updatedSrc, src[end:]...)
+			updatedSrc = append(updatedSrc, []byte(replacement)...)
+			updatedSrc = append(updatedSrc, src[offsets.End:]...)
 			updated = true
 		} else {
 			// Fall back to add_struct behavior
+			content := action.Content
+			if action.Doc != "" {
+				content = formatDocComment(action.Doc) + "\n" + content
+			}
 			updatedSrc = append([]byte(nil), src...)
 			if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
 				updatedSrc = append(updatedSrc, '\n')
 			}
-			updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
+			updatedSrc = append(updatedSrc, []byte("\n"+content+"\n")...)
 			updated = true
 			warnings = append(warnings, fmt.Sprintf("update_struct: identifier %q not found in %s, treated as add_struct", action.Identifier, action.FilePath))
 		}
 	case domain.ActionTypeDeleteFunc:
-		start, end, ok := findFuncOffsets(fset, f, action.Identifier)
+		offsets, ok := findFuncOffsets(fset, f, action.Identifier)
 		if ok {
-			updatedSrc = append([]byte(nil), src[:start]...)
-			updatedSrc = append(updatedSrc, src[end:]...)
+			updatedSrc = append([]byte(nil), src[:offsets.DocStart]...)
+			updatedSrc = append(updatedSrc, src[offsets.End:]...)
 			updated = true
 		}
 	case domain.ActionTypeDeleteStruct:
@@ -240,7 +252,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	return warnings, h.fs.WriteFile(ctx, action.FilePath, updatedSrc)
 }
 
-func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, int, bool) {
+func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (nodeOffsets, bool) {
 	recvTarget, nameTarget := parseIdentifier(identifier)
 
 	for _, decl := range f.Decls {
@@ -252,15 +264,22 @@ func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, 
 
 			// Match if receiver matches, or if recvTarget is the package name and it's a global function
 			if recvName == recvTarget || (recvName == "" && recvTarget == f.Name.Name) {
-				startPos := fn.Pos()
-				if fn.Doc != nil {
-					startPos = fn.Doc.Pos()
+				nodeStart := fset.Position(fn.Pos()).Offset
+				docStart := nodeStart
+				hasDoc := fn.Doc != nil
+				if hasDoc {
+					docStart = fset.Position(fn.Doc.Pos()).Offset
 				}
-				return fset.Position(startPos).Offset, fset.Position(fn.End()).Offset, true
+				return nodeOffsets{
+					DocStart:  docStart,
+					NodeStart: nodeStart,
+					End:       fset.Position(fn.End()).Offset,
+					HasDoc:    hasDoc,
+				}, true
 			}
 		}
 	}
-	return 0, 0, false
+	return nodeOffsets{}, false
 }
 
 func getRecvType(recv *ast.FieldList) string {
@@ -283,7 +302,7 @@ func parseIdentifier(id string) (string, string) {
 	if len(parts) == 1 {
 		return "", id
 	}
-	
+
 	if len(parts) == 3 {
 		// pkg.Receiver.Method
 		receiver := strings.Trim(parts[1], "()*")
@@ -291,54 +310,63 @@ func parseIdentifier(id string) (string, string) {
 	}
 
 	// Two parts: could be pkg.Func or Receiver.Method
-	// We'll treat the first part as receiver. If it's a package name, 
+	// We'll treat the first part as receiver. If it's a package name,
 	// the caller (findFuncOffsets) might need to handle the fallback.
 	// But usually, receivers are what we want in a single file.
 	receiver := strings.Trim(parts[0], "()*")
 	return receiver, parts[1]
 }
 
-func findStructOffsets(fset *token.FileSet, f *ast.File, identifier string) (int, int, bool) {
+func findStructOffsets(fset *token.FileSet, f *ast.File, identifier string) (nodeOffsets, bool) {
 	pkgTarget, nameTarget := parseIdentifier(identifier)
 	if pkgTarget != "" && pkgTarget != f.Name.Name {
-		// If it has a package part and it doesn't match the current file's package, skip.
-		// NOTE: This allows the same logic to work for both Func and Struct.
-		return 0, 0, false
+		return nodeOffsets{}, false
 	}
 
 	for _, decl := range f.Decls {
 		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
 			for _, spec := range gen.Specs {
 				if typeSpec, ok := spec.(*ast.TypeSpec); ok && typeSpec.Name.Name == nameTarget {
-					startPos := typeSpec.Pos()
-					if typeSpec.Doc != nil {
-						startPos = typeSpec.Doc.Pos()
-					} else if len(gen.Specs) == 1 && gen.Doc != nil {
-						startPos = gen.Doc.Pos()
-					}
-					endPos := typeSpec.End()
+					var nodeStart, docStart int
+					var endPos token.Pos
+					var hasDoc bool
 
 					if len(gen.Specs) == 1 {
+						nodeStart = fset.Position(gen.Pos()).Offset
+						docStart = nodeStart
 						if gen.Doc != nil {
-							startPos = gen.Doc.Pos()
-						} else {
-							startPos = gen.Pos()
+							hasDoc = true
+							docStart = fset.Position(gen.Doc.Pos()).Offset
 						}
 						endPos = gen.End()
+					} else {
+						nodeStart = fset.Position(typeSpec.Pos()).Offset
+						docStart = nodeStart
+						if typeSpec.Doc != nil {
+							hasDoc = true
+							docStart = fset.Position(typeSpec.Doc.Pos()).Offset
+						}
+						endPos = typeSpec.End()
 					}
-					return fset.Position(startPos).Offset, fset.Position(endPos).Offset, true
+
+					return nodeOffsets{
+						DocStart:  docStart,
+						NodeStart: nodeStart,
+						End:       fset.Position(endPos).Offset,
+						HasDoc:    hasDoc,
+					}, true
 				}
 			}
 		}
 	}
-	return 0, 0, false
+	return nodeOffsets{}, false
 }
 
 func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier string) [][2]int {
 	var ranges [][2]int
 	// Find struct
-	if s, e, ok := findStructOffsets(fset, f, identifier); ok {
-		ranges = append(ranges, [2]int{s, e})
+	if offsets, ok := findStructOffsets(fset, f, identifier); ok {
+		ranges = append(ranges, [2]int{offsets.DocStart, offsets.End})
 	}
 
 	// Find methods
@@ -405,4 +433,39 @@ func extractStructNameFromContent(content string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+type nodeOffsets struct {
+	DocStart  int
+	NodeStart int
+	End       int
+	HasDoc    bool
+}
+
+func formatDocComment(text string) string {
+	lines := strings.Split(text, "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		if line == "" {
+			b.WriteString("//\n")
+		} else {
+			b.WriteString("// ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// resolveDocReplacement determines the replacement start offset and content
+// based on doc/strip_doc options. Default: preserve existing doc comment.
+func resolveDocReplacement(offsets nodeOffsets, content, doc string, stripDoc bool) (int, string) {
+	if doc != "" {
+		return offsets.DocStart, formatDocComment(doc) + "\n" + content
+	}
+	if stripDoc {
+		return offsets.DocStart, content
+	}
+	// Default: preserve existing doc by replacing only the node body
+	return offsets.NodeStart, content
 }

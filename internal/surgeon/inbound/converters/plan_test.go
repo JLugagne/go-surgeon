@@ -129,3 +129,49 @@ actions:
 		t.Errorf("expected mock_name MockFoo, got %s", a.MockName)
 	}
 }
+
+func TestToDomainPlan_DocFields(t *testing.T) {
+	t.Run("doc field is parsed", func(t *testing.T) {
+		yaml := `
+actions:
+  - action: update_func
+    file: main.go
+    identifier: Foo
+    content: "func Foo() {}"
+    doc: "Foo does something."
+`
+		plan, err := ToDomainPlan([]byte(yaml))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		a := plan.Actions[0]
+		if a.Doc != "Foo does something." {
+			t.Errorf("expected doc 'Foo does something.', got %q", a.Doc)
+		}
+		if a.StripDoc {
+			t.Error("expected strip_doc to be false")
+		}
+	})
+
+	t.Run("strip_doc field is parsed", func(t *testing.T) {
+		yaml := `
+actions:
+  - action: update_struct
+    file: main.go
+    identifier: Bar
+    content: "type Bar struct{}"
+    strip_doc: true
+`
+		plan, err := ToDomainPlan([]byte(yaml))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		a := plan.Actions[0]
+		if !a.StripDoc {
+			t.Error("expected strip_doc to be true")
+		}
+		if a.Doc != "" {
+			t.Errorf("expected empty doc, got %q", a.Doc)
+		}
+	})
+}

@@ -151,6 +151,8 @@ type updateInput struct {
 	File       string `json:"file" jsonschema:"target file path"`
 	Identifier string `json:"identifier,omitempty" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method, required for func and struct"`
 	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
+	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
+	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
 }
 
 type deleteInput struct {
@@ -205,7 +207,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace an existing function, method, struct, or entire file. For object='func' or 'struct', identifier is required: use 'FuncName' for free functions, 'Receiver.Method' for methods, 'StructName' for structs. Content must be the complete new declaration (full signature and body). Never include package declarations or imports — goimports handles all import changes. Read the current code with symbol body=true first.",
+		Description: "Replace an existing function, method, struct, or entire file. For object='func' or 'struct', identifier is required: use 'FuncName' for free functions, 'Receiver.Method' for methods, 'StructName' for structs. Content must be the complete new declaration (full signature and body). Never include package declarations or imports — goimports handles all import changes. Read the current code with symbol body=true first. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		actionType, ok := updateObjectMap[in.Object]
 		if !ok {
@@ -217,6 +219,8 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			FilePath:   in.File,
 			Identifier: in.Identifier,
 			Content:    in.Content,
+			Doc:        in.Doc,
+			StripDoc:   in.StripDoc,
 		}}})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update %s): %v", in.Object, err)), nil, nil
@@ -265,6 +269,8 @@ type interfaceInput struct {
 	Content    string `json:"content,omitempty" jsonschema:"raw Go interface source, no package declaration or imports"`
 	MockFile   string `json:"mock_file,omitempty" jsonschema:"target file for the generated mock"`
 	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
+	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix, update only)"`
+	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment (update only)"`
 }
 
 func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
@@ -284,11 +290,12 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_interface",
-		Description: "Update an existing interface and automatically regenerate its mock. Provide mock_file and mock_name to keep the mock in sync with the new signature. Content must be the complete new interface declaration without package declarations or imports.",
+		Description: "Update an existing interface and automatically regenerate its mock. Provide mock_file and mock_name to keep the mock in sync with the new signature. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		result, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
+			Doc: in.Doc, StripDoc: in.StripDoc,
 		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update_interface): %v", err)), nil, nil
