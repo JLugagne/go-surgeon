@@ -121,12 +121,12 @@ func setupTest(t *testing.T, commands *mockCommands, queries *mockQueries) *mcp.
 
 	ss, err := server.Connect(ctx, serverTransport, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { ss.Close() })
+	t.Cleanup(func() { require.NoError(t, ss.Close()) })
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
 	cs, err := client.Connect(ctx, clientTransport, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { cs.Close() })
+	t.Cleanup(func() { require.NoError(t, cs.Close()) })
 
 	return cs
 }
