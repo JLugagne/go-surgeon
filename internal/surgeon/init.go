@@ -7,7 +7,9 @@ import (
 	appqueries "github.com/JLugagne/go-surgeon/internal/surgeon/app/queries"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	clicommands "github.com/JLugagne/go-surgeon/internal/surgeon/inbound/cli/commands"
+	surgeonmcp "github.com/JLugagne/go-surgeon/internal/surgeon/inbound/mcp"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/outbound/filesystem"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -86,6 +88,16 @@ func Setup() Runner {
 			clicommands.NewExtractInterfaceCommand(executePlanHandler),
 			clicommands.NewExecutePlanCommand(executePlanHandler),
 		)
+
+		// MCP stdio server
+		rootCmd.AddCommand(&cobra.Command{
+			Use:   "mcp",
+			Short: "Start the MCP server over stdio",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				s := surgeonmcp.NewServer(executePlanHandler, queriesHandler)
+				return s.Run(cmd.Context(), &mcp.StdioTransport{})
+			},
+		})
 
 		rootCmd.SetArgs(args)
 		return rootCmd.ExecuteContext(ctx)
