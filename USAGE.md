@@ -23,16 +23,17 @@ go-surgeon graph [--symbols] [--dir <path>] [--depth N] [--focus <path>] [--excl
 | `--deps` | `-D` | false | Show internal import dependencies |
 | `--recursive` | `-r` | false | Walk sub-packages when `--symbols` is set |
 | `--tests` | `-t` | false | Include `_test.go` files (shows unexported helpers) |
-| `--dir` | `-d` | `.` | Directory to walk |
+| `--dir` | `-d` | `.` | Directory to walk (relative to module root when `--module` is set) |
+| `--module` | | (none) | Import path of a dependency to explore instead of the current project |
 
-`--symbols` requires `--dir` (or `--focus`) to prevent overwhelming output on large projects.
+`--symbols` requires `--dir`, `--focus`, or `--module` to prevent overwhelming output on large projects.
 
 ### Context window management flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--depth` | `0` (unlimited) | Limit directory recursion depth. `1` = target dir only, `2` = immediate children. |
-| `--focus` | (none) | Package path for full detail (symbols + summary); all other packages show path only. Implies `--symbols --summary -r`. |
+| `--focus` | (none) | Package path for full detail (symbols + summary); all other packages show path only. Implies `--symbols --summary -r`. Relative to module root when `--module` is set. |
 | `--exclude` | (none) | Glob pattern for directories to skip. Repeatable (e.g. `--exclude vendor --exclude "*legacy*"`). |
 | `--token-budget` | `0` (unlimited) | Approximate max tokens in output. Progressively truncates: summaries → deps → symbols → files → package list. |
 
@@ -62,6 +63,15 @@ go-surgeon graph --exclude vendor --exclude "*legacy*"
 
 # Fit output within ~2000 tokens (progressive truncation)
 go-surgeon graph --summary --deps --token-budget 2000
+
+# Explore a dependency's package structure (version resolved from go.mod)
+go-surgeon graph --module github.com/spf13/cobra
+
+# Symbols in a specific sub-package of a dependency
+go-surgeon graph --symbols --module github.com/spf13/cobra --dir doc
+
+# Focus on one package within a dependency
+go-surgeon graph --module github.com/spf13/cobra --focus cobra
 ```
 
 ### Progressive discovery strategy
@@ -114,13 +124,15 @@ internal/catalog/domain/repositories/book/book.go
 Searches all Go files under `--dir` for a function, method, or struct matching the query. Acts as a lightweight CLI-based LSP.
 
 ```bash
-go-surgeon symbol <[Receiver.]Name> [--body] [--dir <path>]
+go-surgeon symbol <[Receiver.]Name> [--body] [--dir <path>] [--module <importpath>]
 ```
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--body` | `-b` | false | Show the full source body |
-| `--dir` | `-d` | `.` | Directory to search |
+| `--tests` | `-t` | false | Include `_test.go` files in the search |
+| `--dir` | `-d` | `.` | Directory to search (relative to module root when `--module` is set) |
+| `--module` | | (none) | Import path of a dependency to search instead of the current project |
 
 **Query forms:**
 - `Name` — matches any function or struct named `Name`
@@ -142,6 +154,12 @@ go-surgeon symbol Validate --dir internal/catalog/domain
 
 # Short flags
 go-surgeon symbol BookHandler.Handle -b -d internal/catalog
+
+# Look up a symbol inside a dependency
+go-surgeon symbol Command.Execute --module github.com/spf13/cobra --body
+
+# Scope to a sub-package within a dependency
+go-surgeon symbol GenMarkdown --module github.com/spf13/cobra --dir doc --body
 ```
 
 **Output (exact match, no --body):**
@@ -421,6 +439,55 @@ cat plan.yaml | go-surgeon execute
 | `content` | create/replace/add/update | Raw Go source (no package/imports) |
 | `mock_file` | add/update_interface | Path for the generated mock file |
 | `mock_name` | add/update_interface | Name of the generated mock struct |
+
+---
+
+## Dependency Exploration (`--module`)
+
+Both `graph` and `symbol` accept `--module IMPORTPATH` to explore a third-party dependency's source instead of the current project. This is the right tool whenever you need to understand a library's actual API, read an implementation, or check behavior that isn't in the docs.
+
+The version used is whatever is pinned in the project's `go.mod` — no version flag needed, and `replace` directives and vendoring are handled automatically.
+
+```bash
+# Package map of a dependency
+go-surgeon graph --module github.com/spf13/cobra
+
+# Symbols in the root package
+go-surgeon graph --symbols --module github.com/spf13/cobra
+
+# Scope to a sub-package using --dir (relative to module root)
+go-surgeon graph --symbols --module github.com/spf13/cobra --dir doc
+
+# Focus on one package, path-only for the rest
+go-surgeon graph --module github.com/spf13/cobra --focus cobra
+
+# Read a specific symbol
+go-surgeon symbol Command --module github.com/spf13/cobra --body
+go-surgeon symbol Command.Execute --module github.com/spf13/cobra --body
+
+# Scope symbol search to a sub-package
+go-surgeon symbol GenMarkdown --module github.com/spf13/cobra --dir doc --body
+```
+
+**Output:** All file paths are relative to the module root (no `@version` noise). A header line identifies the module and its resolved version:
+
+```
+# Module: github.com/spf13/cobra @ v1.10.2
+# Location: /home/user/go/pkg/mod/github.com/spf13/cobra@v1.10.2
+
+cobra.go
+  type Command struct { ... }
+  func (c *Command) Execute() error
+  ...
+doc/
+  func GenMarkdown(cmd *Command, w io.Writer) error
+  ...
+```
+
+**Error cases:**
+- Module not in `go.mod`: clear error with a hint to check `go list -m all`.
+- Module in `go.mod` but not downloaded: error suggests `go mod download`.
+- `--dir` with an absolute path when `--module` is set: rejected (would escape the module root).
 
 ---
 

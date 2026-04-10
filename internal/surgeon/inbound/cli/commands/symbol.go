@@ -14,6 +14,7 @@ func NewSymbolCommand(queries service.SurgeonQueries) *cobra.Command {
 	var showBody bool
 	var tests bool
 	var targetDir string
+	var moduleFlag string
 
 	cmd := &cobra.Command{
 		Use:   "symbol [Receiver.]Name",
@@ -26,6 +27,9 @@ Query forms:
 
 With --body, the full source code is printed with line numbers (empty lines stripped).
 Without --body, only the declaration signature is shown.
+
+With --module IMPORTPATH, search inside a third-party dependency instead of the current
+project. The module must be listed in go.mod; --dir is relative to the module root.
 
 By default, _test.go files are excluded. Use --tests to include test functions and
 unexported helpers (e.g. setupTestApp, mockFS) that live in test files.
@@ -53,7 +57,10 @@ Run this before editing a function — read the current body first.`,
   go-surgeon symbol Validate --dir internal/catalog/domain
 
   # Short flags
-  go-surgeon symbol BookHandler.Handle -b -d internal/catalog`,
+  go-surgeon symbol BookHandler.Handle -b -d internal/catalog
+
+  # Look up a symbol in a dependency
+  go-surgeon symbol Command.Execute --module github.com/spf13/cobra --body`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -65,27 +72,27 @@ Run this before editing a function — read the current body first.`,
 			
 			// 1. Exact Name: "MyFunc"
 			if len(parts) == 1 {
-				query := domain.SymbolQuery{Name: parts[0], Tests: tests}
+				query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: moduleFlag}
 				results, _ := queries.FindSymbols(ctx, query, targetDir)
 				allResults = append(allResults, results...)
 			}
-			
+
 			// 2. Two parts: "pkg.Func" or "Receiver.Method"
 			if len(parts) == 2 {
 				// Try Receiver.Method
-				query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests}
+				query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: moduleFlag}
 				results1, _ := queries.FindSymbols(ctx, query1, targetDir)
 				allResults = append(allResults, results1...)
-				
+
 				// Try pkg.Name
-				query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests}
+				query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: moduleFlag}
 				results2, _ := queries.FindSymbols(ctx, query2, targetDir)
 				allResults = append(allResults, results2...)
 			}
-			
+
 			// 3. Three parts: "pkg.Receiver.Method"
 			if len(parts) == 3 {
-				query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests}
+				query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: moduleFlag}
 				results, _ := queries.FindSymbols(ctx, query, targetDir)
 				allResults = append(allResults, results...)
 			}
@@ -167,5 +174,6 @@ Run this before editing a function — read the current body first.`,
 	cmd.Flags().BoolVarP(&showBody, "body", "b", false, "Show the full function/struct body")
 	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files in the search")
 	cmd.Flags().StringVarP(&targetDir, "dir", "d", ".", "Directory to search in")
+	cmd.Flags().StringVar(&moduleFlag, "module", "", "Import path of a dependency to search in (e.g. github.com/spf13/cobra)")
 	return cmd
 }

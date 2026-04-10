@@ -24,6 +24,26 @@ import (
 //   - TokenBudget: when set, output is progressively truncated to fit within the approximate
 //     token count (see truncateToTokenBudget).
 func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
+	var resolvedModule *ModuleInfo
+	if opts.Module != "" {
+		info, err := h.resolver.Resolve(ctx, opts.Module)
+		if err != nil {
+			return nil, err
+		}
+		resolvedModule = info
+		if opts.Dir != "" && opts.Dir != "." {
+			if filepath.IsAbs(opts.Dir) {
+				return nil, fmt.Errorf("--dir must be a relative path when --module is set; got %q", opts.Dir)
+			}
+			opts.Dir = filepath.Join(info.Dir, opts.Dir)
+		} else {
+			opts.Dir = info.Dir
+		}
+		if opts.Focus != "" && !filepath.IsAbs(opts.Focus) {
+			opts.Focus = filepath.Join(info.Dir, opts.Focus)
+		}
+	}
+
 	dir := opts.Dir
 	symbols := opts.Symbols
 	summary := opts.Summary
@@ -163,6 +183,24 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 
 	if opts.TokenBudget > 0 {
 		packages = truncateToTokenBudget(packages, opts.TokenBudget)
+	}
+
+	if resolvedModule != nil {
+		moduleRoot := resolvedModule.Dir
+		for i := range packages {
+			if rel, err := filepath.Rel(moduleRoot, packages[i].Path); err == nil {
+				packages[i].Path = rel
+			}
+			for j := range packages[i].Files {
+				if rel, err := filepath.Rel(moduleRoot, packages[i].Files[j].Path); err == nil {
+					packages[i].Files[j].Path = rel
+				}
+			}
+		}
+		header := domain.GraphPackage{
+			Path: fmt.Sprintf("# Module: %s @ %s\n# Location: %s", resolvedModule.Path, resolvedModule.Version, resolvedModule.Dir),
+		}
+		packages = append([]domain.GraphPackage{header}, packages...)
 	}
 
 	return packages, nil

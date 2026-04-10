@@ -23,6 +23,7 @@ func NewGraphCommand(queries service.SurgeonQueries) *cobra.Command {
 	var focus string
 	var exclude []string
 	var tokenBudget int
+	var module string
 
 	cmd := &cobra.Command{
 		Use:   "graph",
@@ -31,13 +32,17 @@ func NewGraphCommand(queries service.SurgeonQueries) *cobra.Command {
 
 With --symbols and --dir, lists exported types, functions, and methods defined in the
 target package only (non-recursive by default). Add --recursive to include sub-packages.
---symbols requires --dir to prevent overwhelming output on large projects.
+--symbols requires --dir (or --focus or --module) to prevent overwhelming output.
 
 With --tests, _test.go files are included in the output. Unexported symbols (test helpers,
 setup functions) are shown for test files since they are the primary reason to read them.
 
 With --summary, appends a one-line package description derived from the Go package comment.
 With --deps, shows the internal import dependencies between packages (project-module only).
+
+With --module IMPORTPATH, explore a third-party dependency instead of the current project.
+The module must be listed in go.mod; its pinned version from go.mod is used automatically.
+--dir and --focus are interpreted relative to the module root when --module is set.
 
 Context window management flags:
   --depth N        Limit directory recursion depth (1 = target dir only, 2 = immediate children)
@@ -46,7 +51,7 @@ Context window management flags:
   --token-budget N Truncate output to fit approximate token count
 
 Use "graph" for project orientation, "graph -s -d <pkg>" for that package's symbols,
-then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
+then "graph --focus <pkg>" to zoom in on a specific package with full context.`,
 		Example: `  # List all packages in the project
   go-surgeon graph
 
@@ -75,10 +80,19 @@ then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
   go-surgeon graph --exclude vendor --exclude "*legacy*"
 
   # Fit output within ~2000 tokens
-  go-surgeon graph --summary --deps --token-budget 2000`,
+  go-surgeon graph --summary --deps --token-budget 2000
+
+  # Explore a dependency's package structure
+  go-surgeon graph --module github.com/spf13/cobra
+
+  # Symbols in a dependency sub-package
+  go-surgeon graph --symbols --module github.com/spf13/cobra --dir doc
+
+  # Focus on one package within a dependency
+  go-surgeon graph --module github.com/spf13/cobra --focus cobra`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			if symbols && !cmd.Flags().Changed("dir") && focus == "" {
+			if symbols && !cmd.Flags().Changed("dir") && focus == "" && module == "" {
 				return fmt.Errorf("--symbols requires --dir (or --focus) to scope the output")
 			}
 
@@ -93,6 +107,7 @@ then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
 				Focus:       focus,
 				Exclude:     exclude,
 				TokenBudget: tokenBudget,
+				Module:      module,
 			}
 
 			// --focus implies symbols + summary for the focused package.
@@ -198,6 +213,7 @@ then "graph --focus <pkg>" to zoom in on a specific module with full context.`,
 	cmd.Flags().StringVar(&focus, "focus", "", "Package path for full detail; others show path only")
 	cmd.Flags().StringArrayVar(&exclude, "exclude", nil, "Glob patterns for directories to skip (repeatable)")
 	cmd.Flags().IntVar(&tokenBudget, "token-budget", 0, "Approximate max tokens in output (0 = unlimited)")
+	cmd.Flags().StringVar(&module, "module", "", "Import path of a dependency to explore instead of the current project (e.g. github.com/spf13/cobra)")
 	return cmd
 }
 

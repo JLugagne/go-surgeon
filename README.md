@@ -14,10 +14,10 @@ AI agents and LLMs waste massive amounts of context window tokens and time tryin
 ## Core Features
 
 ### 1. Package & Symbol Graph (`graph`)
-Walk all Go packages and print their import paths. With `--symbols --dir`, list every exported type, function, and method in a subtree — a structural map in one command. Context window management flags (`--depth`, `--focus`, `--exclude`, `--token-budget`) let agents progressively zoom in without overwhelming their token budget.
+Walk all Go packages and print their import paths. With `--symbols --dir`, list every exported type, function, and method in a subtree — a structural map in one command. Context window management flags (`--depth`, `--focus`, `--exclude`, `--token-budget`) let agents progressively zoom in without overwhelming their token budget. Use `--module github.com/org/repo` to explore a third-party dependency's source directly, without grepping `$GOMODCACHE`.
 
 ### 2. Code Exploration (`symbol`)
-Query the AST to extract function signatures, documentation, or full bodies with empty lines stripped to save LLM tokens. Supports precise `Receiver.Method` lookups to cut through noise.
+Query the AST to extract function signatures, documentation, or full bodies with empty lines stripped to save LLM tokens. Supports precise `Receiver.Method` lookups to cut through noise. Use `--module` to look up a symbol inside any dependency listed in `go.mod`.
 
 ### 3. Surgical Editing (per-action subcommands)
 Individual subcommands (`add-func`, `update-func`, `delete-func`, `add-struct`, etc.) each accept raw Go source on stdin and metadata via `--flags`. Every mutation runs `goimports` automatically.
@@ -62,6 +62,10 @@ go-surgeon graph --summary --deps --token-budget 2000
 
 # Read a symbol before editing it
 go-surgeon symbol BookHandler.Handle --body
+
+# Explore a dependency's source (no grepping $GOMODCACHE)
+go-surgeon graph --module github.com/spf13/cobra
+go-surgeon symbol Command.Execute --module github.com/spf13/cobra --body
 
 # Edit: pipe raw Go source, pass metadata as flags
 cat <<'EOF' | go-surgeon update-func --file internal/catalog/domain/book.go --id NewBook

@@ -25,4 +25,5 @@ type GraphOptions struct {
 	Focus       string   // package path for full detail; others show path only
 	Exclude     []string // glob patterns to skip during walk
 	TokenBudget int      // approximate max tokens in output (0 = unlimited)
+	Module      string   // import path of a dependency to explore instead of the current project
 }
