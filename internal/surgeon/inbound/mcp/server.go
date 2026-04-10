@@ -17,6 +17,9 @@ ALWAYS use go-surgeon tools instead of generic file tools when working on Go pro
 Exploration (replace find/ls/grep/read on Go files):
 - graph: explore package structure. Start here on any Go project.
 - symbol: read a function, method, or struct body. Use body=true before any edit.
+- To read a third-party dependency's source (signatures, internals, usage examples),
+  set module='github.com/org/repo' on graph or symbol. Do NOT fall back to find/grep/cat
+  inside $GOMODCACHE — the module parameter exists exactly for this purpose.
 
 Editing (replace Edit/Write/Bash on Go files):
 - create: add a new file, function, or struct
@@ -72,19 +75,21 @@ type graphInput struct {
 	Focus       string   `json:"focus,omitempty" jsonschema:"package path for full detail, others show path only"`
 	Exclude     []string `json:"exclude,omitempty" jsonschema:"glob patterns for directories to skip"`
 	TokenBudget int      `json:"token_budget,omitempty" jsonschema:"approximate max tokens in output, 0 means unlimited"`
+	Module      string   `json:"module,omitempty" jsonschema:"import path of a dependency to explore instead of the current project, e.g. 'github.com/spf13/cobra'; dir and focus are relative to the module root when set"`
 }
 
 type symbolInput struct {
-	Query string `json:"query" jsonschema:"symbol name to search for, supports Name or Receiver.Method or pkg.Name forms"`
-	Body  bool   `json:"body,omitempty" jsonschema:"show the full function or struct body with line numbers"`
-	Tests bool   `json:"tests,omitempty" jsonschema:"include test files in the search"`
-	Dir   string `json:"dir,omitempty" jsonschema:"directory to search in, defaults to current directory"`
+	Query  string `json:"query" jsonschema:"symbol name to search for, supports Name or Receiver.Method or pkg.Name forms"`
+	Body   bool   `json:"body,omitempty" jsonschema:"show the full function or struct body with line numbers"`
+	Tests  bool   `json:"tests,omitempty" jsonschema:"include test files in the search"`
+	Dir    string `json:"dir,omitempty" jsonschema:"directory to search in, defaults to current directory"`
+	Module string `json:"module,omitempty" jsonschema:"import path of a dependency to search in instead of the current project, e.g. 'github.com/spf13/cobra'"`
 }
 
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "graph",
-		Description: "Explore a Go project's package structure — use this instead of find/ls/glob for any Go codebase. Start with no arguments to see all packages, then zoom in with focus='internal/pkg/path' for full detail on one package (symbols + summary + recursive), or symbols=true for a broad overview. Use token_budget to cap output on large projects. This is the primary entry point for codebase exploration.",
+		Description: "Explore a Go project's package structure — use this instead of find/ls/glob for any Go codebase. Start with no arguments to see all packages; use focus='pkg/path' for full detail on one package (symbols + summary + recursive); use symbols=true for a broad symbol overview. Set module='github.com/org/repo' to explore a third-party dependency's source instead of the current project — use this instead of find/grep/cat inside $GOMODCACHE. Use token_budget to cap output on large projects.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in graphInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -102,6 +107,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			Focus:       in.Focus,
 			Exclude:     in.Exclude,
 			TokenBudget: in.TokenBudget,
+			Module:      in.Module,
 		}
 
 		if opts.Focus != "" {
@@ -121,14 +127,14 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Look up a function, method, struct, or interface by name — use this instead of reading whole files. Always call with body=true before editing to see the current implementation. Query formats: 'Name' (any func/struct), 'Receiver.Method' (method on a type), 'pkg.Name' (package-qualified). Returns signature, file location with line numbers, and optionally the full body. If multiple matches are returned, refine with 'Receiver.Method' or set dir to the target package.",
+		Description: "Look up a function, method, struct, or interface by name — use this instead of reading whole files. Always call with body=true before editing to see the current implementation. Query formats: 'Name' (any func/struct), 'Receiver.Method' (method on a type), 'pkg.Name' (package-qualified). Set module='github.com/org/repo' to search inside a third-party dependency instead of the current project. Returns signature, file location with line numbers, and optionally the full body. If multiple matches are returned, refine with 'Receiver.Method' or scope with dir.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
 			dir = "."
 		}
 
-		results := findSymbols(ctx, queries, in.Query, in.Tests, dir)
+		results := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module)
 		if len(results) == 0 {
 			return textResult(fmt.Sprintf("No matches found for '%s'.\nHint: run 'graph' with symbols=true and dir set to list available symbols.", in.Query)), nil, nil
 		}

@@ -108,28 +108,28 @@ func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) strin
 }
 
 // findSymbols mirrors the CLI symbol command's multi-form query resolution.
-func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string) []domain.SymbolResult {
+func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string, module string) []domain.SymbolResult {
 	parts := strings.Split(queryStr, ".")
 	var allResults []domain.SymbolResult
 
 	if len(parts) == 1 {
-		query := domain.SymbolQuery{Name: parts[0], Tests: tests}
+		query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: module}
 		results, _ := queries.FindSymbols(ctx, query, dir)
 		allResults = append(allResults, results...)
 	}
 
 	if len(parts) == 2 {
-		query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests}
+		query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: module}
 		results1, _ := queries.FindSymbols(ctx, query1, dir)
 		allResults = append(allResults, results1...)
 
-		query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests}
+		query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: module}
 		results2, _ := queries.FindSymbols(ctx, query2, dir)
 		allResults = append(allResults, results2...)
 	}
 
 	if len(parts) == 3 {
-		query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests}
+		query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: module}
 		results, _ := queries.FindSymbols(ctx, query, dir)
 		allResults = append(allResults, results...)
 	}

@@ -16,14 +16,31 @@ import (
 )
 
 type SurgeonQueriesHandler struct {
-	fs filesystem.FileSystem
+	fs       filesystem.FileSystem
+	resolver *moduleResolver
 }
 
 func NewSurgeonQueriesHandler(fs filesystem.FileSystem) *SurgeonQueriesHandler {
-	return &SurgeonQueriesHandler{fs: fs}
+	return &SurgeonQueriesHandler{fs: fs, resolver: newModuleResolver()}
 }
 
 func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {
+	var moduleDir string
+	if query.Module != "" {
+		info, err := h.resolver.Resolve(ctx, query.Module)
+		if err != nil {
+			return nil, err
+		}
+		moduleDir = info.Dir
+		if targetDir == "" || targetDir == "." {
+			targetDir = info.Dir
+		} else if !filepath.IsAbs(targetDir) {
+			targetDir = filepath.Join(info.Dir, targetDir)
+		} else {
+			return nil, fmt.Errorf("dir must be a relative path when module is set; got %q", targetDir)
+		}
+	}
+
 	var results []domain.SymbolResult
 
 	err := filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
@@ -79,6 +96,14 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 
 		return nil
 	})
+
+	if moduleDir != "" {
+		for i := range results {
+			if rel, err2 := filepath.Rel(moduleDir, results[i].File); err2 == nil {
+				results[i].File = rel
+			}
+		}
+	}
 
 	return results, err
 }

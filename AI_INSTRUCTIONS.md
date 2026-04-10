@@ -24,6 +24,14 @@ Always start by exploring the codebase using `go-surgeon` rather than reading fu
 - **Fit within token budget:** `go-surgeon graph --summary --deps --token-budget 2000`
 - **Read a function, struct, or method:** `go-surgeon symbol <Name> --body` (Use `Receiver.Method` for precise method lookups).
 
+When you need to understand a third-party library (its API, a specific function's implementation, internal behavior), use `--module` instead of grepping `$GOMODCACHE`:
+
+- **Explore a dependency:** `go-surgeon graph --module github.com/org/repo`
+- **Symbols in a dependency sub-package:** `go-surgeon graph --symbols --module github.com/org/repo --dir subpkg`
+- **Read a symbol in a dependency:** `go-surgeon symbol TypeName.MethodName --module github.com/org/repo --body`
+
+The version resolved is whatever `go.mod` pins — no version juggling needed.
+
 ## 2. Editing Code
 When modifying code, stream the raw Go declaration (without `package` or `import` blocks) via stdin to the specific `go-surgeon` subcommand.
 
