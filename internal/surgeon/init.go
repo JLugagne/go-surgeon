@@ -20,7 +20,6 @@ func Setup() Runner {
 		proxyFS := &filesystem.ProxyFileSystem{Active: realFS}
 
 		executePlanHandler := appcommands.NewExecutePlanHandler(proxyFS)
-		scaffolderHandler := appcommands.NewScaffolderHandler(proxyFS)
 		queriesHandler := appqueries.NewSurgeonQueriesHandler(proxyFS)
 
 		rootCmd := &cobra.Command{
@@ -85,7 +84,6 @@ func Setup() Runner {
 			clicommands.NewTestCommand(executePlanHandler),
 			clicommands.NewTagCommand(executePlanHandler),
 			clicommands.NewExtractInterfaceCommand(executePlanHandler),
-			clicommands.NewScaffoldCommand(scaffolderHandler),
 			clicommands.NewExecutePlanCommand(executePlanHandler),
 		)
 

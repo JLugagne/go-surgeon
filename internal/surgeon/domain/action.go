@@ -47,28 +47,3 @@ var (
 	// ErrEmptyPlan is returned when a plan contains no actions.
 	ErrEmptyPlan = errors.New("plan contains no actions")
 )
-
-type Template struct {
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Commands    []TemplateCommand `yaml:"commands"`
-}
-
-type TemplateCommand struct {
-	Command      string             `yaml:"command"`
-	Description  string             `yaml:"description"`
-	Variables    []TemplateVariable `yaml:"variables"`
-	Files        []TemplateFile     `yaml:"files"`
-	PostCommands []string           `yaml:"post_commands"`
-	Hint         string             `yaml:"hint"`
-}
-
-type TemplateVariable struct {
-	Key         string `yaml:"key"`
-	Description string `yaml:"description"`
-}
-
-type TemplateFile struct {
-	Source      string `yaml:"source"`
-	Destination string `yaml:"destination"`
-}

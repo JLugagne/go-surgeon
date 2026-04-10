@@ -400,41 +400,7 @@ Same mock pattern as `add-interface`. Use for interfaces you **don't own**.
 
 ---
 
-## 7. Scaffolding (`scaffold`)
-
-Template-driven project orchestration. Templates define a set of commands, variables, and file generation rules. They also support workflow chaining (`post_commands`) and context-aware `hints` to guide users or AI agents through the next steps of development.
-
-Templates are stored in `.surgeon-templates/<template-name>/manifest.yaml`. See `SCAFFOLDING.md` for a guide on creating your own templates.
-
-```bash
-# List all available templates
-go-surgeon scaffold list-templates
-
-# Show documentation for a template (lists all its commands)
-go-surgeon scaffold doc <template>
-
-# Show documentation for a specific command (shows required variables)
-go-surgeon scaffold doc <template> <command>
-
-# Execute a command
-go-surgeon scaffold execute <template> <command> [--set Key=Value ...]
-```
-
-**Examples:**
-```bash
-# See what templates are available
-go-surgeon scaffold list-templates
-
-# Read what the 'bootstrap' command of the 'hexagonal' template does
-go-surgeon scaffold doc hexagonal bootstrap
-
-# Execute it, passing the required variables
-go-surgeon scaffold execute hexagonal bootstrap --set AppName=catalog --set ModulePath=github.com/myorg/myapp
-```
-
----
-
-## 8. Batch Plan Execution (`execute`) — deprecated
+## 7. Batch Plan Execution (`execute`) — deprecated
 
 > **Deprecated.** Use individual subcommands instead — they provide better error messages and are easier to script. `execute` will print a deprecation notice when used.
 
