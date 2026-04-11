@@ -181,6 +181,14 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			updatedSrc = append(updatedSrc, src[offsets.End:]...)
 			updated = true
 		} else {
+			// Before falling back to add_func, check whether the identifier is an
+			// interface — update_func cannot update interfaces.
+			if _, isIface := findInterfaceOffset(fset, f, action.Identifier); isIface {
+				return nil, &domain.Error{
+					Code:    "WRONG_OBJECT_TYPE",
+					Message: fmt.Sprintf("%q is an interface in %s; use update_interface (object='interface') instead of update_func (object='func')", action.Identifier, action.FilePath),
+				}
+			}
 			// Fall back to add_func behavior
 			content := action.Content
 			if action.Doc != "" {
@@ -567,14 +575,62 @@ func (h *ExecutePlanHandler) inferPackageName(ctx context.Context, dir string) s
 }
 
 // normalizeStructContent ensures the content passed to add_struct / update_struct
-// starts with "type ", adding it when the LLM omits the keyword.
-// E.g. "foo struct { ... }" → "type foo struct { ... }".
+// contains the "type" keyword before the identifier, adding it when the LLM omits it.
+// It skips leading doc comments before checking, so content like:
+//
+//	// Foo does something.
+//	Foo struct { ... }
+//
+// becomes:
+//
+//	// Foo does something.
+//	type Foo struct { ... }
 func normalizeStructContent(content string) string {
-	trimmed := strings.TrimSpace(content)
-	if !strings.HasPrefix(trimmed, "type ") {
-		return "type " + trimmed
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue // skip blank lines and doc comments
+		}
+		// This is the first non-comment, non-blank line.
+		if !strings.HasPrefix(trimmed, "type ") {
+			lines[i] = "type " + trimmed
+		}
+		break
 	}
-	return content
+	return strings.Join(lines, "\n")
+}
+
+// findInterfaceOffset returns the byte offsets of a named interface type declaration.
+func findInterfaceOffset(fset *token.FileSet, f *ast.File, name string) (nodeOffsets, bool) {
+	_, nameTarget := parseIdentifier(name)
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != nameTarget {
+				continue
+			}
+			if _, isIface := ts.Type.(*ast.InterfaceType); !isIface {
+				continue
+			}
+			nodeStart := fset.Position(gen.Pos()).Offset
+			docStart := nodeStart
+			if gen.Doc != nil {
+				docStart = fset.Position(gen.Doc.Pos()).Offset
+			}
+			return nodeOffsets{
+				DocStart:  docStart,
+				NodeStart: nodeStart,
+				End:       fset.Position(gen.End()).Offset,
+				HasDoc:    gen.Doc != nil,
+			}, true
+		}
+	}
+	return nodeOffsets{}, false
 }
 
 // insertCallIntoFunc inserts a statement into the body of the named function at

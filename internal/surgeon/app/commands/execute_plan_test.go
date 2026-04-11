@@ -572,3 +572,89 @@ func TestCreateFile_InferPackageFromDir(t *testing.T) {
 	assert.Contains(t, out, "package domain")
 	assert.Contains(t, out, "type Money int64")
 }
+
+// TestAddStruct_DocCommentNotPrefixedWithType verifies that add_struct and update_struct
+// do not prepend "type " to a leading doc comment when the content starts with one.
+// Regression for bookstore-8 bug 001.
+func TestAddStruct_DocCommentNotPrefixedWithType(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "order.go")
+
+	fs := &mockFS{files: map[string][]byte{
+		filePath: []byte("package domain\n"),
+	}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	t.Run("add_struct with leading doc comment", func(t *testing.T) {
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:   domain.ActionTypeAddStruct,
+			FilePath: filePath,
+			Content:  "// OrderItem is a value object.\nOrderItem struct {\n\tID string\n}",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		out := string(fs.files[filePath])
+		// The doc comment must not have "type " prepended to it.
+		assert.NotContains(t, out, "type //")
+		assert.Contains(t, out, "// OrderItem is a value object.")
+		assert.Contains(t, out, "type OrderItem struct")
+	})
+
+	t.Run("add_struct with type keyword already present after doc comment", func(t *testing.T) {
+		fp2 := filepath.Join(tmpDir, "money.go")
+		fs2 := &mockFS{files: map[string][]byte{fp2: []byte("package domain\n")}}
+		h2 := commands.NewExecutePlanHandler(fs2)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:   domain.ActionTypeAddStruct,
+			FilePath: fp2,
+			Content:  "// Money represents cents.\ntype Money int64",
+		}}}
+
+		_, err := h2.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		out := string(fs2.files[fp2])
+		assert.NotContains(t, out, "type //")
+		assert.Contains(t, out, "// Money represents cents.")
+		assert.Contains(t, out, "type Money int64")
+		// Must not have duplicate "type type"
+		assert.NotContains(t, out, "type type")
+	})
+}
+
+// TestUpdateFunc_InterfaceIdentifierReturnsError verifies that calling update_func
+// on an interface identifier returns a clear WRONG_OBJECT_TYPE error instead of
+// silently inserting a duplicate.
+// Regression for bookstore-8 bug 002.
+func TestUpdateFunc_InterfaceIdentifierReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "repo.go")
+
+	initialCode := `package order
+
+type OrderRepository interface {
+	Save(id string) error
+}
+`
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	plan := domain.Plan{Actions: []domain.Action{{
+		Action:     domain.ActionTypeUpdateFunc,
+		FilePath:   filePath,
+		Identifier: "OrderRepository",
+		Content:    "type OrderRepository interface {\n\tSave(id string) error\n\tFind(id string) error\n}",
+	}}}
+
+	_, err := handler.ExecutePlan(context.Background(), plan)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WRONG_OBJECT_TYPE")
+	assert.Contains(t, err.Error(), "OrderRepository")
+	assert.Contains(t, err.Error(), "update_interface")
+
+	// File must not be modified.
+	assert.Equal(t, initialCode, string(fs.files[filePath]))
+}
