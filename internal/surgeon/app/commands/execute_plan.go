@@ -108,6 +108,9 @@ func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain
 	if pkgName == "" {
 		pkgName = h.inferPackageName(ctx, dir)
 	}
+	if pkgName == "" {
+		pkgName = filepath.Base(dir)
+	}
 	content := ensurePackageHeader(action.Content, pkgName)
 	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
