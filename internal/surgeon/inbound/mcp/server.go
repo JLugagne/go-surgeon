@@ -148,9 +148,9 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 // --- Action tools (create / update / delete) ---
 
 type createInput struct {
-	Object     string `json:"object" jsonschema:"what to create: file, func, or struct"`
-	File       string `json:"file" jsonschema:"target file path"`
-	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
+	Object  string `json:"object" jsonschema:"what to create: file, func, or struct"`
+	File    string `json:"file" jsonschema:"target file path"`
+	Content string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
 }
 
 type updateInput struct {
@@ -389,7 +389,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "implement",
-		Description: "Generate TODO stub methods on a struct for an interface it doesn't yet satisfy. Use this for interfaces you don't own: stdlib (io.ReadCloser), third-party (github.com/pkg.Interface), or local (github.com/org/repo/internal/pkg.Interface). Skips methods already implemented. Stubs contain '// TODO: implement' and panic. goimports runs automatically.",
+		Description: "Generate method stubs on a struct for any interface it doesn't yet satisfy — use this instead of writing implementations manually with update or create. Works for any interface: local project interfaces (use the fully qualified import path, e.g. github.com/org/repo/internal/pkg.Interface), stdlib (io.ReadCloser), or third-party. Skips methods already implemented. Stubs contain '// TODO: implement' so you can fill them in afterward. goimports runs automatically.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in implementInput) (*mcp.CallToolResult, any, error) {
 		results, err := commands.Implement(ctx, domain.ImplementRequest{
 			Interface: in.Interface,
