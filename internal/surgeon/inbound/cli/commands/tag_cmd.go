@@ -10,6 +10,7 @@ import (
 
 func NewTagCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	var req domain.TagRequest
+	var silent bool
 
 	cmd := &cobra.Command{
 		Use:   "tag",
@@ -26,7 +27,18 @@ func NewTagCommand(surgeon service.SurgeonCommands) *cobra.Command {
 				return err
 			}
 
+			if silent {
+				return nil
+			}
+
 			fmt.Printf("SUCCESS (tag): Updated tags for %s in %s\n", req.StructName, req.FilePath)
+			symbols := parseFileSymbols(req.FilePath)
+			for _, s := range symbols {
+				if s.Name == req.StructName {
+					fmt.Printf("\n%s:%d-%d\n  %s\n", s.File, s.LineStart, s.LineEnd, s.Name)
+					break
+				}
+			}
 			return nil
 		},
 	}
@@ -36,6 +48,7 @@ func NewTagCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	cmd.Flags().StringVar(&req.FieldName, "field", "", "Specific field name to update")
 	cmd.Flags().StringVar(&req.SetTag, "set", "", "Exact tag string to set/append")
 	cmd.Flags().StringVar(&req.AutoFormat, "auto", "", "Auto-generate tags for exported fields (e.g. json, bson)")
+	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress output (errors are still reported)")
 
 	_ = cmd.MarkFlagRequired("file")
 	_ = cmd.MarkFlagRequired("id")

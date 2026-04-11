@@ -13,6 +13,7 @@ import (
 func NewImplementCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	var receiver string
 	var file string
+	var silent bool
 
 	cmd := &cobra.Command{
 		Use:   "implement <package.Interface>",
@@ -51,6 +52,10 @@ the interface file and its mock in one step.`,
 				return fmt.Errorf("failed to implement interface: %w [hint: use the full import path (e.g., 'github.com/myorg/myapp/domain.Interface'), for project-local interfaces prefer 'add-interface']", err)
 			}
 
+			if silent {
+				return nil
+			}
+
 			if len(results) == 0 {
 				fmt.Println("All methods are already implemented.")
 				recv := strings.TrimPrefix(receiver, "*")
@@ -58,14 +63,7 @@ the interface file and its mock in one step.`,
 				return nil
 			}
 
-			fmt.Printf("Generated %d missing methods for %s:\n\n", len(results), args[0])
-			for _, res := range results {
-				bodyLines := res.LineEnd - res.LineStart + 1
-				fmt.Printf("Symbol: %s\n", res.Name)
-				fmt.Printf("Receiver: %s\n", res.Receiver)
-				fmt.Printf("File: %s:%d-%d (%d lines body)\n", res.File, res.LineStart, res.LineEnd, bodyLines)
-				fmt.Printf("Code (Empty lines stripped):\n%s\n\n", res.Code)
-			}
+			printSymbols("methods", results)
 			return nil
 		},
 	}
@@ -73,5 +71,6 @@ the interface file and its mock in one step.`,
 	_ = cmd.MarkFlagRequired("receiver")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Target file to append stubs to (required)")
 	_ = cmd.MarkFlagRequired("file")
+	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress output (errors are still reported)")
 	return cmd
 }
