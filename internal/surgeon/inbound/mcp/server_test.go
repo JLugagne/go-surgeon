@@ -166,6 +166,7 @@ func TestToolsList(t *testing.T) {
 		"graph", "symbol",
 		"create", "update", "delete",
 		"add_interface", "update_interface", "delete_interface",
+		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
 	}
 	for _, name := range expected {

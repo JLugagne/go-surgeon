@@ -61,7 +61,7 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 		return nil, h.handleCreateFile(ctx, action)
 	case domain.ActionTypeReplaceFile:
 		return nil, h.handleReplaceFile(ctx, action)
-	case domain.ActionTypeUpdateFunc, domain.ActionTypeAddFunc, domain.ActionTypeUpdateStruct, domain.ActionTypeAddStruct, domain.ActionTypeDeleteFunc, domain.ActionTypeDeleteStruct:
+	case domain.ActionTypeUpdateFunc, domain.ActionTypeAddFunc, domain.ActionTypeUpdateStruct, domain.ActionTypeAddStruct, domain.ActionTypeDeleteFunc, domain.ActionTypeDeleteStruct, domain.ActionTypeInsertCall:
 		return h.handleASTAction(ctx, action)
 	case domain.ActionTypeAddInterface:
 		req := domain.InterfaceActionRequest{
@@ -253,6 +253,19 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			updatedSrc = append(updatedSrc, []byte("\n"+content+"\n")...)
 			updated = true
 			warnings = append(warnings, fmt.Sprintf("update_struct: identifier %q not found in %s, treated as add_struct", action.Identifier, action.FilePath))
+		}
+	case domain.ActionTypeInsertCall:
+		result, warn, err := insertCallIntoFunc(fset, f, src, action.Identifier, action.Content, action.Position)
+		if err != nil {
+			return nil, err
+		}
+		if warn != "" {
+			warnings = append(warnings, warn)
+			updated = true           // no-op write still counts as "handled"
+			updatedSrc = src         // unchanged
+		} else {
+			updatedSrc = result
+			updated = true
 		}
 	case domain.ActionTypeDeleteFunc:
 		offsets, ok := findFuncOffsets(fset, f, action.Identifier)
@@ -562,4 +575,140 @@ func normalizeStructContent(content string) string {
 		return "type " + trimmed
 	}
 	return content
+}
+
+// insertCallIntoFunc inserts a statement into the body of the named function at
+// the position specified by pos.
+//
+// Returns:
+//   - (updatedSrc, "", nil)  — insertion performed
+//   - (nil, warning, nil)    — call already present (idempotent no-op)
+//   - (nil, "", err)         — hard failure (function not found, invalid position)
+func insertCallIntoFunc(fset *token.FileSet, f *ast.File, src []byte, identifier, call string, pos domain.InsertPosition) ([]byte, string, error) {
+	if pos == "" {
+		pos = domain.InsertBeforeReturn
+	}
+
+	// Locate the function.
+	offsets, ok := findFuncOffsets(fset, f, identifier)
+	if !ok {
+		return nil, "", &domain.Error{
+			Code:    "NODE_NOT_FOUND",
+			Message: fmt.Sprintf("function %q not found in file", identifier),
+		}
+	}
+
+	// Find the FuncDecl to get the body braces positions.
+	var targetFn *ast.FuncDecl
+	recvTarget, nameTarget := parseIdentifier(identifier)
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != nameTarget {
+			continue
+		}
+		var recvName string
+		if fn.Recv != nil {
+			recvName = getRecvType(fn.Recv)
+		}
+		if recvName == recvTarget || (recvName == "" && recvTarget == f.Name.Name) {
+			targetFn = fn
+			break
+		}
+	}
+	if targetFn == nil || targetFn.Body == nil {
+		return nil, "", &domain.Error{
+			Code:    "NODE_NOT_FOUND",
+			Message: fmt.Sprintf("function %q has no body", identifier),
+		}
+	}
+
+	bodyStart := fset.Position(targetFn.Body.Lbrace).Offset // offset of '{'
+	bodyEnd := fset.Position(targetFn.Body.Rbrace).Offset   // offset of '}'
+	bodyContent := string(src[bodyStart+1 : bodyEnd])        // content between braces
+
+	// Idempotency: if the exact call is already present, no-op.
+	callTrimmed := strings.TrimSpace(call)
+	for _, line := range strings.Split(bodyContent, "\n") {
+		if strings.TrimSpace(line) == callTrimmed {
+			return nil, fmt.Sprintf("insert_call: %q already present in %s — skipped", callTrimmed, identifier), nil
+		}
+	}
+
+	// Determine insertion offset within src.
+	var insertAt int
+	switch {
+	case pos == domain.InsertBeforeReturn:
+		insertAt = findLastReturnOffset(fset, targetFn, bodyEnd)
+
+	case pos == domain.InsertEndOfBody:
+		insertAt = bodyEnd
+
+	case strings.HasPrefix(string(pos), "after:"):
+		marker := strings.TrimPrefix(string(pos), "after:")
+		idx := strings.Index(bodyContent, marker)
+		if idx == -1 {
+			return nil, "", &domain.Error{
+				Code:    "MARKER_NOT_FOUND",
+				Message: fmt.Sprintf("marker %q not found in body of %s", marker, identifier),
+			}
+		}
+		// Find end of the line containing the marker.
+		lineEnd := strings.Index(bodyContent[idx:], "\n")
+		if lineEnd == -1 {
+			insertAt = bodyEnd
+		} else {
+			insertAt = bodyStart + 1 + idx + lineEnd + 1
+		}
+
+	default:
+		return nil, "", &domain.Error{
+			Code:    "INVALID_POSITION",
+			Message: fmt.Sprintf("unknown position %q: use before-return, end-of-body, or after:<marker>", pos),
+		}
+	}
+
+	// Compute indentation from the surrounding body.
+	indent := detectBodyIndent(bodyContent)
+
+	// Build the line to insert (trimmed call + newline).
+	line := indent + callTrimmed + "\n"
+
+	result := make([]byte, 0, len(src)+len(line))
+	result = append(result, src[:insertAt]...)
+	result = append(result, []byte(line)...)
+	result = append(result, src[insertAt:]...)
+
+	_ = offsets // used via findFuncOffsets above for existence check
+	return result, "", nil
+}
+
+// findLastReturnOffset returns the byte offset of the last top-level return
+// statement inside fn's body, or bodyEnd if there is none.
+func findLastReturnOffset(fset *token.FileSet, fn *ast.FuncDecl, bodyEnd int) int {
+	var lastReturn token.Pos
+	for _, stmt := range fn.Body.List {
+		if _, ok := stmt.(*ast.ReturnStmt); ok {
+			lastReturn = stmt.Pos()
+		}
+	}
+	if !lastReturn.IsValid() {
+		return bodyEnd
+	}
+	return fset.Position(lastReturn).Offset
+}
+
+// detectBodyIndent returns the indentation string used by the first non-empty
+// line in bodyContent (the text between the function's braces), defaulting to a tab.
+func detectBodyIndent(bodyContent string) string {
+	for _, line := range strings.Split(bodyContent, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" {
+			continue
+		}
+		indent := line[:len(line)-len(trimmed)]
+		if indent != "" {
+			return indent
+		}
+	}
+	return "\t"
 }

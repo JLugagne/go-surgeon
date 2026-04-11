@@ -70,6 +70,7 @@ func Setup() Runner {
 			clicommands.NewActionCommand(executePlanHandler, domain.ActionTypeAddStruct, "add-struct", false, true),
 			clicommands.NewActionCommand(executePlanHandler, domain.ActionTypeUpdateStruct, "update-struct", true, true),
 			clicommands.NewActionCommand(executePlanHandler, domain.ActionTypeDeleteStruct, "delete-struct", true, false),
+			clicommands.NewInsertCallCommand(executePlanHandler),
 		)
 
 		// Interface subcommands with auto-mock generation
