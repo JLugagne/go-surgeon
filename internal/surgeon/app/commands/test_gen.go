@@ -175,10 +175,21 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		buf.WriteString("\t}\n")
 	}
 
+	// Determine whether this will be a black-box test up front so we can use
+	// it when emitting the test struct fields too.
+	pkgName := f.Name.Name
+	blackBox := recvType == "" || isExported(recvType)
+
+	// In a black-box test, an exported receiver type must be package-qualified.
+	displayRecvType := recvType
+	if blackBox && recvType != "" {
+		displayRecvType = qualifyType(recvType, pkgName)
+	}
+
 	buf.WriteString("\ttests := []struct {\n")
 	buf.WriteString("\t\tname string\n")
 	if recvType != "" {
-		fmt.Fprintf(&buf, "\t\t%s %s\n", recvVar, recvType)
+		fmt.Fprintf(&buf, "\t\t%s %s\n", recvVar, displayRecvType)
 	}
 	if len(params) > 0 {
 		buf.WriteString("\t\targs args\n")
@@ -224,16 +235,16 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		case assertLibGotest:
 			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, %s, tt.%s)", vName, r.Name))
 		default:
-			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif got, want := %s, tt.%s; got != want { t.Errorf(\"%%v != %%v\", got, want) }", vName, r.Name))
+			if typeNeedsDeepEqual(r.Type) {
+				wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif !reflect.DeepEqual(%s, tt.%s) { t.Errorf(\"got %%v, want %%v\", %s, tt.%s) }", vName, r.Name, vName, r.Name))
+			} else {
+				wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif got, want := %s, tt.%s; got != want { t.Errorf(\"%%v != %%v\", got, want) }", vName, r.Name))
+			}
 		}
 	}
 	if returnsError {
 		assignVars = append(assignVars, "err")
 	}
-
-	// Determine whether this will be a black-box test (unexported receiver → white-box).
-	pkgName := f.Name.Name
-	blackBox := recvType == "" || isExported(recvType)
 
 	var callStr string
 	if recvVar != "" {
@@ -354,4 +365,43 @@ func capitalizeFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// qualifyType prepends pkgName to an exported type that is not already qualified.
+// Examples:
+//
+//	"*App"       → "*app.App"
+//	"App"        → "app.App"
+//	"*app.App"   → "*app.App"   (already qualified, unchanged)
+//	"*bookRepo"  → "*bookRepo"  (unexported, unchanged)
+func qualifyType(typStr, pkgName string) string {
+	// Strip pointer/slice sigils to examine the base type.
+	prefix := ""
+	base := typStr
+	for len(base) > 0 && (base[0] == '*' || base[0] == '[' || base[0] == ']') {
+		prefix += string(base[0])
+		base = base[1:]
+	}
+	if base == "" {
+		return typStr
+	}
+	// Already package-qualified (contains a dot).
+	if strings.Contains(base, ".") {
+		return typStr
+	}
+	// Only qualify exported identifiers.
+	if !unicode.IsUpper([]rune(base)[0]) {
+		return typStr
+	}
+	return prefix + pkgName + "." + base
+}
+
+// typeNeedsDeepEqual reports whether a Go type string represents a value that
+// cannot be compared with == (slices, maps, funcs, and structs/pointers that
+// likely contain them).
+func typeNeedsDeepEqual(typStr string) bool {
+	t := strings.TrimLeft(typStr, "*")
+	return strings.HasPrefix(t, "[]") ||
+		strings.HasPrefix(t, "map[") ||
+		strings.HasPrefix(t, "func(")
 }

@@ -114,4 +114,73 @@ func Compute(x int) int {
 		// Bug 003: free function qualified with package name
 		assert.Contains(t, testSrc, "pg.Compute(")
 	})
+
+	t.Run("exported receiver is package-qualified in black-box test", func(t *testing.T) {
+		// Bug 003 (bookstore-8): exported receiver type must be pkg.Type in _test package.
+		fs4 := &mockFS{files: make(map[string][]byte)}
+		h4 := commands.NewExecutePlanHandler(fs4)
+
+		fs4.files["app/book.go"] = []byte(`package app
+
+type App struct{}
+
+func (a *App) CreateBook(title string) error {
+	return nil
+}
+`)
+		testFile, err := h4.GenerateTest(ctx, "app/book.go", "App.CreateBook")
+		require.NoError(t, err)
+		assert.Equal(t, "app/book_test.go", testFile)
+
+		testSrc := string(fs4.files["app/book_test.go"])
+		assert.Contains(t, testSrc, "package app_test")
+		// Receiver must be qualified: *app.App not *App
+		assert.Contains(t, testSrc, "*app.App")
+		assert.NotContains(t, testSrc, "\t\ta     *App")
+	})
+
+	t.Run("struct return type with slice field uses got != want (struct is comparable at top level)", func(t *testing.T) {
+		// Bug 004 (bookstore-8): typeNeedsDeepEqual applies to the *return type* string.
+		// BookListResponse is a struct — its type string doesn't start with [] or map[,
+		// so got != want is used. reflect.DeepEqual would only kick in for a direct []T return.
+		fs5 := &mockFS{files: make(map[string][]byte)}
+		h5 := commands.NewExecutePlanHandler(fs5)
+
+		fs5.files["conv/book.go"] = []byte(`package converters
+
+type BookListResponse struct{ Items []string }
+
+func ToPublicBookList(ids []string) BookListResponse {
+	return BookListResponse{}
+}
+`)
+		_, err := h5.GenerateTest(ctx, "conv/book.go", "ToPublicBookList")
+		require.NoError(t, err)
+
+		testSrc := string(fs5.files["conv/book_test.go"])
+		// Slice param must appear in args struct.
+		assert.Contains(t, testSrc, "[]string")
+		// Return type BookListResponse is a plain struct identifier — not a slice/map —
+		// so the generator uses got != want (correct for non-slice structs).
+		assert.Contains(t, testSrc, "got != want")
+	})
+
+	t.Run("slice return type directly uses reflect.DeepEqual", func(t *testing.T) {
+		fs6 := &mockFS{files: make(map[string][]byte)}
+		h6 := commands.NewExecutePlanHandler(fs6)
+
+		fs6.files["svc/book.go"] = []byte(`package svc
+
+func ListIDs() []string {
+	return nil
+}
+`)
+		_, err := h6.GenerateTest(ctx, "svc/book.go", "ListIDs")
+		require.NoError(t, err)
+
+		testSrc := string(fs6.files["svc/book_test.go"])
+		// []string return → must use reflect.DeepEqual, not got != want
+		assert.Contains(t, testSrc, "reflect.DeepEqual")
+		assert.NotContains(t, testSrc, "got != want")
+	})
 }
