@@ -139,7 +139,14 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 				return nil, domain.ErrFileNotFound
 			}
 			isFileNew = true
-			src = []byte(fmt.Sprintf("package %s\n", action.PackagePath))
+			pkgName := action.PackagePath
+			if pkgName == "" {
+				pkgName = h.inferPackageName(ctx, filepath.Dir(action.FilePath))
+			}
+			if pkgName == "" {
+				pkgName = filepath.Base(filepath.Dir(action.FilePath))
+			}
+			src = []byte(fmt.Sprintf("package %s\n", pkgName))
 		} else {
 			return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
 		}
