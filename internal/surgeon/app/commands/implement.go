@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -263,8 +264,12 @@ func extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, 
 
 // resolveInterfaceCached wraps resolveInterface with the handler's LRU cache.
 // On a cache hit the expensive packages.Load call is skipped entirely.
+// resolveInterfaceCached wraps resolveInterface with the handler's LRU cache.
+// Only external interfaces (stdlib, third-party) are cached — local project
+// interfaces are always re-resolved so edits take effect immediately without
+// requiring a session restart.
 func (h *ExecutePlanHandler) resolveInterfaceCached(ifacePath string) (resolvedIface, error) {
-	if h.ifaceCache != nil {
+	if h.ifaceCache != nil && !h.isLocalInterface(ifacePath) {
 		if v, ok := h.ifaceCache.get(ifacePath); ok {
 			return v, nil
 		}
@@ -273,8 +278,37 @@ func (h *ExecutePlanHandler) resolveInterfaceCached(ifacePath string) (resolvedI
 	if err != nil {
 		return resolvedIface{}, err
 	}
-	if h.ifaceCache != nil {
+	if h.ifaceCache != nil && !h.isLocalInterface(ifacePath) {
 		h.ifaceCache.set(ifacePath, v)
 	}
 	return v, nil
+}
+
+// isLocalInterface reports whether ifacePath belongs to the current project's module.
+func (h *ExecutePlanHandler) isLocalInterface(ifacePath string) bool {
+	modulePath, err := findModulePathFromDir(".")
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(ifacePath, modulePath)
+}
+
+// findModulePathFromDir walks up from dir looking for go.mod and returns the module path.
+func findModulePathFromDir(dir string) (string, error) {
+	for {
+		data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "module ") {
+					return strings.TrimSpace(line[len("module "):]), nil
+				}
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.mod not found")
+		}
+		dir = parent
+	}
 }
