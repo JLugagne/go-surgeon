@@ -26,6 +26,7 @@ Editing (use instead of Edit/Write/Bash on .go files):
 - create: add a new file, function, or struct
 - update: replace a function, method, struct, or file
 - delete: remove a function, method, or struct
+- insert_call: insert a single statement inside a function body (before-return, end-of-body, after:<marker>)
 - execute_plan: multiple edits in one shot (up to 5 actions, preferred for multi-step changes)
 
 Interface & mock management:
@@ -61,6 +62,7 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerQueryTools(s, queries)
 	registerActionTools(s, commands)
 	registerInterfaceTools(s, commands)
+	registerInsertCallTool(s, commands)
 	registerOtherTools(s, commands)
 
 	return s
@@ -327,6 +329,43 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 	})
 }
 
+// --- Insert-call tool ---
+
+type insertCallInput struct {
+	File     string `json:"file" jsonschema:"target Go file"`
+	Function string `json:"function" jsonschema:"function identifier: FuncName or Receiver.Method"`
+	Call     string `json:"call" jsonschema:"statement to insert, e.g. setupPayOrderRoute(mux, app)"`
+	Position string `json:"position,omitempty" jsonschema:"where to insert: before-return (default), end-of-body, or after:<marker>"`
+}
+
+func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "insert_call",
+		Description: "Insert a statement into an existing function body at a controlled position — use this instead of update when you only need to add one line inside a function. position values: 'before-return' (default, inserts before the last return), 'end-of-body' (before the closing brace), 'after:<marker>' (after the first line containing <marker>, e.g. 'after:// routes'). Idempotent: if the exact call already exists in the body, it is skipped with a warning.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in insertCallInput) (*mcp.CallToolResult, any, error) {
+		pos := domain.InsertPosition(in.Position)
+		if pos == "" {
+			pos = domain.InsertBeforeReturn
+		}
+		result, err := commands.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeInsertCall,
+			FilePath:   in.File,
+			Identifier: in.Function,
+			Content:    in.Call,
+			Position:   pos,
+		}}})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (insert_call): %v", err)), nil, nil
+		}
+		var sb strings.Builder
+		for _, w := range result.Warnings {
+			fmt.Fprintf(&sb, "WARNING: %s\n", w)
+		}
+		fmt.Fprintf(&sb, "SUCCESS (insert_call): %d files modified", result.FilesModified)
+		return textResult(sb.String()), nil, nil
+	})
+}
+
 // --- Other tools ---
 
 type executePlanInput struct {
@@ -370,7 +409,7 @@ type extractInterfaceInput struct {
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "execute_plan",
-		Description: "Execute up to 5 AST edits atomically from a YAML plan — the preferred tool when making several related changes in one step. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface. Content fields must be complete declarations without package declarations or imports; goimports runs after each action. Hard limit: 5 actions per plan.",
+		Description: "Execute up to 5 AST edits atomically from a YAML plan — the preferred tool when making several related changes in one step. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. Content fields must be complete declarations without package declarations or imports; goimports runs after each action. Hard limit: 5 actions per plan.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
 		plan, err := converters.ToDomainPlan([]byte(in.Plan))
 		if err != nil {
