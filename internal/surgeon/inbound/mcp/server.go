@@ -30,6 +30,9 @@ Editing (use instead of Edit/Write/Bash on .go files):
 
 Interface & mock management:
 - add_interface / update_interface / delete_interface: manage interfaces and their mocks
+  - There is no add_interface_method tool. To add a method to an existing interface:
+    1. symbol body=true to read the current interface
+    2. update_interface with the complete new declaration (existing methods + new one)
 - implement: generate stubs for an interface you don't own
 - mock: generate a standalone mock for any interface
 - extract_interface: extract an interface from an existing struct
@@ -297,7 +300,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_interface",
-		Description: "Update an existing interface and automatically regenerate its mock — use this instead of update when modifying an interface. Always provide mock_file and mock_name so the mock stays in sync; updating the mock manually with update is error-prone and will drift. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
+		Description: "Update an existing interface and automatically regenerate its mock — use this instead of update when modifying an interface. There is no add_interface_method tool: to add a method to an existing interface, read the current body with symbol body=true, add the method to the content, then call update_interface with the complete new declaration. Always provide mock_file and mock_name so the mock stays in sync; updating the mock manually with update is error-prone and will drift. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		result, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
