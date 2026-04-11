@@ -126,7 +126,6 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	buf.WriteString("\ttests := []struct {\n")
 	buf.WriteString("\t\tname string\n")
 	if recvType != "" {
-		// Just a placeholder or setup func for receiver
 		fmt.Fprintf(&buf, "\t\t%s %s\n", recvVar, recvType)
 	}
 	if len(params) > 0 {
@@ -140,6 +139,12 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	}
 	buf.WriteString("\t}{\n")
 	buf.WriteString("\t\t// TODO: Add test cases.\n")
+	buf.WriteString("\t}\n")
+
+	// Skip with a clear message when no test cases have been added yet,
+	// so the test shows up as SKIP in verbose mode rather than silently passing.
+	fmt.Fprintf(&buf, "\tif len(tests) == 0 {\n")
+	fmt.Fprintf(&buf, "\t\tt.Skip(\"TODO: no test cases defined for %s\")\n", testName)
 	buf.WriteString("\t}\n")
 
 	buf.WriteString("\tfor _, tt := range tests {\n")
@@ -206,7 +211,6 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	testFileSrc, err := h.fs.ReadFile(ctx, testFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Create new test file
 			pkgName := f.Name.Name
 			testFileSrc = []byte(fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName))
 		} else {
