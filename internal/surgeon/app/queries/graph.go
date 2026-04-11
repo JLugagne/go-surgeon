@@ -98,7 +98,7 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 	} else {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return nil
+				return err
 			}
 			if info.IsDir() {
 				name := info.Name()
@@ -170,6 +170,10 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 				includeUnexported := tests && isTestFile(filepath.Base(filePath))
 				gf, err := h.extractGraphSymbols(ctx, filePath, includeUnexported)
 				if err != nil {
+					pkg.Files = append(pkg.Files, domain.GraphFile{
+						Path:    filePath,
+						Symbols: []string{fmt.Sprintf("WARNING: failed to parse: %v", err)},
+					})
 					continue
 				}
 				if len(gf.Symbols) > 0 {

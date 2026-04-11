@@ -12,16 +12,17 @@ import (
 )
 
 const serverInstructions = `You have access to go-surgeon, an AST-based code editor for Go.
-ALWAYS use go-surgeon tools instead of generic file tools when working on Go projects.
+For ANY operation on Go files (.go), you MUST use go-surgeon tools — never Edit, Write, Read, Grep, Glob, or Bash on .go files.
+This rule applies throughout the entire task, including when editing, not just at the start.
 
-Exploration (replace find/ls/grep/read on Go files):
+Exploration (use instead of Read/Grep/Glob/Bash on .go files):
 - graph: explore package structure. Start here on any Go project.
 - symbol: read a function, method, or struct body. Use body=true before any edit.
 - To read a third-party dependency's source (signatures, internals, usage examples),
   set module='github.com/org/repo' on graph or symbol. Do NOT fall back to find/grep/cat
   inside $GOMODCACHE — the module parameter exists exactly for this purpose.
 
-Editing (replace Edit/Write/Bash on Go files):
+Editing (use instead of Edit/Write/Bash on .go files):
 - create: add a new file, function, or struct
 - update: replace a function, method, struct, or file
 - delete: remove a function, method, or struct
@@ -37,9 +38,9 @@ Code generation:
 - test: generate a table-driven test skeleton
 - tag: add or update struct field tags (json, bson, etc.)
 
-Rules that apply to all editing tools:
+Rules that apply to all tools:
 - Never include package declarations or import blocks in content — goimports runs automatically.
-- Always read with symbol body=true before updating or deleting.
+- Always call symbol with body=true before updating or deleting.
 - identifier format: FuncName (free function), Receiver.Method (method), StructName (struct).`
 
 // NewServer creates an MCP server with all go-surgeon tools registered.
