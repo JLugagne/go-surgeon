@@ -153,9 +153,10 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 // --- Action tools (create / update / delete) ---
 
 type createInput struct {
-	Object  string `json:"object" jsonschema:"what to create: file, func, or struct"`
-	File    string `json:"file" jsonschema:"target file path"`
-	Content string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
+	Object     string `json:"object" jsonschema:"what to create: file, func, or struct"`
+	File       string `json:"file" jsonschema:"target file path"`
+	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
+	Identifier string `json:"identifier,omitempty" jsonschema:"ignored — identifier is inferred from content; accepted to avoid validation errors"`
 }
 
 type updateInput struct {
