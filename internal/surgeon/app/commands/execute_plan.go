@@ -16,13 +16,18 @@ import (
 )
 
 // ExecutePlanHandler handles the execution of a surgery plan.
+// ExecutePlanHandler handles the execution of a surgery plan.
 type ExecutePlanHandler struct {
-	fs filesystem.FileSystem
+	fs         filesystem.FileSystem
+	ifaceCache *ifaceLRU
 }
 
 // NewExecutePlanHandler creates a new ExecutePlanHandler.
 func NewExecutePlanHandler(fs filesystem.FileSystem) *ExecutePlanHandler {
-	return &ExecutePlanHandler{fs: fs}
+	return &ExecutePlanHandler{
+		fs:         fs,
+		ifaceCache: newIfaceLRU(50),
+	}
 }
 
 func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -99,7 +104,11 @@ func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
 		return &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
 	}
-	content := ensurePackageHeader(action.Content, action.PackagePath)
+	pkgName := action.PackagePath
+	if pkgName == "" {
+		pkgName = h.inferPackageName(ctx, dir)
+	}
+	content := ensurePackageHeader(action.Content, pkgName)
 	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
 
@@ -501,4 +510,26 @@ func ensurePackageHeader(content, fallback string) string {
 		return content
 	}
 	return "package " + fallback + "\n\n" + content
+}
+
+// inferPackageName reads existing .go files in dir to determine the package name.
+// Returns empty string if no .go files exist yet (new package).
+func (h *ExecutePlanHandler) inferPackageName(ctx context.Context, dir string) string {
+	entries, err := h.fs.ReadDir(ctx, dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry, ".go") || strings.HasSuffix(entry, "_test.go") {
+			continue
+		}
+		src, err := h.fs.ReadFile(ctx, filepath.Join(dir, entry))
+		if err != nil {
+			continue
+		}
+		if name := extractPackageName(src); name != "" {
+			return name
+		}
+	}
+	return ""
 }

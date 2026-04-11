@@ -19,7 +19,8 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		return "", fmt.Errorf("interface, receiver, and file path are required")
 	}
 
-	resolved, err := resolveInterface(req.Interface)
+	// Resolve the interface (cached for MCP sessions)
+	resolved, err := h.resolveInterfaceCached(req.Interface)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve interface %s: %w", req.Interface, err)
 	}
@@ -35,7 +36,6 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "package %s\n\n", targetPkg)
 
-	// Struct with function fields
 	fmt.Fprintf(&buf, "type %s struct {\n", receiverName)
 	for i := 0; i < iface.NumMethods(); i++ {
 		m := iface.Method(i)
@@ -44,7 +44,6 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 	}
 	buf.WriteString("}\n")
 
-	// Delegation methods
 	for i := 0; i < iface.NumMethods(); i++ {
 		m := iface.Method(i)
 		sig := m.Type().(*types.Signature)
@@ -65,7 +64,6 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		buf.WriteString("}\n")
 	}
 
-	// Compile-time interface check
 	buf.WriteByte('\n')
 	if targetPkg == resolved.pkgName {
 		fmt.Fprintf(&buf, "var _ %s = (*%s)(nil)\n", resolved.typeName, receiverName)
@@ -73,7 +71,6 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		fmt.Fprintf(&buf, "var _ %s.%s = (*%s)(nil)\n", resolved.pkgName, resolved.typeName, receiverName)
 	}
 
-	// Write file (fs.WriteFile runs goimports for .go files)
 	dir := filepath.Dir(req.FilePath)
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
 		return "", fmt.Errorf("failed to create directory: %w", err)
