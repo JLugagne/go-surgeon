@@ -99,17 +99,24 @@ func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
 		return &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
 	}
-	return h.fs.WriteFile(ctx, action.FilePath, []byte(action.Content))
+	content := ensurePackageHeader(action.Content, action.PackagePath)
+	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
 
 func (h *ExecutePlanHandler) handleReplaceFile(ctx context.Context, action domain.Action) error {
-	if _, err := h.fs.ReadFile(ctx, action.FilePath); err != nil {
+	existing, err := h.fs.ReadFile(ctx, action.FilePath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return domain.ErrFileNotFound
 		}
 		return &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
 	}
-	return h.fs.WriteFile(ctx, action.FilePath, []byte(action.Content))
+	pkgName := extractPackageName(existing)
+	if pkgName == "" {
+		return &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("failed to determine package name from existing file %s", action.FilePath)}
+	}
+	content := ensurePackageHeader(action.Content, pkgName)
+	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
 
 func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.Action) ([]string, error) {
@@ -468,4 +475,30 @@ func resolveDocReplacement(offsets nodeOffsets, content, doc string, stripDoc bo
 	}
 	// Default: preserve existing doc by replacing only the node body
 	return offsets.NodeStart, content
+}
+
+// extractPackageName parses the package name from existing Go source.
+// Returns empty string if it cannot be determined.
+func extractPackageName(src []byte) string {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil || f.Name == nil {
+		return ""
+	}
+	return f.Name.Name
+}
+
+// ensurePackageHeader prepends "package <name>\n\n" to content if it lacks a package declaration.
+// fallback is used when the package name cannot be inferred from content itself.
+func ensurePackageHeader(content, fallback string) string {
+	// Check if content already has a package declaration.
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", content, 0)
+	if err == nil && f.Name != nil {
+		return content
+	}
+	if fallback == "" {
+		return content
+	}
+	return "package " + fallback + "\n\n" + content
 }

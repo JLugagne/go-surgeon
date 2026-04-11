@@ -104,6 +104,10 @@ func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) strin
 		}
 	}
 
+	if sb.Len() == 0 {
+		return fmt.Sprintf("No Go packages found in '%s'.", opts.Dir)
+	}
+
 	return sb.String()
 }
 
