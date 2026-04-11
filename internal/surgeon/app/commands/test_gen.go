@@ -396,12 +396,27 @@ func qualifyType(typStr, pkgName string) string {
 	return prefix + pkgName + "." + base
 }
 
-// typeNeedsDeepEqual reports whether a Go type string represents a value that
-// cannot be compared with == (slices, maps, funcs, and structs/pointers that
-// likely contain them).
+// typeNeedsDeepEqual reports whether a Go type string requires reflect.DeepEqual
+// instead of ==. This covers:
+//   - slices ([]T)
+//   - maps (map[K]V)
+//   - funcs (func(...))
+//   - named struct types (exported identifiers) — conservatively treated as
+//     potentially containing slice/map fields, since we cannot inspect their
+//     definition without full type analysis. reflect.DeepEqual is always safe
+//     to use, even on purely comparable structs.
 func typeNeedsDeepEqual(typStr string) bool {
 	t := strings.TrimLeft(typStr, "*")
-	return strings.HasPrefix(t, "[]") ||
+	if strings.HasPrefix(t, "[]") ||
 		strings.HasPrefix(t, "map[") ||
-		strings.HasPrefix(t, "func(")
+		strings.HasPrefix(t, "func(") {
+		return true
+	}
+	// Named struct type: exported identifier (possibly package-qualified).
+	// Strip package qualifier if present (e.g. "app.App" → "App").
+	base := t
+	if dot := strings.LastIndex(t, "."); dot >= 0 {
+		base = t[dot+1:]
+	}
+	return base != "" && unicode.IsUpper([]rune(base)[0])
 }
