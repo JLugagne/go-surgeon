@@ -50,10 +50,68 @@ func SimpleFunc() string {
 
 		testSrc := string(fs.files["main_test.go"])
 		assert.Contains(t, testSrc, "func TestSimpleFunc(t *testing.T)")
-		assert.Contains(t, testSrc, "got := SimpleFunc()")
-		assert.Contains(t, testSrc, "assert.Equal(t, tt.want0, got)")
-		
+		// Bug 003: free function in black-box test must be package-qualified.
+		assert.Contains(t, testSrc, "got := main.SimpleFunc()")
+		// Bug 002: no assert library detected in mock FS → stdlib assertions.
+		assert.NotContains(t, testSrc, "assert.Equal")
+		assert.Contains(t, testSrc, "tt.want0")
+
 		// Ensure it didn't duplicate package statement
 		assert.Equal(t, 1, strings.Count(testSrc, "package main_test"))
+	})
+
+	t.Run("unexported receiver uses white-box package", func(t *testing.T) {
+		fs2 := &mockFS{files: make(map[string][]byte)}
+		h2 := commands.NewExecutePlanHandler(fs2)
+
+		fs2.files["pkg/repo.go"] = []byte(`package pg
+
+type bookRepository struct{}
+
+func (b *bookRepository) Create(id int) error {
+	return nil
+}
+`)
+		testFile, err := h2.GenerateTest(ctx, "pkg/repo.go", "(*bookRepository).Create")
+		require.NoError(t, err)
+		// Bug 001: unexported receiver → white-box test file, same package name (no _test suffix in package decl).
+		assert.Equal(t, "pkg/repo_test.go", testFile)
+		testSrc := string(fs2.files["pkg/repo_test.go"])
+		// White-box: package pg (not pg_test)
+		assert.Contains(t, testSrc, "package pg\n")
+		assert.NotContains(t, testSrc, "package pg_test")
+		// Receiver type accessible without qualification
+		assert.Contains(t, testSrc, "*bookRepository")
+	})
+
+	t.Run("detects testify from sibling test files", func(t *testing.T) {
+		fs3 := &mockFS{files: make(map[string][]byte)}
+		h3 := commands.NewExecutePlanHandler(fs3)
+
+		// Sibling test file importing testify
+		fs3.files["pkg/other_test.go"] = []byte(`package pg_test
+
+import (
+	"testing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOther(t *testing.T) {}
+`)
+		fs3.files["pkg/service.go"] = []byte(`package pg
+
+func Compute(x int) int {
+	return x * 2
+}
+`)
+		testFile, err := h3.GenerateTest(ctx, "pkg/service.go", "Compute")
+		require.NoError(t, err)
+		assert.Equal(t, "pkg/service_test.go", testFile)
+		testSrc := string(fs3.files["pkg/service_test.go"])
+		// Bug 002: testify detected → use assert.Equal
+		assert.Contains(t, testSrc, "assert.Equal")
+		// Bug 003: free function qualified with package name
+		assert.Contains(t, testSrc, "pg.Compute(")
 	})
 }

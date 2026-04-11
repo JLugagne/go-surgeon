@@ -16,6 +16,58 @@ import (
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 )
 
+type assertLib int
+
+const (
+	assertLibNone    assertLib = iota // stdlib only
+	assertLibTestify                  // github.com/stretchr/testify
+	assertLibGotest                   // gotest.tools/assert
+)
+
+// detectAssertLib inspects _test.go files in the same directory as filePath and
+// returns which assertion library they import, defaulting to stdlib-only.
+func (h *ExecutePlanHandler) detectAssertLib(ctx context.Context, filePath string) assertLib {
+	dir := filepath.Dir(filePath)
+	entries, err := h.fs.ReadDir(ctx, dir)
+	if err != nil {
+		return assertLibNone
+	}
+	for _, name := range entries {
+		if !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := h.fs.ReadFile(ctx, filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, name, data, parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if strings.HasPrefix(path, "github.com/stretchr/testify") {
+				return assertLibTestify
+			}
+			if strings.HasPrefix(path, "gotest.tools") {
+				return assertLibGotest
+			}
+		}
+	}
+	return assertLibNone
+}
+
+// isExported reports whether name refers to an exported Go identifier.
+// It strips leading pointer/slice sigils before checking.
+func isExported(name string) bool {
+	name = strings.TrimLeft(name, "*[]")
+	if name == "" {
+		return false
+	}
+	return unicode.IsUpper([]rune(name)[0])
+}
+
 // GenerateTest generates a table-driven test skeleton for a specific function.
 func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
 	src, err := h.fs.ReadFile(ctx, filePath)
@@ -156,6 +208,8 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		callArgs = append(callArgs, "tt.args."+p.Name)
 	}
 
+	lib := h.detectAssertLib(ctx, filePath)
+
 	var assignVars []string
 	var wantChecks []string
 	for i, r := range results {
@@ -164,15 +218,31 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 			vName = "got"
 		}
 		assignVars = append(assignVars, vName)
-		wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, tt.%s, %s)", r.Name, vName))
+		switch lib {
+		case assertLibTestify:
+			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, tt.%s, %s)", r.Name, vName))
+		case assertLibGotest:
+			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, %s, tt.%s)", vName, r.Name))
+		default:
+			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif got, want := %s, tt.%s; got != want { t.Errorf(\"%%v != %%v\", got, want) }", vName, r.Name))
+		}
 	}
 	if returnsError {
 		assignVars = append(assignVars, "err")
 	}
 
-	callStr := fmt.Sprintf("%s(%s)", funcName, strings.Join(callArgs, ", "))
+	// Determine whether this will be a black-box test (unexported receiver → white-box).
+	pkgName := f.Name.Name
+	blackBox := recvType == "" || isExported(recvType)
+
+	var callStr string
 	if recvVar != "" {
 		callStr = fmt.Sprintf("tt.%s.%s(%s)", recvVar, funcName, strings.Join(callArgs, ", "))
+	} else if blackBox {
+		// Black-box test: qualify free function with package name.
+		callStr = fmt.Sprintf("%s.%s(%s)", pkgName, funcName, strings.Join(callArgs, ", "))
+	} else {
+		callStr = fmt.Sprintf("%s(%s)", funcName, strings.Join(callArgs, ", "))
 	}
 
 	if len(assignVars) > 0 {
@@ -183,10 +253,24 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 
 	if returnsError {
 		buf.WriteString("\t\t\tif tt.wantErr {\n")
-		buf.WriteString("\t\t\t\tassert.Error(t, err)\n")
+		switch lib {
+		case assertLibTestify:
+			buf.WriteString("\t\t\t\tassert.Error(t, err)\n")
+		case assertLibGotest:
+			buf.WriteString("\t\t\t\tassert.ErrorContains(t, err, \"\")\n")
+		default:
+			buf.WriteString("\t\t\t\tif err == nil { t.Error(\"expected error, got nil\") }\n")
+		}
 		buf.WriteString("\t\t\t\treturn\n")
 		buf.WriteString("\t\t\t}\n")
-		buf.WriteString("\t\t\trequire.NoError(t, err)\n")
+		switch lib {
+		case assertLibTestify:
+			buf.WriteString("\t\t\trequire.NoError(t, err)\n")
+		case assertLibGotest:
+			buf.WriteString("\t\t\tassert.NilError(t, err)\n")
+		default:
+			buf.WriteString("\t\t\tif err != nil { t.Fatalf(\"unexpected error: %v\", err) }\n")
+		}
 	}
 
 	for _, check := range wantChecks {
@@ -203,7 +287,9 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		formattedTest = buf.Bytes() // fallback
 	}
 
-	// Write to test file
+	// Write to test file.
+	// Use white-box package (no _test suffix) when the receiver is unexported,
+	// since unexported types are inaccessible from external test packages.
 	ext := filepath.Ext(filePath)
 	base := strings.TrimSuffix(filePath, ext)
 	testFile := base + "_test" + ext
@@ -211,8 +297,28 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	testFileSrc, err := h.fs.ReadFile(ctx, testFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			pkgName := f.Name.Name
-			testFileSrc = []byte(fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName))
+			var header string
+			if blackBox {
+				switch lib {
+				case assertLibTestify:
+					header = fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName)
+				case assertLibGotest:
+					header = fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"gotest.tools/assert\"\n)\n\n", pkgName)
+				default:
+					header = fmt.Sprintf("package %s_test\n\nimport \"testing\"\n\n", pkgName)
+				}
+			} else {
+				// White-box: unexported receiver type — stay in same package.
+				switch lib {
+				case assertLibTestify:
+					header = fmt.Sprintf("package %s\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName)
+				case assertLibGotest:
+					header = fmt.Sprintf("package %s\n\nimport (\n\t\"testing\"\n\t\"gotest.tools/assert\"\n)\n\n", pkgName)
+				default:
+					header = fmt.Sprintf("package %s\n\nimport \"testing\"\n\n", pkgName)
+				}
+			}
+			testFileSrc = []byte(header)
 		} else {
 			return "", &domain.Error{Code: "READ_ERROR", Message: "failed to read test file", Err: err}
 		}
