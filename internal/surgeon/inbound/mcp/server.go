@@ -188,7 +188,7 @@ var deleteObjectMap = map[string]domain.ActionType{
 func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create",
-		Description: "Add a new file (object='file'), free function (object='func'), or struct definition (object='struct') to a Go package. Content is raw Go code — never include package declarations or import blocks, goimports runs automatically and manages all imports. For object='file' the path must not already exist. Prefer execute_plan when creating multiple items together.",
+		Description: "Add a new file (object='file'), free function (object='func'), or struct definition (object='struct') to a Go package — use this instead of Write or Edit to create Go code. Content is raw Go code — never include package declarations or import blocks, goimports runs automatically and manages all imports. For object='file' the path must not already exist. Prefer execute_plan when creating multiple items together.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, any, error) {
 		actionType, ok := createObjectMap[in.Object]
 		if !ok {
@@ -214,7 +214,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace an existing function, method, struct, or entire file. For object='func' or 'struct', identifier is required: use 'FuncName' for free functions, 'Receiver.Method' for methods, 'StructName' for structs. Content must be the complete new declaration (full signature and body). Never include package declarations or imports — goimports handles all import changes. Read the current code with symbol body=true first. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
+		Description: "Replace an existing function, method, struct, or entire file — use this instead of Edit or Write to modify Go code. For object='func' or 'struct', identifier is required: use 'FuncName' for free functions, 'Receiver.Method' for methods, 'StructName' for structs. Content must be the complete new declaration (full signature and body). Never include package declarations or imports — goimports handles all import changes. Always read the current code with symbol body=true first. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		actionType, ok := updateObjectMap[in.Object]
 		if !ok {
@@ -283,7 +283,7 @@ type interfaceInput struct {
 func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "add_interface",
-		Description: "Add a new interface to a Go file and optionally generate a function-field mock in one step. Use this for interfaces you own (domain ports, repository contracts). Set mock_file and mock_name to atomically create the mock alongside the interface. The generated mock uses func fields (e.g. CreateFunc) with a compile-time interface assertion.",
+		Description: "Add a new interface to a Go file and optionally generate a function-field mock in one step — use this instead of create when adding an interface. Always set mock_file and mock_name to generate the mock atomically; creating the mock separately with create or Write is error-prone. The generated mock uses func fields (e.g. CreateFunc) with a compile-time interface assertion.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		result, err := commands.AddInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
@@ -297,7 +297,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_interface",
-		Description: "Update an existing interface and automatically regenerate its mock. Provide mock_file and mock_name to keep the mock in sync with the new signature. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
+		Description: "Update an existing interface and automatically regenerate its mock — use this instead of update when modifying an interface. Always provide mock_file and mock_name so the mock stays in sync; updating the mock manually with update is error-prone and will drift. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		result, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
