@@ -139,10 +139,9 @@ func (a *App) CreateBook(title string) error {
 		assert.NotContains(t, testSrc, "\t\ta     *App")
 	})
 
-	t.Run("struct return type with slice field uses got != want (struct is comparable at top level)", func(t *testing.T) {
-		// Bug 004 (bookstore-8): typeNeedsDeepEqual applies to the *return type* string.
-		// BookListResponse is a struct — its type string doesn't start with [] or map[,
-		// so got != want is used. reflect.DeepEqual would only kick in for a direct []T return.
+	t.Run("exported struct return type uses reflect.DeepEqual", func(t *testing.T) {
+		// Bug 004 (bookstore-8) + bookstore-10: exported struct types are conservatively
+		// treated as potentially containing slice/map fields → reflect.DeepEqual.
 		fs5 := &mockFS{files: make(map[string][]byte)}
 		h5 := commands.NewExecutePlanHandler(fs5)
 
@@ -160,9 +159,9 @@ func ToPublicBookList(ids []string) BookListResponse {
 		testSrc := string(fs5.files["conv/book_test.go"])
 		// Slice param must appear in args struct.
 		assert.Contains(t, testSrc, "[]string")
-		// Return type BookListResponse is a plain struct identifier — not a slice/map —
-		// so the generator uses got != want (correct for non-slice structs).
-		assert.Contains(t, testSrc, "got != want")
+		// BookListResponse is an exported struct → must use reflect.DeepEqual.
+		assert.Contains(t, testSrc, "reflect.DeepEqual")
+		assert.NotContains(t, testSrc, "got != want")
 	})
 
 	t.Run("slice return type directly uses reflect.DeepEqual", func(t *testing.T) {
