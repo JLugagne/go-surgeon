@@ -125,6 +125,13 @@ func (h *ExecutePlanHandler) handleReplaceFile(ctx context.Context, action domai
 	}
 	pkgName := extractPackageName(existing)
 	if pkgName == "" {
+		// File may be corrupted; fall back to sibling files then dir name.
+		pkgName = h.inferPackageName(ctx, filepath.Dir(action.FilePath))
+	}
+	if pkgName == "" {
+		pkgName = filepath.Base(filepath.Dir(action.FilePath))
+	}
+	if pkgName == "" {
 		return &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("failed to determine package name from existing file %s", action.FilePath)}
 	}
 	content := ensurePackageHeader(action.Content, pkgName)
@@ -206,8 +213,9 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
 		updated = true
 	case domain.ActionTypeAddStruct:
+		normalizedContent := normalizeStructContent(action.Content)
 		if !isFileNew {
-			if structName, parseErr := extractStructNameFromContent(action.Content); parseErr == nil && structName != "" {
+			if structName, parseErr := extractStructNameFromContent(normalizedContent); parseErr == nil && structName != "" {
 				if offsets, ok := findStructOffsets(fset, f, structName); ok {
 					existingBody := strings.TrimSpace(string(src[offsets.DocStart:offsets.End]))
 					return nil, &domain.Error{
@@ -221,19 +229,20 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
 			updatedSrc = append(updatedSrc, '\n')
 		}
-		updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
+		updatedSrc = append(updatedSrc, []byte("\n"+normalizedContent+"\n")...)
 		updated = true
 	case domain.ActionTypeUpdateStruct:
+		normalizedContent := normalizeStructContent(action.Content)
 		offsets, ok := findStructOffsets(fset, f, action.Identifier)
 		if ok {
-			start, replacement := resolveDocReplacement(offsets, action.Content, action.Doc, action.StripDoc)
+			start, replacement := resolveDocReplacement(offsets, normalizedContent, action.Doc, action.StripDoc)
 			updatedSrc = append([]byte(nil), src[:start]...)
 			updatedSrc = append(updatedSrc, []byte(replacement)...)
 			updatedSrc = append(updatedSrc, src[offsets.End:]...)
 			updated = true
 		} else {
 			// Fall back to add_struct behavior
-			content := action.Content
+			content := normalizedContent
 			if action.Doc != "" {
 				content = formatDocComment(action.Doc) + "\n" + content
 			}
@@ -542,4 +551,15 @@ func (h *ExecutePlanHandler) inferPackageName(ctx context.Context, dir string) s
 		}
 	}
 	return ""
+}
+
+// normalizeStructContent ensures the content passed to add_struct / update_struct
+// starts with "type ", adding it when the LLM omits the keyword.
+// E.g. "foo struct { ... }" → "type foo struct { ... }".
+func normalizeStructContent(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "type ") {
+		return "type " + trimmed
+	}
+	return content
 }
