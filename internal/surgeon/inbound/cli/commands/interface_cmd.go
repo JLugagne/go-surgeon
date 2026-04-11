@@ -18,6 +18,7 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 	var mockName string
 	var doc string
 	var stripDoc bool
+	var silent bool
 
 	isDelete := actionType == domain.ActionTypeDeleteInterface
 	isUpdate := actionType == domain.ActionTypeUpdateInterface
@@ -74,7 +75,22 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 				}
 				return fmt.Errorf("ERROR (%s): %w", name, err)
 			}
+
+			if silent {
+				return nil
+			}
+
 			fmt.Printf("%s\n", result)
+			symbols := parseFileSymbols(file)
+			if len(symbols) > 0 {
+				printSymbols("symbols", symbols)
+			}
+			if mockFile != "" {
+				mockSymbols := parseFileSymbols(mockFile)
+				if len(mockSymbols) > 0 {
+					printSymbols("mock symbols", mockSymbols)
+				}
+			}
 			return nil
 		},
 	}
@@ -93,6 +109,7 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 		cmd.Flags().StringVar(&doc, "doc", "", "Set or replace the doc comment (raw text, // prefix added automatically)")
 		cmd.Flags().BoolVar(&stripDoc, "strip-doc", false, "Remove the existing doc comment")
 	}
+	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress output (errors are still reported)")
 	return cmd
 }
 

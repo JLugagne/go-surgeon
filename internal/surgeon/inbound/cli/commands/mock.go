@@ -11,6 +11,7 @@ import (
 func NewMockCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	var mockName string
 	var file string
+	var silent bool
 
 	cmd := &cobra.Command{
 		Use:   "mock <package.Interface>",
@@ -47,7 +48,16 @@ the interface and its mock in one step.`,
 			if err != nil {
 				return fmt.Errorf("failed to generate mock: %w [hint: use the full import path, for project-local interfaces use 'go-surgeon graph -s -d <dir>' to find the package path]", err)
 			}
+
+			if silent {
+				return nil
+			}
+
 			fmt.Printf("SUCCESS: %s\n", result)
+			symbols := parseFileSymbols(file)
+			if len(symbols) > 0 {
+				printSymbols("symbols", symbols)
+			}
 			return nil
 		},
 	}
@@ -55,5 +65,6 @@ the interface and its mock in one step.`,
 	_ = cmd.MarkFlagRequired("mock-name")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Target file to write the mock to (required)")
 	_ = cmd.MarkFlagRequired("file")
+	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress output (errors are still reported)")
 	return cmd
 }

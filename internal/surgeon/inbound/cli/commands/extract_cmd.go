@@ -10,6 +10,7 @@ import (
 
 func NewExtractInterfaceCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	var req domain.ExtractInterfaceRequest
+	var silent bool
 
 	cmd := &cobra.Command{
 		Use:   "extract-interface",
@@ -24,7 +25,22 @@ func NewExtractInterfaceCommand(surgeon service.SurgeonCommands) *cobra.Command 
 				return err
 			}
 
+			if silent {
+				return nil
+			}
+
 			fmt.Printf("SUCCESS (extract-interface): Extracted interface %s into %s\n", req.InterfaceName, interfaceFile)
+			symbols := parseFileSymbols(interfaceFile)
+			if len(symbols) > 0 {
+				printSymbols("symbols", symbols)
+			}
+			if req.MockFile != "" {
+				fmt.Printf("Mock: %s\n", req.MockFile)
+				mockSymbols := parseFileSymbols(req.MockFile)
+				if len(mockSymbols) > 0 {
+					printSymbols("mock symbols", mockSymbols)
+				}
+			}
 			return nil
 		},
 	}
@@ -35,6 +51,7 @@ func NewExtractInterfaceCommand(surgeon service.SurgeonCommands) *cobra.Command 
 	cmd.Flags().StringVarP(&req.OutPath, "out", "o", "", "Optional: output file path for the interface")
 	cmd.Flags().StringVarP(&req.MockFile, "mock-file", "m", "", "Optional: generate mock file path")
 	cmd.Flags().StringVar(&req.MockName, "mock-name", "", "Optional: name of the mock struct")
+	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress output (errors are still reported)")
 
 	_ = cmd.MarkFlagRequired("file")
 	_ = cmd.MarkFlagRequired("id")
