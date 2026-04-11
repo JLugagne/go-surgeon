@@ -22,8 +22,8 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 		return nil, fmt.Errorf("interface, receiver, and file path are required")
 	}
 
-	// 1. Resolve the interface using go/packages
-	resolved, err := resolveInterface(req.Interface)
+	// 1. Resolve the interface (cached for MCP sessions)
+	resolved, err := h.resolveInterfaceCached(req.Interface)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve interface: %w", err)
 	}
@@ -89,7 +89,6 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 		sig := m.Type().(*types.Signature)
 
 		if existingFn, ok := existingMethods[m.Name()]; ok {
-			// Basic signature validation: verify parameter and result counts
 			astParams := 0
 			if existingFn.Type.Params != nil {
 				for _, field := range existingFn.Type.Params.List {
@@ -116,7 +115,7 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 				return nil, fmt.Errorf("conflict: method '%s' already exists on %s but signature mismatches! Expected %d params and %d results, got %d params and %d results", m.Name(), receiverBaseName, sig.Params().Len(), sig.Results().Len(), astParams, astResults)
 			}
 
-			continue // Already implemented (counts match)
+			continue
 		}
 
 		params := types.TypeString(sig.Params(), qualifier)
@@ -129,13 +128,12 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 	}
 
 	if newContent.Len() == 0 {
-		return nil, nil // Nothing to generate
+		return nil, nil
 	}
 
 	// 5. Append to the file
 	updatedSrc := append(src, newContent.Bytes()...)
 
-	// Format code
 	formattedSrc, err := format.Source(updatedSrc)
 	if err == nil {
 		updatedSrc = formattedSrc
@@ -155,7 +153,6 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 	var results []domain.SymbolResult
 	for _, decl := range fNew.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv != nil {
-			// check if it's one of the newly generated methods
 			isNew := false
 			for _, name := range generatedMethodNames {
 				if fn.Name.Name == name {
@@ -166,8 +163,6 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 			if !isNew {
 				continue
 			}
-
-			// Extract SymbolResult
 			res := extractFuncResult(fsetNew, updatedSrc, fn, req.FilePath, h.ReceiverBaseName(req.Receiver))
 			results = append(results, res)
 		}
@@ -264,4 +259,22 @@ func extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, 
 		Doc:       doc,
 		Code:      strings.TrimSuffix(buf.String(), "\n"),
 	}
+}
+
+// resolveInterfaceCached wraps resolveInterface with the handler's LRU cache.
+// On a cache hit the expensive packages.Load call is skipped entirely.
+func (h *ExecutePlanHandler) resolveInterfaceCached(ifacePath string) (resolvedIface, error) {
+	if h.ifaceCache != nil {
+		if v, ok := h.ifaceCache.get(ifacePath); ok {
+			return v, nil
+		}
+	}
+	v, err := resolveInterface(ifacePath)
+	if err != nil {
+		return resolvedIface{}, err
+	}
+	if h.ifaceCache != nil {
+		h.ifaceCache.set(ifacePath, v)
+	}
+	return v, nil
 }
