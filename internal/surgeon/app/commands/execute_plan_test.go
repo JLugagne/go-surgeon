@@ -460,3 +460,115 @@ type Plain struct {
 		assert.Contains(t, updated, "type Plain struct")
 	})
 }
+
+// TestUpdateStruct_MissingTypeKeyword verifies that update_struct and add_struct
+// tolerate content without the "type" keyword (common LLM omission) and still
+// produce a valid file.
+func TestUpdateStruct_MissingTypeKeyword(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "pub.go")
+
+	initialCode := `package kafka
+
+type bookPublisher struct {
+	old string
+}
+`
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(initialCode)}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	t.Run("update_struct without 'type' keyword does not corrupt file", func(t *testing.T) {
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   filePath,
+			Identifier: "bookPublisher",
+			// LLM omits the "type" prefix — must be tolerated.
+			Content: "bookPublisher struct {\n\twriter string\n}",
+		}}}
+
+		_, err := handler.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		updated := string(fs.files[filePath])
+		// "type" keyword must be present in the output.
+		assert.Contains(t, updated, "type bookPublisher struct")
+		assert.Contains(t, updated, "writer string")
+		// Old field gone.
+		assert.NotContains(t, updated, "old string")
+	})
+
+	t.Run("add_struct without 'type' keyword produces valid file", func(t *testing.T) {
+		fp2 := filepath.Join(tmpDir, "new.go")
+		fs2 := &mockFS{files: map[string][]byte{}}
+		h2 := commands.NewExecutePlanHandler(fs2)
+
+		plan := domain.Plan{Actions: []domain.Action{{
+			Action:      domain.ActionTypeAddStruct,
+			FilePath:    fp2,
+			PackagePath: "kafka",
+			Content:     "bookWriter struct {\n\ttopic string\n}",
+		}}}
+
+		_, err := h2.ExecutePlan(context.Background(), plan)
+		require.NoError(t, err)
+
+		out := string(fs2.files[fp2])
+		assert.Contains(t, out, "type bookWriter struct")
+		assert.Contains(t, out, "topic string")
+	})
+}
+
+// TestReplaceFile_CorruptedSourceFile verifies that update (replace file) does not
+// error when the existing file is syntactically invalid — it falls back to inferring
+// the package name from sibling files or the directory name.
+func TestReplaceFile_CorruptedSourceFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "broken.go")
+	siblingPath := filepath.Join(tmpDir, "sibling.go")
+
+	fs := &mockFS{files: map[string][]byte{
+		filePath:    []byte("bookPublisher struct { writer string }"), // no package decl
+		siblingPath: []byte("package kafka\n"),
+	}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	plan := domain.Plan{Actions: []domain.Action{{
+		Action:   domain.ActionTypeReplaceFile,
+		FilePath: filePath,
+		Content:  "type bookPublisher struct {\n\twriter string\n}\n",
+	}}}
+
+	_, err := handler.ExecutePlan(context.Background(), plan)
+	require.NoError(t, err)
+
+	out := string(fs.files[filePath])
+	assert.Contains(t, out, "package kafka")
+	assert.Contains(t, out, "type bookPublisher struct")
+}
+
+// TestCreateFile_InferPackageFromDir verifies that create (add_struct / add_func)
+// on a new file with no PackagePath infers the package from sibling .go files.
+func TestCreateFile_InferPackageFromDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	newFile := filepath.Join(tmpDir, "money.go")
+	siblingFile := filepath.Join(tmpDir, "book.go")
+
+	fs := &mockFS{files: map[string][]byte{
+		siblingFile: []byte("package domain\n\ntype Book struct{}\n"),
+	}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	plan := domain.Plan{Actions: []domain.Action{{
+		Action:   domain.ActionTypeAddStruct,
+		FilePath: newFile,
+		// No PackagePath provided — must be inferred from sibling.
+		Content: "type Money int64",
+	}}}
+
+	_, err := handler.ExecutePlan(context.Background(), plan)
+	require.NoError(t, err)
+
+	out := string(fs.files[newFile])
+	assert.Contains(t, out, "package domain")
+	assert.Contains(t, out, "type Money int64")
+}
