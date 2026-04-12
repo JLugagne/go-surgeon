@@ -196,6 +196,9 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "create",
 		Description: "Add a new file (object='file'), free function (object='func'), or struct definition (object='struct') to a Go package — use this instead of Write or Edit to create Go code. Content is raw Go code — never include package declarations or import blocks, goimports runs automatically and manages all imports. For object='file' the path must not already exist. Prefer execute_plan when creating multiple items together.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		actionType, ok := createObjectMap[in.Object]
 		if !ok {
 			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
@@ -222,6 +225,9 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "update",
 		Description: "Replace an existing function, method, struct, or entire file — use this instead of Edit or Write to modify Go code. For object='func' or 'struct', identifier is required: use 'FuncName' for free functions, 'Receiver.Method' for methods, 'StructName' for structs. Content must be the complete new declaration (full signature and body). Never include package declarations or imports — goimports handles all import changes. Always read the current code with symbol body=true first. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		actionType, ok := updateObjectMap[in.Object]
 		if !ok {
 			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
@@ -251,6 +257,9 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "delete",
 		Description: "Remove a function, method, or struct from a Go file. object='func' handles both free functions (identifier='FuncName') and methods (identifier='Receiver.Method'). object='struct' deletes the struct AND all its methods across every file in the package — use with care. Does not delete associated mocks.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		actionType, ok := deleteObjectMap[in.Object]
 		if !ok {
 			return errorResult(fmt.Sprintf("invalid object %q: must be func or struct", in.Object)), nil, nil
@@ -291,6 +300,9 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "add_interface",
 		Description: "Add a new interface to a Go file and optionally generate a function-field mock in one step — use this instead of create when adding an interface. Always set mock_file and mock_name to generate the mock atomically; creating the mock separately with create or Write is error-prone. The generated mock uses func fields (e.g. CreateFunc) with a compile-time interface assertion.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		result, err := commands.AddInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
@@ -305,6 +317,9 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "update_interface",
 		Description: "Update an existing interface and automatically regenerate its mock — use this instead of update when modifying an interface. There is no add_interface_method tool: to add a method to an existing interface, read the current body with symbol body=true, add the method to the content, then call update_interface with the complete new declaration. Always provide mock_file and mock_name so the mock stays in sync; updating the mock manually with update is error-prone and will drift. Content must be the complete new interface declaration without package declarations or imports. Doc comments are preserved by default; set doc to replace them or strip_doc=true to remove them.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		result, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
@@ -320,6 +335,9 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "delete_interface",
 		Description: "Delete an interface from a Go file. WARNING: the mock is NOT automatically deleted — you must manually remove the mock file afterward, or the compile-time assertion (var _ I = (*MockI)(nil)) will cause a build error.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		result, err := commands.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier,
 		})
@@ -344,6 +362,9 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "insert_call",
 		Description: "Insert a statement into an existing function body at a controlled position — use this instead of update when you only need to add one line inside a function. position values: 'before-return' (default, inserts before the last return), 'end-of-body' (before the closing brace), 'after:<marker>' (after the first line containing <marker>, e.g. 'after:// routes'). Idempotent: if the exact call already exists in the body, it is skipped with a warning.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in insertCallInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		pos := domain.InsertPosition(in.Position)
 		if pos == "" {
 			pos = domain.InsertBeforeReturn
@@ -417,6 +438,14 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			return errorResult(fmt.Sprintf("failed to parse plan: %v", err)), nil, nil
 		}
 
+		for _, action := range plan.Actions {
+			if action.FilePath != "" {
+				if err := validateGoFile(action.FilePath); err != nil {
+					return err, nil, nil
+				}
+			}
+		}
+
 		result, err := commands.ExecutePlan(ctx, plan)
 		if err != nil {
 			return errorResult(fmt.Sprintf("plan execution failed: %v", err)), nil, nil
@@ -434,6 +463,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "implement",
 		Description: "Generate method stubs on a struct for any interface it doesn't yet satisfy — use this instead of writing implementations manually with update or create. Works for any interface: local project interfaces (use the fully qualified import path, e.g. github.com/org/repo/internal/pkg.Interface), stdlib (io.ReadCloser), or third-party. Skips methods already implemented. Stubs contain '// TODO: implement' so you can fill them in afterward. goimports runs automatically.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in implementInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		results, err := commands.Implement(ctx, domain.ImplementRequest{
 			Interface: in.Interface,
 			Receiver:  in.Receiver,
@@ -460,6 +492,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "mock",
 		Description: "Generate a standalone function-field mock for any interface without touching the interface file. Use for interfaces you don't own (stdlib, third-party). For interfaces you own, prefer add_interface with mock_file instead. Interface must be fully qualified: e.g. io.Writer or github.com/org/repo/pkg.Interface.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mockInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		result, err := commands.Mock(ctx, domain.MockRequest{
 			Interface: in.Interface,
 			Receiver:  in.MockName,
@@ -475,6 +510,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "test",
 		Description: "Generate a table-driven test skeleton (_test.go file) for a function or method. identifier: 'FuncName' for free functions, 'Type.Method' for methods. The test file is created automatically next to the source file.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		testFile, err := commands.GenerateTest(ctx, in.File, in.Identifier)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to generate test: %v", err)), nil, nil
@@ -486,6 +524,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "tag",
 		Description: "Add or update struct field tags. auto='json' or auto='bson' generates snake_case tags for all exported fields in bulk. Use field+set to update a single specific field's tag. identifier is the struct name.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in tagInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		err := commands.TagStruct(ctx, domain.TagRequest{
 			FilePath:   in.File,
 			StructName: in.Identifier,
@@ -503,6 +544,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Name:        "extract_interface",
 		Description: "Extract an interface from an existing struct by scanning all its exported methods — useful when refactoring a concrete type to be testable via an interface. Use out to place the interface in a different file (e.g. a domain package). Set mock_file and mock_name to generate the mock in one step.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in extractInterfaceInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
 		interfaceFile, err := commands.ExtractInterface(ctx, domain.ExtractInterfaceRequest{
 			FilePath:      in.File,
 			StructName:    in.Identifier,
