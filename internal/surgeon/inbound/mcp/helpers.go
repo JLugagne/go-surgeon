@@ -210,3 +210,10 @@ func formatSymbolResults(results []domain.SymbolResult, showBody bool, queryStr 
 	}
 	return sb.String()
 }
+
+func validateGoFile(file string) *mcp.CallToolResult {
+	if !strings.HasSuffix(file, ".go") {
+		return errorResult(fmt.Sprintf("rejected: file %q is not a Go file (.go extension required)", file))
+	}
+	return nil
+}
