@@ -27,7 +27,7 @@ Editing (use instead of Edit/Write/Bash on .go files):
 - update: replace a function, method, struct, or file
 - delete: remove a function, method, or struct
 - insert_call: insert a single statement inside a function body (before-return, end-of-body, after:<marker>)
-- execute_plan: multiple edits in one shot (up to 5 actions, preferred for multi-step changes)
+- execute_plan: multiple edits in one shot (up to 15 actions, preferred for multi-step changes)
 
 Interface & mock management:
 - add_interface / update_interface / delete_interface: manage interfaces and their mocks
@@ -410,7 +410,7 @@ type extractInterfaceInput struct {
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "execute_plan",
-		Description: "Execute up to 5 AST edits atomically from a YAML plan — the preferred tool when making several related changes in one step. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. Content fields must be complete declarations without package declarations or imports; goimports runs after each action. Hard limit: 5 actions per plan.",
+		Description: "Execute up to 15 AST edits atomically from a YAML plan — the preferred tool when making several related changes in one step. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. Content fields must be complete declarations without package declarations or imports; goimports runs after each action.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
 		plan, err := converters.ToDomainPlan([]byte(in.Plan))
 		if err != nil {
