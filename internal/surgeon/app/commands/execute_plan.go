@@ -269,8 +269,8 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		}
 		if warn != "" {
 			warnings = append(warnings, warn)
-			updated = true           // no-op write still counts as "handled"
-			updatedSrc = src         // unchanged
+			updated = true   // no-op write still counts as "handled"
+			updatedSrc = src // unchanged
 		} else {
 			updatedSrc = result
 			updated = true
@@ -305,7 +305,26 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		}
 	}
 
-	return warnings, h.fs.WriteFile(ctx, action.FilePath, updatedSrc)
+	if err := h.fs.WriteFile(ctx, action.FilePath, updatedSrc); err != nil {
+		return nil, err
+	}
+
+	// Auto-generate test skeleton when requested (add_func / update_func only).
+	if action.WithTest && (action.Action == domain.ActionTypeAddFunc || action.Action == domain.ActionTypeUpdateFunc) {
+		identifier := action.Identifier
+		if identifier == "" {
+			identifier, _ = extractFuncIdentifierFromContent(action.Content)
+		}
+		if identifier != "" {
+			if testFile, testErr := h.GenerateTest(ctx, action.FilePath, identifier); testErr != nil {
+				warnings = append(warnings, fmt.Sprintf("with_test: failed to generate test for %s: %v", identifier, testErr))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("with_test: generated test skeleton in %s", testFile))
+			}
+		}
+	}
+
+	return warnings, nil
 }
 
 func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (nodeOffsets, bool) {
@@ -680,7 +699,7 @@ func insertCallIntoFunc(fset *token.FileSet, f *ast.File, src []byte, identifier
 
 	bodyStart := fset.Position(targetFn.Body.Lbrace).Offset // offset of '{'
 	bodyEnd := fset.Position(targetFn.Body.Rbrace).Offset   // offset of '}'
-	bodyContent := string(src[bodyStart+1 : bodyEnd])        // content between braces
+	bodyContent := string(src[bodyStart+1 : bodyEnd])       // content between braces
 
 	// Idempotency: if the exact call is already present, no-op.
 	callTrimmed := strings.TrimSpace(call)

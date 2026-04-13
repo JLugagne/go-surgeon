@@ -68,7 +68,80 @@ func isExported(name string) bool {
 	return unicode.IsUpper([]rune(name)[0])
 }
 
-// GenerateTest generates a table-driven test skeleton for a specific function.
+func typeToString(expr ast.Expr, src []byte, fset *token.FileSet) string {
+	start := fset.Position(expr.Pos()).Offset
+	end := fset.Position(expr.End()).Offset
+	if start >= 0 && end <= len(src) && start <= end {
+		return string(src[start:end])
+	}
+	return ""
+}
+
+// capitalizeFirst uppercases the first rune of s, leaving the rest unchanged.
+// Unlike cases.Title, this preserves interior casing (e.g. "doWork" → "DoWork").
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
+// qualifyType prepends pkgName to an exported type that is not already qualified.
+// Examples:
+//
+//	"*App"       → "*app.App"
+//	"App"        → "app.App"
+//	"*app.App"   → "*app.App"   (already qualified, unchanged)
+//	"*bookRepo"  → "*bookRepo"  (unexported, unchanged)
+func qualifyType(typStr, pkgName string) string {
+	// Strip pointer/slice sigils to examine the base type.
+	prefix := ""
+	base := typStr
+	for len(base) > 0 && (base[0] == '*' || base[0] == '[' || base[0] == ']') {
+		prefix += string(base[0])
+		base = base[1:]
+	}
+	if base == "" {
+		return typStr
+	}
+	// Already package-qualified (contains a dot).
+	if strings.Contains(base, ".") {
+		return typStr
+	}
+	// Only qualify exported identifiers.
+	if !unicode.IsUpper([]rune(base)[0]) {
+		return typStr
+	}
+	return prefix + pkgName + "." + base
+}
+
+// typeNeedsDeepEqual reports whether a Go type string requires reflect.DeepEqual
+// instead of ==. This covers:
+//   - slices ([]T)
+//   - maps (map[K]V)
+//   - funcs (func(...))
+//   - named struct types (exported identifiers) — conservatively treated as
+//     potentially containing slice/map fields, since we cannot inspect their
+//     definition without full type analysis. reflect.DeepEqual is always safe
+//     to use, even on purely comparable structs.
+func typeNeedsDeepEqual(typStr string) bool {
+	t := strings.TrimLeft(typStr, "*")
+	if strings.HasPrefix(t, "[]") ||
+		strings.HasPrefix(t, "map[") ||
+		strings.HasPrefix(t, "func(") {
+		return true
+	}
+	// Named struct type: exported identifier (possibly package-qualified).
+	// Strip package qualifier if present (e.g. "app.App" → "App").
+	base := t
+	if dot := strings.LastIndex(t, "."); dot >= 0 {
+		base = t[dot+1:]
+	}
+	return base != "" && unicode.IsUpper([]rune(base)[0])
+}
+
 func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
 	src, err := h.fs.ReadFile(ctx, filePath)
 	if err != nil {
@@ -179,6 +252,10 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	// it when emitting the test struct fields too.
 	pkgName := f.Name.Name
 	blackBox := recvType == "" || isExported(recvType)
+	// A free function is black-box only if it is exported.
+	if recvType == "" {
+		blackBox = isExported(funcName)
+	}
 
 	// In a black-box test, an exported receiver type must be package-qualified.
 	displayRecvType := recvType
@@ -298,12 +375,17 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		formattedTest = buf.Bytes() // fallback
 	}
 
-	// Write to test file.
-	// Use white-box package (no _test suffix) when the receiver is unexported,
-	// since unexported types are inaccessible from external test packages.
+	// Determine target test file.
+	// - exported func/receiver  → file_test.go       (package xxx_test)
+	// - unexported func/receiver → file_internal_test.go (package xxx, white-box)
 	ext := filepath.Ext(filePath)
 	base := strings.TrimSuffix(filePath, ext)
-	testFile := base + "_test" + ext
+	var testFile string
+	if blackBox {
+		testFile = base + "_test" + ext
+	} else {
+		testFile = base + "_internal_test" + ext
+	}
 
 	testFileSrc, err := h.fs.ReadFile(ctx, testFile)
 	if err != nil {
@@ -319,7 +401,7 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 					header = fmt.Sprintf("package %s_test\n\nimport \"testing\"\n\n", pkgName)
 				}
 			} else {
-				// White-box: unexported receiver type — stay in same package.
+				// White-box: unexported — stay in same package.
 				switch lib {
 				case assertLibTestify:
 					header = fmt.Sprintf("package %s\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName)
@@ -332,6 +414,21 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 			testFileSrc = []byte(header)
 		} else {
 			return "", &domain.Error{Code: "READ_ERROR", Message: "failed to read test file", Err: err}
+		}
+	} else {
+		// File exists: check that testName is not already declared.
+		// For unexported functions, also check the black-box file to avoid
+		// generating a duplicate that would shadow or conflict.
+		if testFuncExists(testFileSrc, testName) {
+			return testFile, nil
+		}
+		if !blackBox {
+			bbFile := base + "_test" + ext
+			if bbSrc, bbErr := h.fs.ReadFile(ctx, bbFile); bbErr == nil {
+				if testFuncExists(bbSrc, testName) {
+					return bbFile, nil
+				}
+			}
 		}
 	}
 
@@ -347,76 +444,22 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	return testFile, nil
 }
 
-func typeToString(expr ast.Expr, src []byte, fset *token.FileSet) string {
-	start := fset.Position(expr.Pos()).Offset
-	end := fset.Position(expr.End()).Offset
-	if start >= 0 && end <= len(src) && start <= end {
-		return string(src[start:end])
+// testFuncExists reports whether a function named funcName is already declared
+// in the given Go source (a test file). It parses the AST so it handles any
+// formatting and avoids false positives from comments or string literals.
+func testFuncExists(src []byte, funcName string) bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		// If we can't parse, assume it doesn't exist so we still try to append.
+		return false
 	}
-	return ""
-}
-
-// capitalizeFirst uppercases the first rune of s, leaving the rest unchanged.
-// Unlike cases.Title, this preserves interior casing (e.g. "doWork" → "DoWork").
-func capitalizeFirst(s string) string {
-	if s == "" {
-		return s
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+			if fn.Name.Name == funcName {
+				return true
+			}
+		}
 	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
-}
-
-// qualifyType prepends pkgName to an exported type that is not already qualified.
-// Examples:
-//
-//	"*App"       → "*app.App"
-//	"App"        → "app.App"
-//	"*app.App"   → "*app.App"   (already qualified, unchanged)
-//	"*bookRepo"  → "*bookRepo"  (unexported, unchanged)
-func qualifyType(typStr, pkgName string) string {
-	// Strip pointer/slice sigils to examine the base type.
-	prefix := ""
-	base := typStr
-	for len(base) > 0 && (base[0] == '*' || base[0] == '[' || base[0] == ']') {
-		prefix += string(base[0])
-		base = base[1:]
-	}
-	if base == "" {
-		return typStr
-	}
-	// Already package-qualified (contains a dot).
-	if strings.Contains(base, ".") {
-		return typStr
-	}
-	// Only qualify exported identifiers.
-	if !unicode.IsUpper([]rune(base)[0]) {
-		return typStr
-	}
-	return prefix + pkgName + "." + base
-}
-
-// typeNeedsDeepEqual reports whether a Go type string requires reflect.DeepEqual
-// instead of ==. This covers:
-//   - slices ([]T)
-//   - maps (map[K]V)
-//   - funcs (func(...))
-//   - named struct types (exported identifiers) — conservatively treated as
-//     potentially containing slice/map fields, since we cannot inspect their
-//     definition without full type analysis. reflect.DeepEqual is always safe
-//     to use, even on purely comparable structs.
-func typeNeedsDeepEqual(typStr string) bool {
-	t := strings.TrimLeft(typStr, "*")
-	if strings.HasPrefix(t, "[]") ||
-		strings.HasPrefix(t, "map[") ||
-		strings.HasPrefix(t, "func(") {
-		return true
-	}
-	// Named struct type: exported identifier (possibly package-qualified).
-	// Strip package qualifier if present (e.g. "app.App" → "App").
-	base := t
-	if dot := strings.LastIndex(t, "."); dot >= 0 {
-		base = t[dot+1:]
-	}
-	return base != "" && unicode.IsUpper([]rune(base)[0])
+	return false
 }
