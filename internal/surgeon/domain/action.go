@@ -1,8 +1,6 @@
 package domain
 
-import (
-	"errors"
-)
+import "errors"
 
 // ActionType defines the type of action to be performed.
 type ActionType string
@@ -31,7 +29,6 @@ const (
 	// InsertEndOfBody places the call at the end of the function body, before the closing brace.
 	InsertEndOfBody InsertPosition = "end-of-body"
 	// InsertAfterMarker places the call after the first comment line that contains the marker text.
-	// The marker is taken from the Position field after the "after:" prefix, e.g. "after:// routes".
 	InsertAfterMarker InsertPosition = "after-marker"
 )
 
@@ -47,6 +44,7 @@ type Action struct {
 	Doc         string         `yaml:"doc"`
 	StripDoc    bool           `yaml:"strip_doc"`
 	Position    InsertPosition `yaml:"position"`
+	WithTest    bool           `yaml:"with_test"`
 }
 
 // PlanResult contains the outcome of executing a plan.

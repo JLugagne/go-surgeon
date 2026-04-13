@@ -17,8 +17,10 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 	var id string
 	var doc string
 	var stripDoc bool
+	var withTest bool
 
 	isUpdate := actionType == domain.ActionTypeUpdateFunc || actionType == domain.ActionTypeUpdateStruct
+	isFuncOp := actionType == domain.ActionTypeAddFunc || actionType == domain.ActionTypeUpdateFunc
 
 	cmd := &cobra.Command{
 		Use:     name,
@@ -47,6 +49,7 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 				Content:    content,
 				Doc:        doc,
 				StripDoc:   stripDoc,
+				WithTest:   withTest,
 			}
 
 			result, err := surgeon.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{action}})
@@ -89,6 +92,9 @@ func NewActionCommand(surgeon service.SurgeonCommands, actionType domain.ActionT
 	if isUpdate {
 		cmd.Flags().StringVar(&doc, "doc", "", "Set or replace the doc comment (raw text, // prefix added automatically)")
 		cmd.Flags().BoolVar(&stripDoc, "strip-doc", false, "Remove the existing doc comment")
+	}
+	if isFuncOp {
+		cmd.Flags().BoolVar(&withTest, "with-test", false, "Generate a test skeleton alongside the function")
 	}
 	return cmd
 }

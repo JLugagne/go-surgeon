@@ -157,6 +157,7 @@ type createInput struct {
 	File       string `json:"file" jsonschema:"target file path"`
 	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
 	Identifier string `json:"identifier,omitempty" jsonschema:"ignored — identifier is inferred from content; accepted to avoid validation errors"`
+	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function (only applies when object=func)"`
 }
 
 type updateInput struct {
@@ -166,6 +167,7 @@ type updateInput struct {
 	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
 	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
 	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
+	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function (only applies when object=func)"`
 }
 
 type deleteInput struct {
@@ -208,6 +210,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			Action:   actionType,
 			FilePath: in.File,
 			Content:  in.Content,
+			WithTest: in.WithTest,
 		}}})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (create %s): %v", in.Object, err)), nil, nil
@@ -240,6 +243,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			Content:    in.Content,
 			Doc:        in.Doc,
 			StripDoc:   in.StripDoc,
+			WithTest:   in.WithTest,
 		}}})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update %s): %v", in.Object, err)), nil, nil

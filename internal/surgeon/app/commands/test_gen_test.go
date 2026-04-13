@@ -21,11 +21,11 @@ import "context"
 type Service struct{}
 
 func (s *Service) DoWork(ctx context.Context, id int, name string) (string, error) {
-	return "", nil
+  return "", nil
 }
 
 func SimpleFunc() string {
-	return "ok"
+  return "ok"
 }
 `)
 
@@ -69,14 +69,14 @@ func SimpleFunc() string {
 type bookRepository struct{}
 
 func (b *bookRepository) Create(id int) error {
-	return nil
+  return nil
 }
 `)
 		testFile, err := h2.GenerateTest(ctx, "pkg/repo.go", "(*bookRepository).Create")
 		require.NoError(t, err)
-		// Bug 001: unexported receiver → white-box test file, same package name (no _test suffix in package decl).
-		assert.Equal(t, "pkg/repo_test.go", testFile)
-		testSrc := string(fs2.files["pkg/repo_test.go"])
+		// Unexported receiver → white-box internal test file, same package name (no _test suffix in package decl).
+		assert.Equal(t, "pkg/repo_internal_test.go", testFile)
+		testSrc := string(fs2.files["pkg/repo_internal_test.go"])
 		// White-box: package pg (not pg_test)
 		assert.Contains(t, testSrc, "package pg\n")
 		assert.NotContains(t, testSrc, "package pg_test")
@@ -92,9 +92,9 @@ func (b *bookRepository) Create(id int) error {
 		fs3.files["pkg/other_test.go"] = []byte(`package pg_test
 
 import (
-	"testing"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+  "testing"
+  "github.com/stretchr/testify/assert"
+  "github.com/stretchr/testify/require"
 )
 
 func TestOther(t *testing.T) {}
@@ -102,7 +102,7 @@ func TestOther(t *testing.T) {}
 		fs3.files["pkg/service.go"] = []byte(`package pg
 
 func Compute(x int) int {
-	return x * 2
+  return x * 2
 }
 `)
 		testFile, err := h3.GenerateTest(ctx, "pkg/service.go", "Compute")
@@ -125,7 +125,7 @@ func Compute(x int) int {
 type App struct{}
 
 func (a *App) CreateBook(title string) error {
-	return nil
+  return nil
 }
 `)
 		testFile, err := h4.GenerateTest(ctx, "app/book.go", "App.CreateBook")
@@ -150,7 +150,7 @@ func (a *App) CreateBook(title string) error {
 type BookListResponse struct{ Items []string }
 
 func ToPublicBookList(ids []string) BookListResponse {
-	return BookListResponse{}
+  return BookListResponse{}
 }
 `)
 		_, err := h5.GenerateTest(ctx, "conv/book.go", "ToPublicBookList")
@@ -171,7 +171,7 @@ func ToPublicBookList(ids []string) BookListResponse {
 		fs6.files["svc/book.go"] = []byte(`package svc
 
 func ListIDs() []string {
-	return nil
+  return nil
 }
 `)
 		_, err := h6.GenerateTest(ctx, "svc/book.go", "ListIDs")
@@ -181,5 +181,50 @@ func ListIDs() []string {
 		// []string return → must use reflect.DeepEqual, not got != want
 		assert.Contains(t, testSrc, "reflect.DeepEqual")
 		assert.NotContains(t, testSrc, "got != want")
+	})
+
+	t.Run("unexported free function uses internal test file", func(t *testing.T) {
+		fs7 := &mockFS{files: make(map[string][]byte)}
+		h7 := commands.NewExecutePlanHandler(fs7)
+
+		fs7.files["util/helper.go"] = []byte(`package util
+
+func computeHash(s string) int {
+  return len(s)
+}
+`)
+		testFile, err := h7.GenerateTest(ctx, "util/helper.go", "computeHash")
+		require.NoError(t, err)
+		assert.Equal(t, "util/helper_internal_test.go", testFile)
+		testSrc := string(fs7.files["util/helper_internal_test.go"])
+		assert.Contains(t, testSrc, "package util\n")
+		assert.NotContains(t, testSrc, "package util_test")
+		// Unexported free function: no package qualification
+		assert.Contains(t, testSrc, "computeHash(")
+		assert.NotContains(t, testSrc, "util.computeHash(")
+	})
+
+	t.Run("test dedup: skips if test func already exists", func(t *testing.T) {
+		fs8 := &mockFS{files: make(map[string][]byte)}
+		h8 := commands.NewExecutePlanHandler(fs8)
+
+		fs8.files["svc/foo.go"] = []byte(`package svc
+
+func Greet(name string) string {
+  return "hello " + name
+}
+`)
+		fs8.files["svc/foo_test.go"] = []byte(`package svc_test
+
+import "testing"
+
+func TestGreet(t *testing.T) {}
+`)
+		testFile, err := h8.GenerateTest(ctx, "svc/foo.go", "Greet")
+		require.NoError(t, err)
+		// Returns existing file path without duplicating
+		assert.Equal(t, "svc/foo_test.go", testFile)
+		// File content unchanged (TestGreet not duplicated)
+		assert.Equal(t, 1, strings.Count(string(fs8.files["svc/foo_test.go"]), "func TestGreet"))
 	})
 }
