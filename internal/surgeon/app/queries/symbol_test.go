@@ -149,3 +149,41 @@ func TestFindSymbols_DefaultExcludesTestFiles(t *testing.T) {
 		assert.Equal(t, "TestHelper", res[0].Name)
 	})
 }
+
+func TestFindSymbols_Pattern(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.go")
+	code := `package testpkg
+
+type PatchFoo struct{}
+type PatchBar struct{}
+func (p *PatchFoo) Apply() error { return nil }
+func HelperFunc() {}
+`
+	require.NoError(t, os.WriteFile(filePath, []byte(code), 0644))
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(code)}}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	t.Run("matches multiple declarations by regex", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "^Patch"}, tmpDir)
+		require.NoError(t, err)
+		names := map[string]bool{}
+		for _, r := range res {
+			names[r.Name] = true
+		}
+		assert.True(t, names["PatchFoo"], "expected PatchFoo in results")
+		assert.True(t, names["PatchBar"], "expected PatchBar in results")
+		assert.False(t, names["HelperFunc"], "HelperFunc should not match ^Patch")
+	})
+
+	t.Run("invalid regex returns error", func(t *testing.T) {
+		_, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "([unclosed"}, tmpDir)
+		require.Error(t, err)
+	})
+
+	t.Run("no match returns empty", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "^ZZZNotReal$"}, tmpDir)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
+}

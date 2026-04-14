@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -42,6 +43,14 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 	}
 
 	var results []domain.SymbolResult
+	var nameRE *regexp.Regexp
+	if query.Pattern != "" {
+		re, err := regexp.Compile(query.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pattern %q: %w", query.Pattern, err)
+		}
+		nameRE = re
+	}
 
 	err := filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -82,12 +91,19 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 					recvName = getRecvType(fn.Recv)
 				}
 
-				if fn.Name.Name == query.Name && (query.Receiver == "" || query.Receiver == recvName) {
+				nameMatches := nameRE != nil && nameRE.MatchString(fn.Name.Name) || nameRE == nil && fn.Name.Name == query.Name
+				if nameMatches && (query.Receiver == "" || query.Receiver == recvName) {
 					results = append(results, h.extractFuncResult(fset, src, fn, path, recvName))
 				}
 			} else if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE && query.Receiver == "" {
 				for _, spec := range gen.Specs {
-					if typeSpec, ok := spec.(*ast.TypeSpec); ok && typeSpec.Name.Name == query.Name {
+					tsMatches := func(n string) bool {
+						if nameRE != nil {
+							return nameRE.MatchString(n)
+						}
+						return n == query.Name
+					}
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok && tsMatches(typeSpec.Name.Name) {
 						results = append(results, h.extractStructResult(fset, src, gen, typeSpec, path))
 					}
 				}
