@@ -143,21 +143,30 @@ func parseInterfaceMethods(fset *token.FileSet, src []byte, it *ast.InterfaceTyp
 		if field.Doc != nil {
 			doc = extractDocText(field.Doc)
 		}
+		var inlineComment string
+		if field.Comment != nil {
+			inlineComment = extractDocText(field.Comment)
+		}
 		rawStart := field.Pos()
 		if field.Doc != nil {
 			rawStart = field.Doc.Pos()
 		}
-		rawLine := extractSourceRange(src, fset, rawStart, field.End())
+		rawEnd := field.End()
+		if field.Comment != nil {
+			rawEnd = field.Comment.End()
+		}
+		rawLine := extractLineRange(src, fset, rawStart, rawEnd)
 
 		if len(field.Names) == 0 {
 			// Embedded interface.
 			typeExpr := extractSourceRange(src, fset, field.Type.Pos(), field.Type.End())
 			out = append(out, &element{
-				name:     typeExpr,
-				kind:     "embed",
-				typeExpr: typeExpr,
-				doc:      doc,
-				rawLine:  rawLine,
+				name:          typeExpr,
+				kind:          "embed",
+				typeExpr:      typeExpr,
+				doc:           doc,
+				inlineComment: inlineComment,
+				rawLine:       rawLine,
 			})
 			continue
 		}
@@ -174,11 +183,12 @@ func parseInterfaceMethods(fset *token.FileSet, src []byte, it *ast.InterfaceTyp
 		// An interface method field can declare multiple names (rare but legal).
 		for _, n := range field.Names {
 			out = append(out, &element{
-				name:     n.Name,
-				kind:     "method",
-				typeExpr: sig,
-				doc:      doc,
-				rawLine:  rawLine,
+				name:          n.Name,
+				kind:          "method",
+				typeExpr:      sig,
+				doc:           doc,
+				inlineComment: inlineComment,
+				rawLine:       rawLine,
 			})
 			if len(field.Names) > 1 {
 				out[len(out)-1].dirty = true
@@ -412,4 +422,3 @@ func extractInterfaceSource(src []byte, name string) string {
 	}
 	return ""
 }
-

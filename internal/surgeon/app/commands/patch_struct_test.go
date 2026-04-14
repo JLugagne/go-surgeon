@@ -485,3 +485,113 @@ type R struct {
 		assert.Contains(t, content, "Name string")
 	})
 }
+
+func TestPatchStruct_PreservesInlineComments(t *testing.T) {
+	ctx := context.Background()
+
+	src := `package p
+
+type User struct {
+	ID   string // primary key
+	Name string // display name
+	Age  int
+}
+`
+
+	t.Run("add_field preserves inline comments on siblings", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpAddField, Name: "Email", Type: "string"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key", "inline comment on ID was dropped")
+		assert.Contains(t, content, "// display name", "inline comment on Name was dropped")
+	})
+
+	t.Run("remove_field preserves inline comments on siblings", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpRemoveField, Name: "Age"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key")
+		assert.Contains(t, content, "// display name")
+	})
+
+	t.Run("rename_field preserves the inline comment on the renamed field", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpRenameField, From: "ID", To: "Identifier"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key", "inline comment should move with renamed field")
+		assert.Contains(t, content, "// display name")
+	})
+
+	t.Run("retype_field preserves the inline comment on the retyped field", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpRetypeField, Name: "ID", Type: "int64"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key", "inline comment should survive retype")
+		assert.Contains(t, content, "// display name")
+	})
+
+	t.Run("set_tag preserves inline comment on the tagged field", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpSetTag, Name: "Name", Tag: `json:"name"`},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key")
+		assert.Contains(t, content, "// display name", "inline comment should survive set_tag")
+	})
+
+	t.Run("set_doc preserves inline comment on the doc'd field", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpSetDoc, Name: "Name", Doc: "Name is the user's full name."},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// primary key")
+		// after set_doc, Name gets a doc comment above; inline "display name" may be retained or moved
+		// the critical check is that ID's inline comment survives.
+	})
+}

@@ -1173,3 +1173,40 @@ func F() {
 		assert.Contains(t, err.Error(), "...", "long lines should be truncated with ...")
 	})
 }
+
+func TestPatchFunction_DeleteMultiLineBlockWithEmbeddedQuotes(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+
+	setFile(fs, "main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("a")
+	if err := foo(); err == nil {
+		panic("forcing YAML on JSON payload should fail")
+	}
+	fmt.Println("b")
+}
+
+func foo() error { return nil }
+`)
+
+	matchText := `if err := foo(); err == nil {
+		panic("forcing YAML on JSON payload should fail")
+	}`
+
+	res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+		FilePath:   "main.go",
+		Identifier: "main",
+		Patches: []domain.FunctionPatch{
+			{Op: domain.PatchOpDelete, Match: matchText},
+		},
+	})
+	require.NoError(t, err, "multi-line delete with embedded quotes should match")
+	assert.Equal(t, 1, res.Applied)
+
+	content := getFile(fs, "main.go")
+	assert.NotContains(t, content, "forcing YAML on JSON payload should fail")
+}
