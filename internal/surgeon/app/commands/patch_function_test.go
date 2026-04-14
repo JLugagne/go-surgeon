@@ -2,6 +2,7 @@ package commands_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1016,5 +1017,159 @@ func F() {
 		case <-time.After(2 * time.Second):
 			t.Fatal("regex match hung — RE2 should run in linear time on (a+)+$")
 		}
+	})
+}
+
+// TestPatchFunction_MultiLineMatchAcrossNewline reproduces a failure observed
+// in the harness-eval run-26 logs: an agent passed a multi-line match
+// (a comment line followed by the next code line) and got "no match found"
+// even though the text was definitely present.
+//
+// Root cause: mapNormBodyToOrig walked from byte 0 of the original body, but
+// normalizeWS (via strings.Fields) trims leading whitespace — so on bodies
+// that start with "\n\t" (the universal case for function bodies), the walk
+// failed on the first character.
+func TestPatchFunction_MultiLineMatchAcrossNewline(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+
+	setFile(fs, "main.go", `package main
+
+func main() {
+	defer pool.Close()
+
+	// Kafka backend: use a no-op backend (replace with a real kafka.Writer when ready).
+	kafkaBackend := kafkaadapter.NewNoopBackend()
+
+	backends := catalog.Backends{
+		Postgres: pool,
+	}
+	_ = backends
+	_ = kafkaBackend
+}
+`)
+
+	// Exact match string from the failed agent call (comment + next line).
+	matchText := "// Kafka backend: use a no-op backend (replace with a real kafka.Writer when ready).\n\tkafkaBackend := kafkaadapter.NewNoopBackend()"
+	replaceText := "// Kafka backend: no-op (replace with a real broker client when ready).\n\tkafkaBackend := catalog.NoopKafkaBackend{}"
+
+	res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+		FilePath:   "main.go",
+		Identifier: "main",
+		Patches: []domain.FunctionPatch{
+			{Op: domain.PatchOpReplace, Match: matchText, Replace: replaceText},
+		},
+	})
+	require.NoError(t, err, "the multi-line match should be found")
+	assert.Equal(t, 1, res.Applied)
+
+	content := getFile(fs, "main.go")
+	assert.Contains(t, content, "no-op (replace with a real broker client when ready)")
+	assert.Contains(t, content, "catalog.NoopKafkaBackend{}")
+	assert.NotContains(t, content, "kafkaadapter.NewNoopBackend()")
+}
+
+// TestPatchFunction_NoMatchSuggestsClosest verifies that a failed match
+// returns "did you mean?" hints listing the lines that share the most tokens
+// with the needle, so the agent can fix its call without re-reading the file.
+// TestPatchFunction_NoMatchSuggestsClosest verifies that a failed match
+// returns "did you mean?" hints listing the lines that share the most tokens
+// with the needle, so the agent can fix its call without re-reading the file.
+func TestPatchFunction_NoMatchSuggestsClosest(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("suggests lines sharing tokens with the needle", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+
+func F() {
+	for _, item := range items {
+		doThing(item)
+	}
+	for _, book := range books {
+		doThing(book)
+	}
+	x := 1
+	_ = x
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "F",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "for _, thing := range things {", Replace: "// gone"},
+			},
+		})
+		require.Error(t, err)
+		msg := err.Error()
+		assert.Contains(t, msg, "no match found")
+		assert.Contains(t, msg, "Closest lines")
+		assert.Contains(t, msg, "for _, item := range items {")
+		assert.Contains(t, msg, "for _, book := range books {")
+		assert.Contains(t, msg, "L")
+	})
+
+	t.Run("omits suggestions when no line shares any token", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+
+func F() {
+	x := 1
+	_ = x
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "F",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "completely_unrelated_stuff_here", Replace: "x"},
+			},
+		})
+		require.Error(t, err)
+		msg := err.Error()
+		assert.Contains(t, msg, "no match found")
+		assert.NotContains(t, msg, "Closest lines")
+	})
+
+	t.Run("caps suggestions at 3 lines", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		var body strings.Builder
+		body.WriteString("package p\n\nfunc F() {\n")
+		for i := 0; i < 10; i++ {
+			fmt.Fprintf(&body, "\tdoThing(%d)\n", i)
+		}
+		body.WriteString("}\n")
+		setFile(fs, "f.go", body.String())
+
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "F",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "doThing(999)", Replace: "x"},
+			},
+		})
+		require.Error(t, err)
+		count := strings.Count(err.Error(), "tokens):")
+		assert.Equal(t, 3, count, "suggestion list should be capped at 3")
+	})
+
+	t.Run("truncates very long candidate lines", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		// Long line inside a string literal so Go still parses. The token
+		// 'reallylongtoken' is shared between body and needle, so the line
+		// will be scored as a candidate and must be truncated with '...'.
+		longLit := strings.Repeat("reallylongtoken ", 20) + "finalToken"
+		src := "package p\n\nfunc F() {\n\ts := \"" + longLit + "\"\n\t_ = s\n}\n"
+		setFile(fs, "f.go", src)
+
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "F",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "reallylongtoken needs fixing", Replace: "x"},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "...", "long lines should be truncated with ...")
 	})
 }
