@@ -522,3 +522,78 @@ func TestPatchInterface_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+func TestPatchInterface_PreservesInlineComments(t *testing.T) {
+	ctx := context.Background()
+
+	src := `package p
+
+type Reader interface {
+	Read(p []byte) (int, error) // core read method
+	Close() error               // release resources
+}
+`
+
+	t.Run("add_method preserves sibling inline comments", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   "f.go",
+			Identifier: "Reader",
+			Patches: []domain.InterfacePatch{
+				{Op: domain.InterfacePatchOpAddMethod, Signature: "Seek(offset int64) (int64, error)"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// core read method")
+		assert.Contains(t, content, "// release resources")
+	})
+
+	t.Run("rename_method preserves inline comment", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   "f.go",
+			Identifier: "Reader",
+			Patches: []domain.InterfacePatch{
+				{Op: domain.InterfacePatchOpRenameMethod, From: "Read", To: "ReadBytes"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// core read method", "inline comment should move with renamed method")
+		assert.Contains(t, content, "// release resources")
+	})
+
+	t.Run("retype_method preserves inline comment", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   "f.go",
+			Identifier: "Reader",
+			Patches: []domain.InterfacePatch{
+				{Op: domain.InterfacePatchOpRetypeMethod, Name: "Read", Signature: "Read(buf []byte) (int, error)"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// core read method")
+		assert.Contains(t, content, "// release resources")
+	})
+
+	t.Run("remove_method preserves other inline comments", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   "f.go",
+			Identifier: "Reader",
+			Patches: []domain.InterfacePatch{
+				{Op: domain.InterfacePatchOpRemoveMethod, Name: "Close"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// core read method")
+	})
+}

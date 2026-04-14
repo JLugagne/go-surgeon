@@ -658,3 +658,51 @@ type OrderRepository interface {
 	// File must not be modified.
 	assert.Equal(t, initialCode, string(fs.files[filePath]))
 }
+
+func TestUpdate_PreservesUnrelatedInlineComments(t *testing.T) {
+	ctx := context.Background()
+
+	src := `package p
+
+// Foo returns a number.
+func Foo() int { return 1 } // Foo is trivial
+
+type Bar struct {
+	X int // x-coord
+	Y int // y-coord
+}
+
+func Baz() string { return "baz" } // Baz greets
+`
+
+	t.Run("update_func leaves other symbols' inline comments intact", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.Handle(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateFunc,
+			FilePath:   "f.go",
+			Identifier: "Foo",
+			Content:    "func Foo() int { return 2 }",
+		}}})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// x-coord", "struct field inline comment lost")
+		assert.Contains(t, content, "// y-coord", "struct field inline comment lost")
+		assert.Contains(t, content, "// Baz greets", "sibling func inline comment lost")
+	})
+
+	t.Run("update_struct leaves other symbols' inline comments intact", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.Handle(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateStruct,
+			FilePath:   "f.go",
+			Identifier: "Bar",
+			Content:    "type Bar struct {\n\tX int\n\tY int\n\tZ int\n}",
+		}}})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// Foo is trivial", "sibling func inline comment lost")
+		assert.Contains(t, content, "// Baz greets", "sibling func inline comment lost")
+	})
+}

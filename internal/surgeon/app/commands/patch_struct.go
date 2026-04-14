@@ -107,6 +107,8 @@ type element struct {
 	// dirty is true when the element has been mutated (so the renderer emits a
 	// fresh line rather than copying rawLine).
 	dirty bool
+	// Trailing // comment on the same line as the field, without the leading //, or empty.
+	inlineComment string
 }
 
 // findTargetStruct locates the target struct declaration by name.
@@ -148,32 +150,52 @@ func parseStructFields(fset *token.FileSet, src []byte, st *ast.StructType) []*e
 		if field.Doc != nil {
 			doc = extractDocText(field.Doc)
 		}
+
+		// inlineComment is the // comment on the same line as the field declaration.
+		// We store it as raw text (without the leading //) so the renderer can
+		// re-emit it when the element becomes dirty.
+		var inlineComment string
+		if field.Comment != nil {
+			inlineComment = extractDocText(field.Comment)
+		}
+
+		// rawLine captures the full original source lines for this element —
+		// starting at the beginning of the line containing the doc (or the field,
+		// if no doc) and ending at the end of the line containing the trailing
+		// comment (or the field end). This preserves indentation AND inline
+		// comments verbatim when the element is not mutated.
 		rawStart := field.Pos()
 		if field.Doc != nil {
 			rawStart = field.Doc.Pos()
 		}
-		rawLine := extractSourceRange(src, fset, rawStart, field.End())
+		rawEnd := field.End()
+		if field.Comment != nil {
+			rawEnd = field.Comment.End()
+		}
+		rawLine := extractLineRange(src, fset, rawStart, rawEnd)
 
 		if len(field.Names) == 0 {
 			// Embedded field — the "name" is the bare type literal.
 			out = append(out, &element{
-				name:     typeExpr,
-				kind:     "embed",
-				typeExpr: typeExpr,
-				tag:      tag,
-				doc:      doc,
-				rawLine:  rawLine,
+				name:          typeExpr,
+				kind:          "embed",
+				typeExpr:      typeExpr,
+				tag:           tag,
+				doc:           doc,
+				inlineComment: inlineComment,
+				rawLine:       rawLine,
 			})
 			continue
 		}
 		for _, n := range field.Names {
 			out = append(out, &element{
-				name:     n.Name,
-				kind:     "field",
-				typeExpr: typeExpr,
-				tag:      tag,
-				doc:      doc,
-				rawLine:  rawLine,
+				name:          n.Name,
+				kind:          "field",
+				typeExpr:      typeExpr,
+				tag:           tag,
+				doc:           doc,
+				inlineComment: inlineComment,
+				rawLine:       rawLine,
 			})
 			// When a field declaration groups multiple names (x, y int), we
 			// only have a single raw line — we can't copy it per-name, so
@@ -459,5 +481,32 @@ func renderElement(e *element, indent string) string {
 		b.WriteByte(' ')
 		b.WriteString(e.tag)
 	}
+	// Re-emit the trailing inline comment so it survives rendering of a dirty
+	// element (e.g. after rename/retype/set_tag).
+	if e.inlineComment != "" {
+		b.WriteString(" // ")
+		b.WriteString(e.inlineComment)
+	}
 	return b.String()
+}
+
+// extractLineRange returns the substring of src spanning from the start of the
+// line containing `start` to the end of the line containing `end`. This
+// preserves leading indentation and trailing inline comments that
+// extractSourceRange drops.
+func extractLineRange(src []byte, fset *token.FileSet, start, end token.Pos) string {
+	s := fset.Position(start).Offset
+	e := fset.Position(end).Offset
+	if s < 0 || e > len(src) || s >= e {
+		return ""
+	}
+	// Extend s back to the start of its line.
+	for s > 0 && src[s-1] != '\n' {
+		s--
+	}
+	// Extend e forward to the end of its line (but not past the newline).
+	for e < len(src) && src[e] != '\n' {
+		e++
+	}
+	return string(src[s:e])
 }
