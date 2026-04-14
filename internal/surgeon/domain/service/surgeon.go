@@ -17,6 +17,7 @@ type SurgeonCommands interface {
 	GenerateTest(ctx context.Context, filePath, identifier string) (string, error)
 	TagStruct(ctx context.Context, req domain.TagRequest) error
 	ExtractInterface(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
+	PatchFunction(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
 }
 
 // SurgeonQueries defines the interface for querying the codebase AST.

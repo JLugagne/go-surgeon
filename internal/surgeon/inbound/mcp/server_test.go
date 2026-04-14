@@ -16,15 +16,16 @@ import (
 // --- Mock service implementations ---
 
 type mockCommands struct {
-	executePlanFn        func(ctx context.Context, plan domain.Plan) (domain.PlanResult, error)
-	implementFn          func(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error)
-	mockFn               func(ctx context.Context, req domain.MockRequest) (string, error)
-	addInterfaceFn       func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
-	updateInterfaceFn    func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
-	deleteInterfaceFn    func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
-	generateTestFn       func(ctx context.Context, filePath, identifier string) (string, error)
-	tagStructFn          func(ctx context.Context, req domain.TagRequest) error
-	extractInterfaceFn   func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
+	executePlanFn      func(ctx context.Context, plan domain.Plan) (domain.PlanResult, error)
+	implementFn        func(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error)
+	mockFn             func(ctx context.Context, req domain.MockRequest) (string, error)
+	addInterfaceFn     func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
+	updateInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
+	deleteInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
+	generateTestFn     func(ctx context.Context, filePath, identifier string) (string, error)
+	tagStructFn        func(ctx context.Context, req domain.TagRequest) error
+	extractInterfaceFn func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
+	patchFunctionFn    func(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -168,6 +169,7 @@ func TestToolsList(t *testing.T) {
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
+		"patch_function",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -954,4 +956,11 @@ func TestGraph_WithSummaryAndDeps(t *testing.T) {
 	text := resultText(t, result)
 	assert.True(t, strings.Contains(text, "Core domain types"))
 	assert.True(t, strings.Contains(text, "internal/util"))
+}
+
+func (m *mockCommands) PatchFunction(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error) {
+	if m.patchFunctionFn != nil {
+		return m.patchFunctionFn(ctx, req)
+	}
+	return domain.PatchFunctionResult{}, nil
 }
