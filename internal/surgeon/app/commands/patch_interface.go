@@ -71,6 +71,11 @@ func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.Patc
 	newSrc = append(newSrc, []byte("\n"+newBody+"\n")...)
 	newSrc = append(newSrc, src[rbraceOff:]...)
 
+	// Reject the patch before writing if it would produce invalid Go.
+	if err := validateGoSource(req.FilePath, newSrc); err != nil {
+		return domain.PatchInterfaceResult{}, err
+	}
+
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
 
 	if req.Preview {
