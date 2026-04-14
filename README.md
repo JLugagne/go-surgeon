@@ -70,6 +70,10 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 `add_interface` and `update_interface` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `extract_interface` pulls an interface out of an existing struct in one command.
 
+### 5. Edits can be as granular as a single field or line
+
+`patch_function` makes text-match edits inside a function body. `patch_struct` adds, renames, or retypes a single field. `patch_interface` adds or removes a single method and regenerates the mock. No more re-emitting a whole declaration to change one thing.
+
 ---
 
 ## Quick Start
@@ -109,17 +113,20 @@ The server auto-advertises instructions telling the agent to use go-surgeon tool
 go-surgeon mcp
 ```
 
-15 tools over stdio, grouped by purpose:
+18 tools over stdio, grouped by purpose:
 
 | Tools | Purpose |
 |---|---|
 | `graph`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
 | `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write** |
+| `patch_function`, `patch_struct`, `patch_interface` | Surgical in-place edits: one line inside a body, one struct field, one interface method — **avoids re-emitting whole declarations** |
 | `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`) |
-| `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated mocks |
+| `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated (and auto-deleted) mocks |
 | `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
 | `execute_plan` | Run up to 15 edits atomically from a YAML plan |
+
+All `patch_*` tools support `preview=true` to return a diff without writing.
 
 See [`USAGE.md`](USAGE.md) for the full parameter reference.
 
@@ -169,6 +176,36 @@ actions:
 
 One tool call. One success or one rollback. No drift between steps.
 
+### `patch_function` / `patch_struct` / `patch_interface` — edit without re-emitting
+
+Classic AST edit tools make you resend the whole declaration to change one line. The `patch_*` tools apply surgical, text-match edits scoped to a single function body, struct, or interface — all atomic, all `goimports`-aware, all optionally previewable as a diff.
+
+```
+patch_struct(
+  file="internal/catalog/domain/user.go",
+  identifier="User",
+  patches=[
+    {op: "add_field", name: "Email", type: "string", tag: "json:\"email\""},
+    {op: "rename_field", from: "Name", to: "DisplayName"},
+    {op: "remove_field", name: "LegacyID"},
+  ],
+)
+```
+
+```
+patch_interface(
+  file="internal/catalog/domain/repositories/book/book.go",
+  identifier="BookRepository",
+  mock_file="internal/catalog/domain/repositories/book/booktest/mock.go",
+  mock_name="MockBookRepository",
+  patches=[
+    {op: "add_method", signature: "Archive(ctx context.Context, id BookID) error"},
+  ],
+)
+```
+
+`patch_function` does the same for function bodies, with `replace`, `insert_before`, `insert_after`, `delete`, and `wrap` operations — including RE2 regex matching when literal text isn't enough. The agent sends 3 lines of change, not 50 lines of function body.
+
 ### `module` — read third-party code the right way
 
 Instead of your agent shelling into `$GOMODCACHE` with `find` and `cat`:
@@ -212,12 +249,13 @@ See [`USAGE.md`](USAGE.md) for the full CLI reference.
 
 ## 🔒 Safety
 
-> ⚠️ **Edits modify your source code directly.** Use `--dry-run` to preview as a unified diff before applying.
+> ⚠️ **Edits modify your source code directly.** Use `--dry-run` (CLI) or `preview=true` (MCP `patch_*` tools) to see the unified diff before applying.
 
-- **`--dry-run` / `--diff`** prints the unified diff for every change without writing to disk
-- **Atomic operations** — each edit either fully succeeds or returns a structured error
+- **`--dry-run` / `--diff`** (CLI) prints the unified diff for every change without writing to disk
+- **`preview=true`** (MCP `patch_function` / `patch_struct` / `patch_interface`) returns the diff without writing
+- **Atomic operations** — each edit either fully succeeds or returns a structured error; `patch_*` tools abort the whole batch on any single failure
 - **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
-- **`delete_interface` does not auto-delete the mock** — by design, the broken compile-time assertion forces explicit cleanup
+- **Mocks stay in sync** — `delete_interface` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
 
 ---
 
