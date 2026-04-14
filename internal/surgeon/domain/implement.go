@@ -15,12 +15,14 @@ type MockRequest struct {
 }
 
 // InterfaceActionRequest contains the parameters for add/update/delete-interface commands.
+// InterfaceActionRequest contains the parameters for add/update/delete-interface commands.
 type InterfaceActionRequest struct {
 	FilePath   string // --file: file containing the interface
 	Identifier string // --id: interface name (required for update/delete)
 	Content    string // stdin: interface type declaration source (add/update)
-	MockFile   string // --mock-file: target file for the generated mock (add/update)
-	MockName   string // --mock-name: name of the mock struct (add/update)
+	MockFile   string // --mock-file: target file for the generated mock (add/update/delete)
+	MockName   string // --mock-name: name of the mock struct (add/update/delete)
 	Doc        string // --doc: replacement doc comment (update only)
 	StripDoc   bool   // --strip-doc: remove existing doc comment (update only)
+	DeleteMock bool   // --delete-mock: also remove the mock struct + assertion from MockFile (delete only)
 }

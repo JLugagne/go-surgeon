@@ -58,7 +58,12 @@ When to use each editing tool:
 Rules that apply to all tools:
 - Never include package declarations or import blocks in content — goimports runs automatically.
 - Always call symbol with body=true before updating or deleting.
-- identifier format: FuncName (free function), Receiver.Method (method), StructName (struct).`
+- identifier format:
+  - FuncName                — free function
+  - Receiver.Method         — method on a type (pointer or value receiver)
+  - StructName              — struct type
+  - InterfaceName           — interface type (same shape as struct: just the type name)
+  - pkg.Name                — package-qualified form, accepted where ambiguity matters`
 
 // NewServer creates an MCP server with all go-surgeon tools registered.
 func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries) *mcp.Server {
@@ -307,10 +312,11 @@ type interfaceInput struct {
 	File       string `json:"file" jsonschema:"file containing the interface, required"`
 	Identifier string `json:"identifier,omitempty" jsonschema:"interface name, required for update and delete"`
 	Content    string `json:"content,omitempty" jsonschema:"raw Go interface source, no package declaration or imports"`
-	MockFile   string `json:"mock_file,omitempty" jsonschema:"target file for the generated mock"`
+	MockFile   string `json:"mock_file,omitempty" jsonschema:"target file for the generated mock (add/update), or file containing the mock to delete (delete)"`
 	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
 	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix, update only)"`
 	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment (update only)"`
+	DeleteMock bool   `json:"delete_mock,omitempty" jsonschema:"delete only: also remove the mock struct, its methods and its compile-time assertion from mock_file; requires mock_file and mock_name"`
 }
 
 func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
@@ -351,13 +357,22 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_interface",
-		Description: "Delete an interface from a Go file. WARNING: the mock is NOT automatically deleted — you must manually remove the mock file afterward, or the compile-time assertion (var _ I = (*MockI)(nil)) will cause a build error.",
+		Description: "Delete an interface from a Go file. Set delete_mock=true together with mock_file and mock_name to also remove the mock struct, its methods, and the compile-time assertion (var _ I = (*MockI)(nil)) from mock_file — this is the safe default when you own the mock. The mock file itself is kept intact even if it becomes empty, so other mocks sharing the file are not disturbed. Without delete_mock, you must manually clean up the mock or builds will break.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
+		if in.MockFile != "" {
+			if err := validateGoFile(in.MockFile); err != nil {
+				return err, nil, nil
+			}
+		}
 		result, err := commands.DeleteInterface(ctx, domain.InterfaceActionRequest{
-			FilePath: in.File, Identifier: in.Identifier,
+			FilePath:   in.File,
+			Identifier: in.Identifier,
+			MockFile:   in.MockFile,
+			MockName:   in.MockName,
+			DeleteMock: in.DeleteMock,
 		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (delete_interface): %v", err)), nil, nil
