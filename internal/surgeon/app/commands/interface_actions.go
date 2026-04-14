@@ -3,6 +3,10 @@ package commands
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -82,7 +86,12 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 	return msg, nil
 }
 
-// DeleteInterface removes an interface type declaration from a file. The mock is NOT auto-deleted.
+// DeleteInterface removes an interface type declaration from a file. The mock is NOT auto-deleted unless req.DeleteMock is true.
+// DeleteInterface removes an interface type declaration from a file. When
+// req.DeleteMock is true and MockFile/MockName are provided, also removes the
+// mock struct, its methods, and its compile-time interface assertion from
+// MockFile — but leaves the file itself in place (even if empty) so other
+// mocks that might share the file are not disturbed.
 func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
 	action := domain.Action{
 		Action:     domain.ActionTypeDeleteStruct,
@@ -92,7 +101,25 @@ func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.Int
 	if _, err := h.executeAction(ctx, action); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("SUCCESS: Deleted %s from %s", req.Identifier, filepath.Base(req.FilePath)), nil
+
+	msg := fmt.Sprintf("SUCCESS: Deleted %s from %s", req.Identifier, filepath.Base(req.FilePath))
+
+	if req.DeleteMock {
+		if req.MockFile == "" || req.MockName == "" {
+			return "", &domain.Error{
+				Code:    "INVALID_ARGUMENT",
+				Message: "delete_mock requires both mock_file and mock_name",
+			}
+		}
+		mockMsg, err := h.deleteMock(ctx, req.MockFile, req.MockName)
+		if err != nil {
+			// Interface was already deleted; report the partial success plus the mock error.
+			return "", fmt.Errorf("%s, but mock deletion failed: %w", msg, err)
+		}
+		msg += ", " + mockMsg
+	}
+
+	return msg, nil
 }
 
 // extractTypeName extracts the type name from a Go type declaration source string.
@@ -110,4 +137,101 @@ func extractTypeName(src string) string {
 		}
 	}
 	return "interface"
+}
+
+// deleteMock removes the mock struct (with all its methods) and the
+// compile-time interface assertion (var _ Iface = (*MockName)(nil)) from the
+// given mockFile. It is idempotent: a missing file or missing struct returns
+// a warning message rather than an error.
+func (h *ExecutePlanHandler) deleteMock(ctx context.Context, mockFile, mockName string) (string, error) {
+	receiverName := strings.TrimPrefix(mockName, "*")
+
+	src, err := h.fs.ReadFile(ctx, mockFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("mock file %s not found (skipped)", filepath.Base(mockFile)), nil
+		}
+		return "", &domain.Error{Code: "READ_ERROR", Message: "failed to read mock file", Err: err}
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, mockFile, src, parser.ParseComments)
+	if err != nil {
+		return "", &domain.Error{Code: "PARSE_ERROR", Message: "failed to parse mock file", Err: err}
+	}
+
+	var ranges [][2]int
+
+	// 1. The mock struct itself plus all methods on *MockName / MockName.
+	structRanges := findStructAndMethodsOffsets(fset, f, receiverName)
+	ranges = append(ranges, structRanges...)
+
+	// 2. The compile-time assertion: `var _ Foo = (*MockName)(nil)` (any form
+	//    that references receiverName in a type-assertion-like pattern).
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		// An assertion decl has one spec with name "_" and a value expression
+		// mentioning the mock receiver type.
+		if !isMockAssertion(gen, receiverName) {
+			continue
+		}
+		start := fset.Position(gen.Pos()).Offset
+		end := fset.Position(gen.End()).Offset
+		ranges = append(ranges, [2]int{start, end})
+	}
+
+	if len(structRanges) == 0 {
+		return fmt.Sprintf("mock struct %s not found in %s (skipped)", receiverName, filepath.Base(mockFile)), nil
+	}
+
+	updated := deleteRanges(src, ranges)
+	if err := h.fs.WriteFile(ctx, mockFile, updated); err != nil {
+		return "", &domain.Error{Code: "WRITE_ERROR", Message: "failed to write mock file", Err: err}
+	}
+	_ = h.fs.ExecuteGoImports(ctx, []string{mockFile})
+
+	return fmt.Sprintf("removed mock %s from %s", receiverName, filepath.Base(mockFile)), nil
+}
+
+// isMockAssertion returns true when gen is a `var _ Something = (*Receiver)(nil)`
+// form where the receiver name matches receiverName.
+func isMockAssertion(gen *ast.GenDecl, receiverName string) bool {
+	for _, spec := range gen.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		// Name must be exactly "_".
+		if len(vs.Names) != 1 || vs.Names[0].Name != "_" {
+			continue
+		}
+		if len(vs.Values) != 1 {
+			continue
+		}
+		// Value is (*Receiver)(nil). The outer shape is ast.CallExpr with one
+		// arg (nil) whose Fun is ast.ParenExpr wrapping ast.StarExpr -> Ident.
+		call, ok := vs.Values[0].(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			continue
+		}
+		paren, ok := call.Fun.(*ast.ParenExpr)
+		if !ok {
+			continue
+		}
+		star, ok := paren.X.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		id, ok := star.X.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if id.Name == receiverName {
+			return true
+		}
+	}
+	return false
 }
