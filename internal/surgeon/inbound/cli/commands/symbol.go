@@ -15,6 +15,7 @@ func NewSymbolCommand(queries service.SurgeonQueries) *cobra.Command {
 	var tests bool
 	var targetDir string
 	var moduleFlag string
+	var patternFlag string
 
 	cmd := &cobra.Command{
 		Use:   "symbol [Receiver.]Name",
@@ -61,15 +62,42 @@ Run this before editing a function — read the current body first.`,
 
   # Look up a symbol in a dependency
   go-surgeon symbol Command.Execute --module github.com/spf13/cobra --body`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			queryStr := args[0]
-			
+			var queryStr string
+			if len(args) > 0 {
+				queryStr = args[0]
+			}
+			if patternFlag != "" && queryStr != "" {
+				return fmt.Errorf("--pattern and a positional query are mutually exclusive")
+			}
+			if patternFlag == "" && queryStr == "" {
+				return fmt.Errorf("a query argument or --pattern is required")
+			}
+			if patternFlag != "" {
+				results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: patternFlag, Tests: tests, Module: moduleFlag}, targetDir)
+				if err != nil {
+					return err
+				}
+				if len(results) == 0 {
+					fmt.Printf("No declarations match pattern %q.\n", patternFlag)
+					return nil
+				}
+				for _, r := range results {
+					if r.Receiver != "" {
+						fmt.Printf("(%s) %s \u2014 %s:%d\n", r.Receiver, r.Name, r.File, r.LineStart)
+					} else {
+						fmt.Printf("%s \u2014 %s:%d\n", r.Name, r.File, r.LineStart)
+					}
+				}
+				return nil
+			}
+
 			var allResults []domain.SymbolResult
-			
+
 			parts := strings.Split(queryStr, ".")
-			
+
 			// 1. Exact Name: "MyFunc"
 			if len(parts) == 1 {
 				query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: moduleFlag}
@@ -175,5 +203,6 @@ Run this before editing a function — read the current body first.`,
 	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files in the search")
 	cmd.Flags().StringVarP(&targetDir, "dir", "d", ".", "Directory to search in")
 	cmd.Flags().StringVar(&moduleFlag, "module", "", "Import path of a dependency to search in (e.g. github.com/spf13/cobra)")
+	cmd.Flags().StringVarP(&patternFlag, "pattern", "p", "", "Regex on declaration names; lists all matches (mutually exclusive with positional query)")
 	return cmd
 }

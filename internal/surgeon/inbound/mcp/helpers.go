@@ -217,3 +217,66 @@ func validateGoFile(file string) *mcp.CallToolResult {
 	}
 	return nil
 }
+
+// formatPatternResults renders pattern-mode symbol results as a compact list
+// grouped by kind (methods / functions / types). When tokenBudget > 0, output
+// is truncated with a trailer indicating how many results were omitted.
+func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern string, tokenBudget int) string {
+	var methods, funcs, types []domain.SymbolResult
+	for _, r := range results {
+		switch {
+		case r.Receiver != "":
+			methods = append(methods, r)
+		case strings.HasPrefix(r.Signature, "func"):
+			funcs = append(funcs, r)
+		default:
+			types = append(types, r)
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d declaration(s) matching /%s/\n\n", len(results), pattern)
+
+	writeGroup := func(title string, rs []domain.SymbolResult) {
+		if len(rs) == 0 {
+			return
+		}
+		fmt.Fprintf(&sb, "%s:\n", title)
+		for _, r := range rs {
+			if r.Receiver != "" {
+				fmt.Fprintf(&sb, "- (%s) %s — %s:%d\n", r.Receiver, r.Name, r.File, r.LineStart)
+			} else {
+				fmt.Fprintf(&sb, "- %s — %s:%d\n", r.Name, r.File, r.LineStart)
+			}
+			if showBody {
+				fmt.Fprintf(&sb, "  %s\n", r.Signature)
+			}
+		}
+		sb.WriteByte('\n')
+	}
+
+	writeGroup("Methods", methods)
+	writeGroup("Functions", funcs)
+	writeGroup("Types", types)
+
+	if tokenBudget > 0 {
+		approx := len(sb.String()) / 4
+		if approx > tokenBudget {
+			return truncateToBudget(sb.String(), tokenBudget, len(results))
+		}
+	}
+	return sb.String()
+}
+
+// truncateToBudget clips output to roughly tokenBudget tokens (~4 chars/token).
+func truncateToBudget(s string, tokenBudget, total int) string {
+	limit := tokenBudget * 4
+	if limit >= len(s) {
+		return s
+	}
+	cut := strings.LastIndexByte(s[:limit], '\n')
+	if cut < 0 {
+		cut = limit
+	}
+	return s[:cut] + fmt.Sprintf("\n... (truncated to fit token_budget=%d; total %d results)\n", tokenBudget, total)
+}
