@@ -424,7 +424,8 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 // --- Other tools ---
 
 type executePlanInput struct {
-	Plan string `json:"plan" jsonschema:"YAML plan content with actions to execute"`
+	Plan   string `json:"plan" jsonschema:"plan content with actions to execute (JSON object or YAML string)"`
+	Format string `json:"format,omitempty" jsonschema:"plan format: 'json', 'yaml', or omitted for auto-detect (first non-whitespace byte '{' or '[' means JSON, otherwise YAML)"`
 }
 
 type implementInput struct {
@@ -676,9 +677,9 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "execute_plan",
-		Description: "Execute up to 15 AST edits atomically from a YAML plan — the preferred tool when making several related changes in one step. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. Content fields must be complete declarations without package declarations or imports; goimports runs after each action.",
+		Description: "Execute up to 15 AST edits atomically from a plan — the preferred tool when making several related changes in one step. Accepts JSON (default, auto-detected when content starts with '{' or '[') or YAML; set the 'format' field to force one. JSON shape: {'actions':[{'action':'<type>','file':'path.go','identifier':'Name','content':'...','package':'...','mock_file':'...','mock_name':'...','doc':'...','strip_doc':false,'position':'...','with_test':false}]} (use real double quotes in the payload; single quotes here are just docs). Bool fields (strip_doc, with_test) accept native booleans or the strings 'true'/'false'. Supported actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. Content fields must be complete declarations without package declarations or imports; goimports runs after each action.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
-		plan, err := converters.ToDomainPlan([]byte(in.Plan))
+		plan, err := converters.ToDomainPlan([]byte(in.Plan), in.Format)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to parse plan: %v", err)), nil, nil
 		}

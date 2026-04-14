@@ -18,7 +18,7 @@ func NewExecutePlanCommand(surgeon service.SurgeonCommands) *cobra.Command {
 	var keep bool
 
 	cmd := &cobra.Command{
-		Use:        "execute [plan.yaml]",
+		Use:   "execute [plan.yaml]",
 		Short: "Execute a YAML plan file",
 		Long: `Reads a YAML plan file (or stdin) and executes all listed actions in order.
 
@@ -67,7 +67,7 @@ There is no limit on the number of actions per plan file.`,
 						fmt.Fprintf(os.Stderr, "Plan files retained for debugging: %s\n", strings.Join(files, ", "))
 						return fmt.Errorf("plan %d (%s): failed to read: %w", i+1, filePath, err)
 					}
-					plan, err := converters.ToDomainPlan(data)
+					plan, err := converters.ToDomainPlan(data, converters.FormatAuto)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Plan files retained for debugging: %s\n", strings.Join(files, ", "))
 						return fmt.Errorf("plan %d (%s): %w [hint: check YAML indentation, use '|' for multi-line content blocks indented 2+ spaces from 'content:']", i+1, filePath, err)
@@ -115,7 +115,7 @@ There is no limit on the number of actions per plan file.`,
 				return fmt.Errorf("failed to read input: %w", err)
 			}
 
-			plan, err := converters.ToDomainPlan(data)
+			plan, err := converters.ToDomainPlan(data, converters.FormatAuto)
 			if err != nil {
 				return fmt.Errorf("%w [hint: check YAML indentation, use '|' for multi-line content blocks indented 2+ spaces from 'content:']", err)
 			}
