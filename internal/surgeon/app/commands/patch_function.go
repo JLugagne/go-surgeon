@@ -122,7 +122,16 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 
 		if len(hits) == 0 {
-			errs = append(errs, fmt.Sprintf("patch #%d (%s %q): no match found in body of %s", i+1, p.Op, p.Match+p.MatchRegex, req.Identifier))
+			needle := p.Match
+			if needle == "" {
+				needle = p.MatchRegex
+			}
+			msg := fmt.Sprintf("patch #%d (%s %q): no match found in body of %s",
+				i+1, p.Op, needle, req.Identifier)
+			if suggestions := suggestClosestLines(origBody, needle, 3); suggestions != "" {
+				msg += "\n  Closest lines in body:\n" + suggestions
+			}
+			errs = append(errs, msg)
 			continue
 		}
 		if len(hits) > 1 && p.Occurrence == 0 {
@@ -418,10 +427,20 @@ func mapNormIndexToOrig(orig, normNeedle string) (int, int) {
 }
 
 // mapNormBodyToOrig maps a byte range in the normalised body back to the original body.
+//
+// normalizeWS uses strings.Fields, which trims leading and trailing whitespace
+// runs entirely. So `oi` must start at the first non-whitespace byte of orig,
+// not at byte 0 — otherwise the parallel walk fails immediately on bodies that
+// begin with a newline or tab (which is virtually every function body).
 func mapNormBodyToOrig(orig, normOrig string, normStart, normEnd int) (int, int) {
-	// Walk both strings simultaneously, tracking correspondence.
 	oi, ni := 0, 0
 	origStart := -1
+
+	// Skip leading whitespace in orig — normOrig has none.
+	for oi < len(orig) && (orig[oi] == ' ' || orig[oi] == '\t' || orig[oi] == '\n' || orig[oi] == '\r') {
+		oi++
+	}
+
 	for ni < len(normOrig) && oi < len(orig) {
 		if ni == normStart {
 			origStart = oi
@@ -581,6 +600,91 @@ func extractLine(body string, off int) string {
 	start := lineStartOffset(body, off)
 	end := lineEndOffset(body, off)
 	return body[start:end]
+}
+
+// suggestClosestLines returns up to 'top' lines from body that share the most
+// significant tokens with needle, formatted for an error message. Returns ""
+// when no line shares any token with the needle. The goal is to help an agent
+// recover from a failed patch on the next turn without re-reading the file.
+//
+// We score by the count of shared alphanumeric tokens of length >= 2, ignoring
+// punctuation. That keeps the signal high (shared identifiers and keywords
+// dominate) and avoids noisy "matches" on common glue like ":", "{", etc.
+func suggestClosestLines(body, needle string, top int) string {
+	needleTokens := tokenize(needle)
+	if len(needleTokens) == 0 {
+		return ""
+	}
+	needleSet := make(map[string]struct{}, len(needleTokens))
+	for _, t := range needleTokens {
+		needleSet[t] = struct{}{}
+	}
+
+	type scored struct {
+		line   string
+		lineNo int // 1-based
+		score  int
+	}
+	var ranked []scored
+
+	// Split into original lines with their 1-based numbering.
+	lineNo := 1
+	for _, line := range strings.Split(body, "\n") {
+		score := 0
+		for _, t := range tokenize(line) {
+			if _, ok := needleSet[t]; ok {
+				score++
+			}
+		}
+		if score > 0 {
+			ranked = append(ranked, scored{line: line, lineNo: lineNo, score: score})
+		}
+		lineNo++
+	}
+	if len(ranked) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
+	})
+	if len(ranked) > top {
+		ranked = ranked[:top]
+	}
+
+	var b strings.Builder
+	for _, r := range ranked {
+		trimmed := strings.TrimSpace(r.line)
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:117] + "..."
+		}
+		fmt.Fprintf(&b, "    L%d (shares %d tokens): %s\n", r.lineNo, r.score, trimmed)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// tokenize extracts alphanumeric tokens of length >= 2 from s. Underscores are
+// treated as part of identifiers; punctuation and whitespace are separators.
+func tokenize(s string) []string {
+	var out []string
+	start := -1
+	for i := 0; i <= len(s); i++ {
+		var isWord bool
+		if i < len(s) {
+			c := s[i]
+			isWord = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '_'
+		}
+		if isWord && start < 0 {
+			start = i
+		} else if !isWord && start >= 0 {
+			if i-start >= 2 {
+				out = append(out, s[start:i])
+			}
+			start = -1
+		}
+	}
+	return out
 }
 
 // diffStrings produces a unified diff between two file versions.
