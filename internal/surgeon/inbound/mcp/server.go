@@ -691,7 +691,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "implement",
-		Description: "Generate method stubs on a struct for any interface it doesn't yet satisfy — use this instead of writing implementations manually with update or create. Works for any interface: local project interfaces (use the fully qualified import path, e.g. github.com/org/repo/internal/pkg.Interface), stdlib (io.ReadCloser), or third-party. Skips methods already implemented. Stubs contain '// TODO: implement' so you can fill them in afterward. goimports runs automatically.",
+		Description: "Generate method stubs on a struct for any interface it doesn't yet satisfy — use this instead of writing implementations manually with update or create. Works for any interface: local project interfaces (use the fully qualified import path, e.g. github.com/org/repo/internal/pkg.Interface), stdlib (io.ReadCloser), or third-party. Skips methods already implemented. Stubs contain '// TODO(go-surgeon): implement' so you can fill them in afterward. goimports runs automatically.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in implementInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

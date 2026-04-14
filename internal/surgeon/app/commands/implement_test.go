@@ -76,7 +76,7 @@ type MyContext struct {}
 	assert.Contains(t, updatedContent, "func (r *MyContext) Err() error {")
 	assert.Contains(t, updatedContent, "func (r *MyContext) Value(key any) any {")
 	assert.Contains(t, updatedContent, "panic(\"not implemented\")")
-	assert.Contains(t, updatedContent, "// TODO: implement Deadline")
+	assert.Contains(t, updatedContent, "// TODO(go-surgeon): implement Deadline")
 
 	// Check SymbolResult details
 	var foundDeadline bool

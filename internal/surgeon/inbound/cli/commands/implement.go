@@ -22,8 +22,8 @@ func NewImplementCommand(surgeon service.SurgeonCommands) *cobra.Command {
 project-local interfaces) and appends method stubs to --file.
 
 Existing methods that already satisfy the interface are skipped. Each generated stub
-contains a // TODO: implement comment and panics with "not implemented". Fill in the
-body of each stub with update-func.
+contains a // TODO(go-surgeon): implement comment and panics with "not implemented".
+Fill in the body of each stub with update-func.
 
 For interfaces you own within this project, prefer add-interface which creates both
 the interface file and its mock in one step.`,
