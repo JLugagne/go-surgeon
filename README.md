@@ -14,7 +14,7 @@ Go isn't just text, it's a tree of declarations. go-surgeon gives your agent a r
 [![MCP](https://img.shields.io/badge/MCP-ready-8A2BE2)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[**Quick Start**](#quick-start) • [**Why**](#why-go-surgeon) • [**MCP Tools**](#-mcp-tools) • [**CLI**](#cli-usage) • [**Workflow**](#typical-agent-workflow)
+[**Quick Start**](#quick-start) • [**Why**](#why-go-surgeon) • [**MCP**](#-mcp-server) • [**Highlights**](#highlighted-features) • [**Safety**](#-safety)
 
 </div>
 
@@ -29,13 +29,11 @@ Ask your agent to update a single function in a 200-line Go file. Watch what hap
 3. The patch fails. It re-reads the file. Tries again with the whole function body
 4. This time it forgets the `context.Context` import
 5. `go build` fails. It edits the import block — badly. Curly brace drift.
-6. Three turns later you have a working file and no idea what changed
+6. Three turns later you have a working file and no idea what changed.
 
 Every Go dev using an LLM agent has lived this. The problem isn't the model's reasoning — **text-level patching is fundamentally wrong for a structured language**. Indentation, imports, braces: these aren't content, they're grammar. And grammar breaks loudly.
 
 ## The fix
-
-go-surgeon exposes Go-specific, AST-aware tools — via MCP or CLI — that the agent uses instead of Edit/Read/Grep on `.go` files:
 
 ```
 update(object="func", file="internal/catalog/domain/book.go", identifier="NewBook", content="""
@@ -45,11 +43,12 @@ func NewBook(title, author string) (*Book, error) {
 """)
 ```
 
-- Located by **AST identifier** (`NewBook`, `Book.Validate`, `BookRepository`) — not line numbers, not regex
-- Replaced by **byte range** — comments, godoc, and surrounding code stay intact
-- `goimports` runs **automatically** — no import drift, no indentation errors
+```
+✅ SUCCESS (update func): Updated NewBook in internal/catalog/domain/book.go
+```
 
-One tool call. Atomic success or clear error. The file stays valid Go.
+Located by **AST identifier**. Replaced by **structural edit**. Imports handled by **`goimports`** automatically.
+The agent stops counting tabs and starts shipping logic.
 
 ---
 
@@ -57,27 +56,19 @@ One tool call. Atomic success or clear error. The file stays valid Go.
 
 ### 1. It replaces generic file tools for Go — everywhere
 
-The MCP server ships with instructions telling the agent: **for any `.go` file, use these tools instead of Edit/Write/Read/Grep/Glob/Bash**. No more `sed` on Go source. No more `grep -r` that misses method receivers. No more `Edit` that forgets imports.
+The MCP server ships with instructions telling the agent: **for any `.go` file, use these tools instead of Edit / Write / Read / Grep / Glob / Bash**. No more `sed` on Go source. No more `grep -r` that misses method receivers. No more `Edit` that forgets imports.
 
-### 2. Edits are atomic
+### 2. Edits are atomic, not conversational
 
-Every tool is a structured operation: `create`, `update`, `delete`, `insert_call`. Either it succeeds or you get a clear error like `ERROR (update func): node 'Book.Validate' not found in ...`. No silent half-edits. No "it kind of worked".
+Every tool is a structured operation. Either it succeeds or you get a clear error like `ERROR (update func): node 'Book.Validate' not found in ...`. No silent half-edits. No "it kind of worked".
 
 ### 3. Your agent never manages imports or formatting
 
-Content is raw Go source — no package declaration, no imports. `goimports` runs on every mutation. An entire category of agent mistakes, permanently eliminated.
+Content is raw Go source — no package declaration, no imports, no indentation. `goimports` runs on every mutation. An entire category of agent mistakes, permanently eliminated.
 
 ### 4. Interfaces and mocks stay in sync
 
-`add_interface` / `update_interface` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `extract_interface` pulls an interface out of an existing struct in one command — with optional mock generation.
-
-### 5. Explore third-party code without `find` in `$GOMODCACHE`
-
-`graph` and `symbol` take a `module` parameter: point them at `github.com/spf13/cobra`, they'll return its package tree or the body of any symbol — resolved via `go/packages`. Your agent reads dependency source the same way it reads yours.
-
-### 6. Batch 15 edits in one atomic plan
-
-`execute_plan` takes a YAML of up to 15 actions and runs them as one operation. Ideal for multi-step refactors: add a struct, update three methods, create a mock, insert a call — one tool invocation, one success/failure boundary.
+`add_interface` and `update_interface` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `extract_interface` pulls an interface out of an existing struct in one command.
 
 ---
 
@@ -95,7 +86,7 @@ go-surgeon graph
 go-surgeon symbol BookHandler.Handle --body
 ```
 
-### Configure for Claude Code / Cursor
+Configure your MCP client (example for Claude Code / Cursor):
 
 ```json
 {
@@ -108,48 +99,29 @@ go-surgeon symbol BookHandler.Handle --body
 }
 ```
 
-Once connected, the server advertises its own instructions telling the client to use go-surgeon tools for every operation on `.go` files — no prompt engineering required on your side.
+The server auto-advertises instructions telling the agent to use go-surgeon tools for every operation on `.go` files — no prompt engineering required on your side.
 
 ---
 
-## 🔌 MCP Tools
+## 🔌 MCP Server
 
-### Exploration — replaces `Read` / `Grep` / `Glob` / `find`
+```bash
+go-surgeon mcp
+```
 
-| Tool | Purpose |
+15 tools over stdio, grouped by purpose:
+
+| Tools | Purpose |
 |---|---|
-| `graph` | Walk packages. Options: `symbols`, `summary`, `deps`, `focus`, `recursive`, `depth`, `exclude`, `token_budget`, `module` |
-| `symbol` | AST lookup by `Name`, `Receiver.Method`, or `pkg.Name`. `body=true` returns the full source with line numbers |
+| `graph`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
+| `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write** |
+| `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`) |
+| `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated mocks |
+| `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
+| `test`, `tag` | Generate test skeletons and struct field tags |
+| `execute_plan` | Run up to 15 edits atomically from a YAML plan |
 
-Both accept `module="github.com/org/repo"` to explore a dependency's source instead of the current project.
-
-### Editing — replaces `Edit` / `Write`
-
-| Tool | Purpose |
-|---|---|
-| `create` | `object: file \| func \| struct` — add new code |
-| `update` | `object: file \| func \| struct` — replace by AST identifier, with optional `doc` / `strip_doc` |
-| `delete` | `object: func \| struct` — remove a declaration (struct also removes its methods) |
-| `insert_call` | Insert a single statement into a function body at `before-return`, `end-of-body`, or `after:<marker>` — idempotent |
-| `execute_plan` | Run up to 15 actions atomically from a YAML plan |
-
-### Interfaces & mocks
-
-| Tool | Purpose |
-|---|---|
-| `add_interface` | Create an interface and auto-generate a function-field mock with compile-time assertion |
-| `update_interface` | Update an interface and regenerate its mock in lockstep |
-| `delete_interface` | Remove an interface (mock is not auto-deleted — by design, so build fails until you clean up) |
-| `implement` | Generate missing method stubs on a struct for any interface (stdlib, third-party, project-local) |
-| `mock` | Standalone mock for an interface you don't own |
-| `extract_interface` | Extract an interface from an existing struct's exported methods, with optional mock |
-
-### Code generation
-
-| Tool | Purpose |
-|---|---|
-| `test` | Generate a table-driven test skeleton for a function or method |
-| `tag` | Add/update struct field tags — `auto=json`, `auto=bson`, or `field`+`set` for a single field |
+See [`USAGE.md`](USAGE.md) for the full parameter reference.
 
 ---
 
@@ -168,7 +140,6 @@ actions:
       type Book struct {
           ID        BookID
           Title     string
-          Author    string
           Status    BookStatus
           CreatedAt time.Time
       }
@@ -176,8 +147,8 @@ actions:
     file: internal/catalog/domain/book.go
     identifier: NewBook
     content: |
-      func NewBook(title, author string, status BookStatus) (*Book, error) {
-          return &Book{ID: NewBookID(), Title: title, Author: author, Status: status}, nil
+      func NewBook(title string, status BookStatus) (*Book, error) {
+          return &Book{ID: NewBookID(), Title: title, Status: status}, nil
       }
   - action: update_interface
     file: internal/catalog/domain/repositories/book/book.go
@@ -207,17 +178,16 @@ graph(module="github.com/spf13/cobra", symbols=true)
 symbol(query="Command.Execute", body=true, module="github.com/spf13/cobra")
 ```
 
-Resolved via `go/packages`. Same output format as your own project. Works for stdlib, third-party, and project-local alike.
+Resolved via `go/packages`. Same output format as your own project. Works for stdlib, third-party, and project-local interfaces alike.
 
 ---
 
-## CLI usage
+## CLI
 
 Everything the MCP server exposes is also available from the CLI — useful for scripting, CI, and quick exploration:
 
 ```bash
 # Orient yourself
-go-surgeon graph
 go-surgeon graph --symbols --dir internal/catalog/domain
 
 # Read a symbol
@@ -230,44 +200,35 @@ func NewBook(title, author string) (*Book, error) {
 }
 EOF
 
-# Generate stubs for an interface
+# Generate stubs for an interface you don't own
 go-surgeon implement io.ReadCloser --receiver "*MyReader" --file internal/pkg/reader.go
 ```
+
+Pass `--dry-run` on any command to preview changes as a unified diff without writing to disk.
 
 See [`USAGE.md`](USAGE.md) for the full CLI reference.
 
 ---
 
-## Typical agent workflow
+## 🔒 Safety
 
-From the agent's perspective, a feature implementation now looks like:
+> ⚠️ **Edits modify your source code directly.** Use `--dry-run` to preview as a unified diff before applying.
 
-```
-# 1. Orient without reading files
-graph(focus="internal/catalog/outbound")
+- **`--dry-run` / `--diff`** prints the unified diff for every change without writing to disk
+- **Atomic operations** — each edit either fully succeeds or returns a structured error
+- **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
+- **`delete_interface` does not auto-delete the mock** — by design, the broken compile-time assertion forces explicit cleanup
 
-# 2. Find a pattern to follow
-symbol(query="PgBookRepo.Create", body=true)
+---
 
-# 3. Read what's about to change
-symbol(query="BookHandler.Handle", body=true)
+## Works well with scaffor
 
-# 4. Make the changes atomically
-execute_plan(plan="""
-  actions:
-    - action: add_struct
-      ...
-    - action: add_interface
-      ...
-    - action: update_func
-      ...
-""")
+Same philosophy, different scope:
 
-# 5. Generate a test skeleton
-test(file="internal/catalog/domain/book.go", identifier="NewBook")
-```
+- **[scaffor](https://github.com/JLugagne/scaffor)** — deterministic scaffolding. Generate the file structure of a new feature.
+- **go-surgeon** — deterministic editing. Modify the code that already exists.
 
-At no point does the agent count tabs, manage imports, reason about line numbers, or `grep` through files.
+Use scaffor to bootstrap, go-surgeon to evolve. Both ship as MCP servers.
 
 ---
 
@@ -285,20 +246,9 @@ go-surgeon completion zsh  > "${fpath[1]}/_go-surgeon"
 
 ---
 
-## Works well with scaffor
-
-Same philosophy, different scope:
-
-- **[scaffor](https://github.com/JLugagne/scaffor)** — deterministic scaffolding. Generate the file structure of a new feature.
-- **go-surgeon** — deterministic editing. Modify the code that already exists.
-
-Use scaffor to bootstrap, go-surgeon to evolve. Both ship as MCP servers.
-
----
-
 ## Going further
 
-- [`USAGE.md`](USAGE.md) — full CLI reference
+- [`USAGE.md`](USAGE.md) — full command reference for MCP and CLI
 - [`examples/`](examples) — real editing sessions
 
 ---
