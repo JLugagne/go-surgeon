@@ -26,6 +26,7 @@ Editing (use instead of Edit/Write/Bash on .go files):
 - create: add a new file, function, or struct
 - update: replace a function, method, struct, or file
 - delete: remove a function, method, or struct
+- patch_function: surgical text-match edits inside one function body (replace, insert_before/after, delete, wrap) — use instead of update for small in-body changes
 - insert_call: insert a single statement inside a function body (before-return, end-of-body, after:<marker>)
 - execute_plan: multiple edits in one shot (up to 15 actions, preferred for multi-step changes)
 
@@ -41,6 +42,14 @@ Interface & mock management:
 Code generation:
 - test: generate a table-driven test skeleton
 - tag: add or update struct field tags (json, bson, etc.)
+
+When to use each editing tool:
+- Add a new symbol (func/struct/file) → create
+- Replace a whole function, struct, or file → update
+- Delete a whole symbol → delete
+- Change a few lines *inside* a function body → patch_function (avoids re-emitting the whole body)
+- Insert one statement at a fixed position → insert_call
+- Multiple coordinated edits → execute_plan
 
 Rules that apply to all tools:
 - Never include package declarations or import blocks in content — goimports runs automatically.
@@ -64,6 +73,7 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerInterfaceTools(s, commands)
 	registerInsertCallTool(s, commands)
 	registerOtherTools(s, commands)
+	registerPatchTools(s, commands)
 
 	return s
 }
@@ -430,6 +440,73 @@ type extractInterfaceInput struct {
 	Out        string `json:"out,omitempty" jsonschema:"output file path for the interface"`
 	MockFile   string `json:"mock_file,omitempty" jsonschema:"generate mock file path"`
 	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
+}
+
+// --- Patch tools ---
+
+type patchOpInput struct {
+	Op         string `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap"`
+	Match      string `json:"match,omitempty" jsonschema:"literal text to match inside the function body (whitespace-normalized)"`
+	MatchRegex string `json:"match_regex,omitempty" jsonschema:"regex alternative to match; mutually exclusive with match"`
+	Occurrence int    `json:"occurrence,omitempty" jsonschema:"1-based index when match appears multiple times; required when ambiguous"`
+	Replace    string `json:"replace,omitempty" jsonschema:"replacement text (for replace op)"`
+	Code       string `json:"code,omitempty" jsonschema:"line of code to insert (for insert_before / insert_after ops)"`
+	Wrap       string `json:"wrap,omitempty" jsonschema:"wrap template with %s as the matched text (for wrap op)"`
+}
+
+type patchFunctionInput struct {
+	File       string         `json:"file" jsonschema:"target Go file path"`
+	Identifier string         `json:"identifier" jsonschema:"function or method identifier, e.g. FuncName or Receiver.Method"`
+	Patches    []patchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
+	Preview    bool           `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+}
+
+func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "patch_function",
+		Description: "Make one or more surgical text-match edits inside a single function body — without rewriting the whole body. " +
+			"All patches are scoped to the target function, applied atomically (any failure → nothing written), and goimports runs automatically. " +
+			"Use instead of update when changing a few lines inside a function body. " +
+			"ops: replace (replace matched text), insert_before (insert a line before the match), insert_after (insert a line after), " +
+			"delete (remove the matched text or whole line), wrap (replace match with fmt.Sprintf(wrap, match)). " +
+			"match is whitespace-normalized, so indentation does not need to be reproduced exactly. " +
+			"When the same text appears more than once, use occurrence (1-based) to disambiguate. " +
+			"Use preview=true to get the diff without writing. " +
+			"match_regex uses Go's RE2 engine (linear time, no backreferences/lookarounds). For safety, patterns are capped at 1KB, must match 1..1000 times, and cannot be zero-width (^, $, (?:))—narrow the pattern if you hit these limits.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFunctionInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
+		patches := make([]domain.FunctionPatch, len(in.Patches))
+		for i, p := range in.Patches {
+			patches[i] = domain.FunctionPatch{
+				Op:         domain.PatchOp(p.Op),
+				Match:      p.Match,
+				MatchRegex: p.MatchRegex,
+				Occurrence: p.Occurrence,
+				Replace:    p.Replace,
+				Code:       p.Code,
+				Wrap:       p.Wrap,
+			}
+		}
+		result, err := commands.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   in.File,
+			Identifier: in.Identifier,
+			Patches:    patches,
+			Preview:    in.Preview,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (patch_function): %v", err)), nil, nil
+		}
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
+		if result.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if result.Diff != "" {
+			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+		}
+		return textResult(prefix), nil, nil
+	})
 }
 
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
