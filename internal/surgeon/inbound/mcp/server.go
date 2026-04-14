@@ -27,6 +27,8 @@ Editing (use instead of Edit/Write/Bash on .go files):
 - update: replace a function, method, struct, or file
 - delete: remove a function, method, or struct
 - patch_function: surgical text-match edits inside one function body (replace, insert_before/after, delete, wrap) — use instead of update for small in-body changes
+- patch_struct: granular field edits on a struct (add_field, remove_field, rename_field, retype_field, set_tag, set_doc) — use instead of update for single-field changes
+- patch_interface: granular method edits on an interface (add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed) — use instead of update_interface for single-method changes; regenerates mocks automatically
 - insert_call: insert a single statement inside a function body (before-return, end-of-body, after:<marker>)
 - execute_plan: multiple edits in one shot (up to 15 actions, preferred for multi-step changes)
 
@@ -48,6 +50,8 @@ When to use each editing tool:
 - Replace a whole function, struct, or file → update
 - Delete a whole symbol → delete
 - Change a few lines *inside* a function body → patch_function (avoids re-emitting the whole body)
+- Add/remove/rename/retype a single field or tag on a struct → patch_struct (avoids re-emitting the whole struct)
+- Add/remove/rename/retype a single method or embed on an interface → patch_interface (replaces the old 'read+update_interface' workflow; regenerates the mock too)
 - Insert one statement at a fixed position → insert_call
 - Multiple coordinated edits → execute_plan
 
@@ -501,6 +505,151 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
 			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if result.Diff != "" {
+			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+		}
+		return textResult(prefix), nil, nil
+	})
+
+	registerPatchStructTool(s, commands)
+	registerPatchInterfaceTool(s, commands)
+}
+
+type structPatchOpInput struct {
+	Op       string `json:"op" jsonschema:"operation: add_field, remove_field, rename_field, retype_field, set_tag, set_doc"`
+	Name     string `json:"name,omitempty" jsonschema:"target field name (most ops); embed type literal (e.g. io.Reader) for embedded fields"`
+	From     string `json:"from,omitempty" jsonschema:"current field name (rename_field only)"`
+	To       string `json:"to,omitempty" jsonschema:"new field name (rename_field only)"`
+	Type     string `json:"type,omitempty" jsonschema:"field type (add_field / retype_field)"`
+	Tag      string `json:"tag,omitempty" jsonschema:"struct tag content without backticks (e.g. json:\"email,omitempty\")"`
+	Doc      string `json:"doc,omitempty" jsonschema:"doc comment text (set_doc / add_field); empty string clears the doc"`
+	Before   string `json:"before,omitempty" jsonschema:"anchor: insert before this existing field (add_field only)"`
+	After    string `json:"after,omitempty" jsonschema:"anchor: insert after this existing field (add_field only)"`
+	Position string `json:"position,omitempty" jsonschema:"first or last (add_field only); default is last"`
+}
+
+type patchStructInput struct {
+	File       string               `json:"file" jsonschema:"target Go file path"`
+	Identifier string               `json:"identifier" jsonschema:"struct name, e.g. User or pkg.User"`
+	Patches    []structPatchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
+	Preview    bool                 `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+}
+
+func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "patch_struct",
+		Description: "Make granular, atomic edits to a struct's field list — instead of re-emitting the whole declaration via update. " +
+			"ops: add_field (name, type, optional tag/doc/before/after/position), remove_field (name), rename_field (from, to), " +
+			"retype_field (name, type; preserves tag/doc), set_tag (name, tag; replaces wholesale), set_doc (name, doc). " +
+			"Embedded fields are addressed by their bare type name (e.g. name='io.Reader'). " +
+			"Any patch failure aborts the whole call and returns the list of current field names as candidates. Use preview=true to get the diff without writing.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchStructInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
+		patches := make([]domain.StructPatch, len(in.Patches))
+		for i, p := range in.Patches {
+			patches[i] = domain.StructPatch{
+				Op:       domain.StructPatchOp(p.Op),
+				Name:     p.Name,
+				From:     p.From,
+				To:       p.To,
+				Type:     p.Type,
+				Tag:      p.Tag,
+				Doc:      p.Doc,
+				Before:   p.Before,
+				After:    p.After,
+				Position: p.Position,
+			}
+		}
+		result, err := commands.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   in.File,
+			Identifier: in.Identifier,
+			Patches:    patches,
+			Preview:    in.Preview,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (patch_struct): %v", err)), nil, nil
+		}
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
+		if result.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if result.Diff != "" {
+			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+		}
+		return textResult(prefix), nil, nil
+	})
+}
+
+type interfacePatchOpInput struct {
+	Op        string `json:"op" jsonschema:"operation: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed"`
+	Name      string `json:"name,omitempty" jsonschema:"target method name (most ops)"`
+	From      string `json:"from,omitempty" jsonschema:"current method name (rename_method only)"`
+	To        string `json:"to,omitempty" jsonschema:"new method name (rename_method only)"`
+	Signature string `json:"signature,omitempty" jsonschema:"full method signature including name, e.g. 'Close() error' or 'Read(p []byte) (int, error)'"`
+	Type      string `json:"type,omitempty" jsonschema:"embedded interface type, e.g. 'io.Closer' (embed / remove_embed)"`
+	Doc       string `json:"doc,omitempty" jsonschema:"doc comment text (set_doc / add_method)"`
+	Before    string `json:"before,omitempty" jsonschema:"anchor: insert before this existing member (add_method / embed)"`
+	After     string `json:"after,omitempty" jsonschema:"anchor: insert after this existing member (add_method / embed)"`
+	Position  string `json:"position,omitempty" jsonschema:"first or last (add_method / embed); default is last"`
+}
+
+type patchInterfaceInput struct {
+	File       string                  `json:"file" jsonschema:"target Go file path"`
+	Identifier string                  `json:"identifier" jsonschema:"interface name, e.g. Reader or pkg.Reader"`
+	Patches    []interfacePatchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
+	Preview    bool                    `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+	MockFile   string                  `json:"mock_file,omitempty" jsonschema:"if set together with mock_name, regenerate this mock when the method set changes"`
+	MockName   string                  `json:"mock_name,omitempty" jsonschema:"name of the mock struct to regenerate"`
+}
+
+func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "patch_interface",
+		Description: "Make granular, atomic edits to an interface's method list — instead of re-emitting the whole declaration via update_interface. " +
+			"Use this INSTEAD of update_interface to add a single method (there is no add_interface_method tool; patch_interface add_method is the equivalent). " +
+			"ops: add_method (signature, optional doc/before/after/position), remove_method (name), rename_method (from, to), " +
+			"retype_method (name, signature), set_doc (name, doc), embed (type), remove_embed (type). " +
+			"When mock_file + mock_name are provided and an op changes the method set, the mock is regenerated automatically (same contract as update_interface). " +
+			"Use preview=true to get the diff without writing.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchInterfaceInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
+		patches := make([]domain.InterfacePatch, len(in.Patches))
+		for i, p := range in.Patches {
+			patches[i] = domain.InterfacePatch{
+				Op:        domain.InterfacePatchOp(p.Op),
+				Name:      p.Name,
+				From:      p.From,
+				To:        p.To,
+				Signature: p.Signature,
+				Type:      p.Type,
+				Doc:       p.Doc,
+				Before:    p.Before,
+				After:     p.After,
+				Position:  p.Position,
+			}
+		}
+		result, err := commands.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   in.File,
+			Identifier: in.Identifier,
+			Patches:    patches,
+			Preview:    in.Preview,
+			MockFile:   in.MockFile,
+			MockName:   in.MockName,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (patch_interface): %v", err)), nil, nil
+		}
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
+		if result.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if result.MockUpdated {
+			prefix += " (mock regenerated)"
 		}
 		if result.Diff != "" {
 			return textResult(prefix + "\n\n" + result.Diff), nil, nil

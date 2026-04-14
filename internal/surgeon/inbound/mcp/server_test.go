@@ -26,6 +26,8 @@ type mockCommands struct {
 	tagStructFn        func(ctx context.Context, req domain.TagRequest) error
 	extractInterfaceFn func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
 	patchFunctionFn    func(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
+	patchStructFn      func(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
+	patchInterfaceFn   func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -169,7 +171,7 @@ func TestToolsList(t *testing.T) {
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
-		"patch_function",
+		"patch_function", "patch_struct", "patch_interface",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -963,4 +965,18 @@ func (m *mockCommands) PatchFunction(ctx context.Context, req domain.PatchFuncti
 		return m.patchFunctionFn(ctx, req)
 	}
 	return domain.PatchFunctionResult{}, nil
+}
+
+func (m *mockCommands) PatchStruct(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error) {
+	if m.patchStructFn != nil {
+		return m.patchStructFn(ctx, req)
+	}
+	return domain.PatchStructResult{}, nil
+}
+
+func (m *mockCommands) PatchInterface(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error) {
+	if m.patchInterfaceFn != nil {
+		return m.patchInterfaceFn(ctx, req)
+	}
+	return domain.PatchInterfaceResult{}, nil
 }
