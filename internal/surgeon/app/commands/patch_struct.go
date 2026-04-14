@@ -202,18 +202,19 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		if findElement(*working, p.Name) != -1 {
 			return fmt.Sprintf("field %q already exists. Current fields: %s", p.Name, listNames(*working))
 		}
+		kind := "field"
+		// A dotted name with the same value as the type (e.g. name="io.Reader",
+		// type="io.Reader") denotes an embedded field.
+		if strings.Contains(p.Name, ".") && p.Name == p.Type {
+			kind = "embed"
+		}
 		newElem := &element{
 			name:     p.Name,
-			kind:     "field",
+			kind:     kind,
 			typeExpr: p.Type,
 			tag:      formatTag(p.Tag),
 			doc:      p.Doc,
 			dirty:    true,
-		}
-		kind := "field"
-		if strings.Contains(p.Name, ".") || (p.Type == "" && p.Name != "") {
-			kind = "embed"
-			newElem.kind = kind
 		}
 		return insertElement(working, original, p.Before, p.After, p.Position, newElem)
 
