@@ -431,16 +431,17 @@ func mapNormBodyToOrig(orig, normOrig string, normStart, normEnd int) (int, int)
 		}
 		nc := normOrig[ni]
 		oc := orig[oi]
-		if nc == oc {
+		switch nc {
+		case oc:
 			ni++
 			oi++
-		} else if nc == ' ' {
+		case ' ':
 			// The normalized string has a space; orig may have multiple ws chars.
 			ni++
 			for oi < len(orig) && (orig[oi] == ' ' || orig[oi] == '\t' || orig[oi] == '\n' || orig[oi] == '\r') {
 				oi++
 			}
-		} else {
+		default:
 			return -1, -1
 		}
 	}
