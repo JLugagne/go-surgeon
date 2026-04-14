@@ -228,6 +228,11 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	newSrc = append(newSrc, newBody...)
 	newSrc = append(newSrc, src[rbraceOff:]...)
 
+	// Reject the patch before writing if it would produce invalid Go.
+	if err := validateGoSource(req.FilePath, newSrc); err != nil {
+		return domain.PatchFunctionResult{}, err
+	}
+
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
 
 	if req.Preview {
@@ -490,6 +495,84 @@ func validateGoStmt(s string) error {
 	src := "package p\nfunc _(){\n" + s + "\n}\n"
 	_, err := parser.ParseFile(token.NewFileSet(), "", src, 0)
 	return err
+}
+
+// validateGoSource parses src as a full Go file and returns a structured error
+// if the result would be syntactically broken. This runs before writing so the
+// caller can reject the patch instead of leaving a broken file on disk.
+//
+// The error message includes the line/column of the first parse error plus a
+// two-line snippet around that location — enough for an agent to fix the patch
+// on the next turn without having to re-read the file.
+func validateGoSource(path string, src []byte) error {
+	_, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ParseComments)
+	if err == nil {
+		return nil
+	}
+
+	// go/scanner.ErrorList wraps one or more Error entries with positions.
+	// Extract the first position and show a snippet for better feedback.
+	msg := err.Error()
+	snippet := firstErrorSnippet(src, err)
+	if snippet != "" {
+		msg = msg + "\n" + snippet
+	}
+	return &domain.Error{
+		Code:    "PATCH_PRODUCES_INVALID_GO",
+		Message: "patch would produce syntactically invalid Go — rejected before writing:\n" + msg,
+	}
+}
+
+// firstErrorSnippet returns a ±1 line context around the first parse error, or
+// "" if no position can be extracted. We regex-extract the location from the
+// canonical parser message ("file:line:col: msg") rather than depending on
+// go/scanner internals — the format is stable and the dependency is trivial.
+func firstErrorSnippet(src []byte, parseErr error) string {
+	m := errLocRegexp.FindStringSubmatch(parseErr.Error())
+	if len(m) < 3 {
+		return ""
+	}
+	line := atoi(m[1])
+	col := atoi(m[2])
+	if line <= 0 {
+		return ""
+	}
+	lines := strings.Split(string(src), "\n")
+	if line > len(lines) {
+		return ""
+	}
+	var b strings.Builder
+	start := line - 2
+	if start < 1 {
+		start = 1
+	}
+	end := line + 1
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&b, "  %4d | %s\n", i, lines[i-1])
+		if i == line && col > 0 {
+			fmt.Fprintf(&b, "       | %s^\n", strings.Repeat(" ", col-1))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// errLocRegexp matches trailing "line:col:" in a parser error message.
+var errLocRegexp = regexpMustCompile(`:(\d+):(\d+):`)
+
+func regexpMustCompile(p string) *regexp.Regexp { return regexp.MustCompile(p) }
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // extractLine returns the full line from body that contains byte offset off.
