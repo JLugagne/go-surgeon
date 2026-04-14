@@ -122,7 +122,7 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 		params := types.TypeString(sig.Params(), qualifier)
 		results := types.TypeString(sig.Results(), qualifier)
 
-		methodStr := fmt.Sprintf("\n// %s implements %s.\nfunc (r %s) %s%s %s {\n\t// TODO: implement %s\n\tpanic(\"not implemented\")\n}\n",
+		methodStr := fmt.Sprintf("\n// %s implements %s.\nfunc (r %s) %s%s %s {\n\t// TODO(go-surgeon): implement %s\n\tpanic(\"not implemented\")\n}\n",
 			m.Name(), req.Interface, req.Receiver, m.Name(), params, results, m.Name())
 		newContent.WriteString(methodStr)
 		generatedMethodNames = append(generatedMethodNames, m.Name())

@@ -278,13 +278,13 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		buf.WriteString("\t\twantErr bool\n")
 	}
 	buf.WriteString("\t}{\n")
-	buf.WriteString("\t\t// TODO: Add test cases.\n")
+	buf.WriteString("\t\t// TODO(go-surgeon): Add test cases.\n")
 	buf.WriteString("\t}\n")
 
 	// Skip with a clear message when no test cases have been added yet,
 	// so the test shows up as SKIP in verbose mode rather than silently passing.
 	fmt.Fprintf(&buf, "\tif len(tests) == 0 {\n")
-	fmt.Fprintf(&buf, "\t\tt.Skip(\"TODO: no test cases defined for %s\")\n", testName)
+	fmt.Fprintf(&buf, "\t\tt.Skip(\"TODO(go-surgeon): no test cases defined for %s\")\n", testName)
 	buf.WriteString("\t}\n")
 
 	buf.WriteString("\tfor _, tt := range tests {\n")
