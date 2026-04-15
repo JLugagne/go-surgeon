@@ -47,7 +47,12 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 		modifiedFiles[action.FilePath] = true
 	}
 
-	return domain.PlanResult{FilesModified: len(modifiedFiles), Warnings: warnings}, nil
+	files := make([]string, 0, len(modifiedFiles))
+	for f := range modifiedFiles {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return domain.PlanResult{FilesModified: len(modifiedFiles), Files: files, Warnings: warnings}, nil
 }
 
 // ExecutePlan implements the SurgeonCommands interface.

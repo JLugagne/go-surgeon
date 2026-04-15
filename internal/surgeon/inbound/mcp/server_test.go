@@ -532,29 +532,28 @@ func TestExecutePlan_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	yamlPlan := `actions:
-  - action: add_func
-    file: book.go
-    content: |
-      func NewBook() *Book { return &Book{} }
-  - action: add_struct
-    file: book.go
-    content: |
-      type Book struct { Title string }
-`
-	result := callTool(t, cs, "execute_plan", map[string]any{"plan": yamlPlan})
+	result := callTool(t, cs, "execute_plan", map[string]any{
+		"actions": []map[string]any{
+			{"action": "add_func", "file": "book.go", "content": "func NewBook() *Book { return &Book{} }\n"},
+			{"action": "add_struct", "file": "book.go", "content": "type Book struct { Title string }\n"},
+		},
+	})
 	text := resultText(t, result)
 	assert.Contains(t, text, "SUCCESS: 2 files modified")
 	assert.False(t, result.IsError)
 	assert.Len(t, receivedPlan.Actions, 2)
 }
 
-func TestExecutePlan_InvalidYAML(t *testing.T) {
+func TestExecutePlan_InvalidFile(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
-	result := callTool(t, cs, "execute_plan", map[string]any{"plan": "not: valid: yaml: [["})
+	result := callTool(t, cs, "execute_plan", map[string]any{
+		"actions": []map[string]any{
+			{"action": "add_func", "file": "book.txt", "content": "func Foo() {}"},
+		},
+	})
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "failed to parse plan")
+	assert.Contains(t, resultText(t, result), "not a Go file")
 }
 
 func TestExecutePlan_ExecutionError(t *testing.T) {
@@ -566,7 +565,9 @@ func TestExecutePlan_ExecutionError(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "execute_plan", map[string]any{
-		"plan": "actions:\n  - action: update_func\n    file: book.go\n    identifier: Missing\n    content: |\n      func Missing() {}\n",
+		"actions": []map[string]any{
+			{"action": "update_func", "file": "book.go", "identifier": "Missing", "content": "func Missing() {}"},
+		},
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "node not found")
@@ -581,7 +582,9 @@ func TestExecutePlan_Warnings(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "execute_plan", map[string]any{
-		"plan": "actions:\n  - action: update_func\n    file: book.go\n    identifier: Foo\n    content: |\n      func Foo() {}\n",
+		"actions": []map[string]any{
+			{"action": "update_func", "file": "book.go", "identifier": "Foo", "content": "func Foo() {}"},
+		},
 	})
 	text := resultText(t, result)
 	assert.Contains(t, text, "WARNING:")

@@ -50,7 +50,9 @@ type Action struct {
 // PlanResult contains the outcome of executing a plan.
 type PlanResult struct {
 	FilesModified int
-	Warnings      []string
+	// Files lists the file paths that were written during plan execution.
+	Files    []string
+	Warnings []string
 }
 
 // Plan is a collection of actions to be executed.

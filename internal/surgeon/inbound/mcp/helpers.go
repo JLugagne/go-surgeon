@@ -280,3 +280,64 @@ func truncateToBudget(s string, tokenBudget, total int) string {
 	}
 	return s[:cut] + fmt.Sprintf("\n... (truncated to fit token_budget=%d; total %d results)\n", tokenBudget, total)
 }
+
+// symbolEdit describes one symbol operation within an edit result.
+type symbolEdit struct {
+	Action     string `json:"action"`
+	Identifier string `json:"identifier,omitempty"`
+	File       string `json:"file"`
+}
+
+// editOutput is the structured result for all write tools (create, update,
+// delete, insert_call, execute_plan, add/update/delete_interface).
+type editOutput struct {
+	FilesModified []string     `json:"files_modified"`
+	Symbols       []symbolEdit `json:"symbols,omitempty"`
+	Warnings      []string     `json:"warnings,omitempty"`
+}
+
+// patchOutput is the structured result for patch_function, patch_struct and patch_interface.
+type patchOutput struct {
+	File        string `json:"file"`
+	Identifier  string `json:"identifier"`
+	Applied     int    `json:"applied"`
+	Preview     bool   `json:"preview,omitempty"`
+	Diff        string `json:"diff,omitempty"`
+	MockUpdated bool   `json:"mock_updated,omitempty"`
+}
+
+// implementOutput is the structured result for the implement tool.
+type implementOutput struct {
+	File      string   `json:"file"`
+	Interface string   `json:"interface"`
+	Receiver  string   `json:"receiver"`
+	Stubs     []string `json:"stubs_added"`
+}
+
+// mockOutput is the structured result for the mock tool.
+type mockOutput struct {
+	File      string `json:"file"`
+	Interface string `json:"interface"`
+	MockName  string `json:"mock_name"`
+}
+
+// testOutput is the structured result for the test tool.
+type testOutput struct {
+	TestFile   string `json:"test_file"`
+	Identifier string `json:"identifier"`
+}
+
+// tagOutput is the structured result for the tag tool.
+type tagOutput struct {
+	File       string `json:"file"`
+	Identifier string `json:"identifier"`
+	Field      string `json:"field,omitempty"`
+}
+
+// extractInterfaceOutput is the structured result for the extract_interface tool.
+type extractInterfaceOutput struct {
+	InterfaceName string `json:"interface_name"`
+	InterfaceFile string `json:"interface_file"`
+	MockFile      string `json:"mock_file,omitempty"`
+	MockName      string `json:"mock_name,omitempty"`
+}

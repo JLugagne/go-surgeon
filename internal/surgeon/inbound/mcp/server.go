@@ -7,7 +7,6 @@ import (
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
-	"github.com/JLugagne/go-surgeon/internal/surgeon/inbound/converters"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -251,7 +250,13 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
 		fmt.Fprintf(&sb, "SUCCESS (create %s): %d files modified", in.Object, result.FilesModified)
-		return textResult(sb.String()), nil, nil
+		res := textResult(sb.String())
+		res.StructuredContent = editOutput{
+			FilesModified: result.Files,
+			Symbols:       []symbolEdit{{Action: string(actionType), File: in.File}},
+			Warnings:      result.Warnings,
+		}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -284,7 +289,13 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
 		fmt.Fprintf(&sb, "SUCCESS (update %s): %d files modified", in.Object, result.FilesModified)
-		return textResult(sb.String()), nil, nil
+		res := textResult(sb.String())
+		res.StructuredContent = editOutput{
+			FilesModified: result.Files,
+			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
+			Warnings:      result.Warnings,
+		}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -313,7 +324,13 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
 		fmt.Fprintf(&sb, "SUCCESS (delete %s): %d files modified", in.Object, result.FilesModified)
-		return textResult(sb.String()), nil, nil
+		res := textResult(sb.String())
+		res.StructuredContent = editOutput{
+			FilesModified: result.Files,
+			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
+			Warnings:      result.Warnings,
+		}
+		return res, nil, nil
 	})
 }
 
@@ -345,7 +362,16 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (add_interface): %v", err)), nil, nil
 		}
-		return textResult(result), nil, nil
+		files := []string{in.File}
+		if in.MockFile != "" {
+			files = append(files, in.MockFile)
+		}
+		res := textResult(result)
+		res.StructuredContent = editOutput{
+			FilesModified: files,
+			Symbols:       []symbolEdit{{Action: "add_interface", Identifier: in.Identifier, File: in.File}},
+		}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -363,7 +389,16 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update_interface): %v", err)), nil, nil
 		}
-		return textResult(result), nil, nil
+		files := []string{in.File}
+		if in.MockFile != "" {
+			files = append(files, in.MockFile)
+		}
+		res := textResult(result)
+		res.StructuredContent = editOutput{
+			FilesModified: files,
+			Symbols:       []symbolEdit{{Action: "update_interface", Identifier: in.Identifier, File: in.File}},
+		}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -388,7 +423,16 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (delete_interface): %v", err)), nil, nil
 		}
-		return textResult(result), nil, nil
+		files := []string{in.File}
+		if in.DeleteMock && in.MockFile != "" {
+			files = append(files, in.MockFile)
+		}
+		res := textResult(result)
+		res.StructuredContent = editOutput{
+			FilesModified: files,
+			Symbols:       []symbolEdit{{Action: "delete_interface", Identifier: in.Identifier, File: in.File}},
+		}
+		return res, nil, nil
 	})
 }
 
@@ -428,15 +472,20 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
 		fmt.Fprintf(&sb, "SUCCESS (insert_call): %d files modified", result.FilesModified)
-		return textResult(sb.String()), nil, nil
+		res := textResult(sb.String())
+		res.StructuredContent = editOutput{
+			FilesModified: result.Files,
+			Symbols:       []symbolEdit{{Action: "insert_call", Identifier: in.Function, File: in.File}},
+			Warnings:      result.Warnings,
+		}
+		return res, nil, nil
 	})
 }
 
 // --- Other tools ---
 
 type executePlanInput struct {
-	Plan   string `json:"plan" jsonschema:"plan content with actions to execute (JSON object or YAML string)"`
-	Format string `json:"format,omitempty" jsonschema:"plan format: 'json', 'yaml', or omitted for auto-detect (first non-whitespace byte '{' or '[' means JSON, otherwise YAML)"`
+	Actions []executePlanActionInput `json:"actions" jsonschema:"ordered list of AST actions to execute atomically (up to 15)"`
 }
 
 type implementInput struct {
@@ -530,9 +579,13 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
 		}
 		if result.Diff != "" {
-			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+			res := textResult(prefix + "\n\n" + result.Diff)
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
+			return res, nil, nil
 		}
-		return textResult(prefix), nil, nil
+		res := textResult(prefix)
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview}
+		return res, nil, nil
 	})
 
 	registerPatchStructTool(s, commands)
@@ -598,9 +651,13 @@ func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
 		}
 		if result.Diff != "" {
-			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+			res := textResult(prefix + "\n\n" + result.Diff)
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
+			return res, nil, nil
 		}
-		return textResult(prefix), nil, nil
+		res := textResult(prefix)
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview}
+		return res, nil, nil
 	})
 }
 
@@ -671,33 +728,45 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 			prefix += " (mock regenerated)"
 		}
 		if result.Diff != "" {
-			return textResult(prefix + "\n\n" + result.Diff), nil, nil
+			res := textResult(prefix + "\n\n" + result.Diff)
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, MockUpdated: result.MockUpdated}
+			return res, nil, nil
 		}
-		return textResult(prefix), nil, nil
+		res := textResult(prefix)
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, MockUpdated: result.MockUpdated}
+		return res, nil, nil
 	})
 }
 
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "execute_plan",
+		Name: "execute_plan",
 		Description: "Apply several related AST edits atomically (up to 15 actions). Reach for this whenever the task has more than one edit — a single plan is safer than a sequence of tool calls because any failure rolls everything back. " +
-			"Input format: JSON by default (auto-detected when the plan starts with '{' or '['), YAML also accepted; force with format='json'|'yaml'. " +
-			"JSON shape: {\"actions\":[{\"action\":\"<type>\",\"file\":\"path.go\",\"identifier\":\"Name\",\"content\":\"...\",\"package\":\"...\",\"mock_file\":\"...\",\"mock_name\":\"...\",\"doc\":\"...\",\"strip_doc\":false,\"position\":\"...\",\"with_test\":false}]}. Bool fields (strip_doc, with_test) accept native booleans or the strings \"true\"/\"false\". " +
 			"action values: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. " +
 			"content fields are raw Go (no package or imports); goimports runs after each action.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
-		plan, err := converters.ToDomainPlan([]byte(in.Plan), in.Format)
-		if err != nil {
-			return errorResult(fmt.Sprintf("failed to parse plan: %v", err)), nil, nil
-		}
-
-		for _, action := range plan.Actions {
-			if action.FilePath != "" {
-				if err := validateGoFile(action.FilePath); err != nil {
+		actions := make([]domain.Action, len(in.Actions))
+		for i, a := range in.Actions {
+			actions[i] = domain.Action{
+				Action:      domain.ActionType(a.Action),
+				FilePath:    a.File,
+				PackagePath: a.Package,
+				Identifier:  a.Identifier,
+				Content:     a.Content,
+				MockFile:    a.MockFile,
+				MockName:    a.MockName,
+				Doc:         a.Doc,
+				StripDoc:    a.StripDoc,
+				Position:    domain.InsertPosition(a.Position),
+				WithTest:    a.WithTest,
+			}
+			if actions[i].FilePath != "" {
+				if err := validateGoFile(actions[i].FilePath); err != nil {
 					return err, nil, nil
 				}
 			}
 		}
+		plan := domain.Plan{Actions: actions}
 
 		result, err := commands.ExecutePlan(ctx, plan)
 		if err != nil {
@@ -709,7 +778,17 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
 		fmt.Fprintf(&sb, "SUCCESS: %d files modified", result.FilesModified)
-		return textResult(sb.String()), nil, nil
+		symbols := make([]symbolEdit, len(in.Actions))
+		for i, a := range in.Actions {
+			symbols[i] = symbolEdit{Action: a.Action, Identifier: a.Identifier, File: a.File}
+		}
+		res := textResult(sb.String())
+		res.StructuredContent = editOutput{
+			FilesModified: result.Files,
+			Symbols:       symbols,
+			Warnings:      result.Warnings,
+		}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -729,7 +808,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 
 		if len(results) == 0 {
-			return textResult("All methods are already implemented."), nil, nil
+			res := textResult("All methods are already implemented.")
+			res.StructuredContent = implementOutput{File: in.File, Interface: in.Interface, Receiver: in.Receiver, Stubs: []string{}}
+			return res, nil, nil
 		}
 
 		var sb strings.Builder
@@ -738,7 +819,13 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			fmt.Fprintf(&sb, "Symbol: %s\nReceiver: %s\nFile: %s:%d-%d\nCode:\n%s\n\n",
 				res.Name, res.Receiver, res.File, res.LineStart, res.LineEnd, res.Code)
 		}
-		return textResult(sb.String()), nil, nil
+		stubs := make([]string, len(results))
+		for i, r := range results {
+			stubs[i] = r.Name
+		}
+		res := textResult(sb.String())
+		res.StructuredContent = implementOutput{File: in.File, Interface: in.Interface, Receiver: in.Receiver, Stubs: stubs}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -756,7 +843,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to generate mock: %v", err)), nil, nil
 		}
-		return textResult(result), nil, nil
+		res := textResult(result)
+		res.StructuredContent = mockOutput{File: in.File, Interface: in.Interface, MockName: in.MockName}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -770,7 +859,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to generate test: %v", err)), nil, nil
 		}
-		return textResult(fmt.Sprintf("SUCCESS: Generated test skeleton in %s", testFile)), nil, nil
+		res := textResult(fmt.Sprintf("SUCCESS: Generated test skeleton in %s", testFile))
+		res.StructuredContent = testOutput{TestFile: testFile, Identifier: in.Identifier}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -790,7 +881,9 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to update tags: %v", err)), nil, nil
 		}
-		return textResult(fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File)), nil, nil
+		res := textResult(fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File))
+		res.StructuredContent = tagOutput{File: in.File, Identifier: in.Identifier, Field: in.Field}
+		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -811,6 +904,22 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to extract interface: %v", err)), nil, nil
 		}
-		return textResult(fmt.Sprintf("SUCCESS: Extracted interface %s into %s", in.Name, interfaceFile)), nil, nil
+		res := textResult(fmt.Sprintf("SUCCESS: Extracted interface %s into %s", in.Name, interfaceFile))
+		res.StructuredContent = extractInterfaceOutput{InterfaceName: in.Name, InterfaceFile: interfaceFile, MockFile: in.MockFile, MockName: in.MockName}
+		return res, nil, nil
 	})
+}
+
+type executePlanActionInput struct {
+	Action     string `json:"action" jsonschema:"action type: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call"`
+	File       string `json:"file" jsonschema:"target file path"`
+	Package    string `json:"package,omitempty" jsonschema:"package import path (for cross-package operations)"`
+	Identifier string `json:"identifier,omitempty" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method"`
+	Content    string `json:"content,omitempty" jsonschema:"raw Go source code, no package declaration or imports"`
+	MockFile   string `json:"mock_file,omitempty" jsonschema:"target file for the generated mock"`
+	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
+	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
+	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
+	Position   string `json:"position,omitempty" jsonschema:"insert position: before-return, end-of-body, or after:<marker>"`
+	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function"`
 }
