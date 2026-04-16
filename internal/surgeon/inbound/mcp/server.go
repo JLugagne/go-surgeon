@@ -23,6 +23,7 @@ EXPLORE (before you edit, to understand what's there)
 
 EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewrite more)
 - Changing a few lines inside one function body      → patch_function
+- Same rename across many functions in one file      → patch_file (bulk text substitution with AST safety)
 - Single field change on a struct                    → patch_struct
 - Single method change on an interface               → patch_interface (regenerates the mock too)
 - Inserting one statement at a fixed position        → insert_call
@@ -617,6 +618,74 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	registerPatchStructTool(s, commands)
 	registerPatchInterfaceTool(s, commands)
+	registerPatchFileTool(s, commands)
+}
+
+// --- patch_file ---
+
+type filePatchOpInput struct {
+	Match      string `json:"match,omitempty" jsonschema:"literal text; all occurrences are replaced. Mutually exclusive with match_regex."`
+	MatchRegex string `json:"match_regex,omitempty" jsonschema:"RE2 regex alternative to match; use $1, $2, ... in replace for submatch substitution. Mutually exclusive with match."`
+	Replace    string `json:"replace" jsonschema:"replacement text; supports $1/$2/... when match_regex is used"`
+}
+
+type patchFileInput struct {
+	File    string             `json:"file" jsonschema:"target Go file path"`
+	Patches []filePatchOpInput `json:"patches" jsonschema:"ordered list of substitutions; each patch sees the result of the previous one"`
+	Preview bool               `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+}
+
+func registerPatchFileTool(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "patch_file",
+		Description: "Whole-file text substitution with AST safety — for cross-function batch edits (e.g. renaming a literal across many test functions). Each patch uses match (literal, all occurrences) or match_regex (RE2 with $1/$2 backrefs in replace). Patches apply sequentially; each sees the result of the previous one. After substitution the file is re-parsed and gofmt'd; if the result is invalid Go the patch is rejected and nothing is written. Zero-match patches are allowed and recorded as warnings. Complements patch_function (per-function) — prefer patch_function when edits are scoped to one body.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFileInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
+		patches := make([]domain.FilePatch, len(in.Patches))
+		for i, p := range in.Patches {
+			patches[i] = domain.FilePatch{
+				Match:      p.Match,
+				MatchRegex: p.MatchRegex,
+				Replace:    p.Replace,
+			}
+		}
+		result, err := commands.PatchFile(ctx, domain.PatchFileRequest{
+			FilePath: in.File,
+			Patches:  patches,
+			Preview:  in.Preview,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (patch_file): %v", err)), nil, nil
+		}
+
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
+		if result.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if len(result.Hits) > 0 {
+			hitStrs := make([]string, len(result.Hits))
+			for i, h := range result.Hits {
+				hitStrs[i] = fmt.Sprintf("#%d=%d", i+1, h)
+			}
+			prefix += fmt.Sprintf(" [hits %s]", strings.Join(hitStrs, ", "))
+		}
+		if len(result.AddedImports) > 0 {
+			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
+		}
+		for _, w := range result.Warnings {
+			prefix += "\n  WARNING: " + w
+		}
+		if result.Diff != "" {
+			res := textResult(prefix + "\n\n" + result.Diff)
+			res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
+			return res, nil, nil
+		}
+		res := textResult(prefix)
+		res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
+		return res, nil, nil
+	})
 }
 
 type structPatchOpInput struct {

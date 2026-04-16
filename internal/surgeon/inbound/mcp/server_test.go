@@ -28,6 +28,7 @@ type mockCommands struct {
 	patchFunctionFn    func(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
 	patchStructFn      func(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
 	patchInterfaceFn   func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
+	patchFileFn        func(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -171,7 +172,7 @@ func TestToolsList(t *testing.T) {
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
-		"patch_function", "patch_struct", "patch_interface",
+		"patch_function", "patch_struct", "patch_interface", "patch_file",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -982,4 +983,11 @@ func (m *mockCommands) PatchInterface(ctx context.Context, req domain.PatchInter
 		return m.patchInterfaceFn(ctx, req)
 	}
 	return domain.PatchInterfaceResult{}, nil
+}
+
+func (m *mockCommands) PatchFile(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error) {
+	if m.patchFileFn != nil {
+		return m.patchFileFn(ctx, req)
+	}
+	return domain.PatchFileResult{}, nil
 }
