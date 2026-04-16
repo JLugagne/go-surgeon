@@ -27,7 +27,9 @@ func (m *mockFS) WriteFile(ctx context.Context, path string, content []byte) err
 func (m *mockFS) ReadDir(ctx context.Context, path string) ([]string, error)       { return nil, nil }
 func (m *mockFS) IsDir(ctx context.Context, path string) (bool, error)             { return false, nil }
 func (m *mockFS) MkdirAll(ctx context.Context, path string) error                  { return nil }
-func (m *mockFS) ExecuteGoImports(ctx context.Context, files []string) error       { return nil }
+func (m *mockFS) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
+	return nil, nil
+}
 
 func TestFindSymbols(t *testing.T) {
 	tmpDir := t.TempDir()

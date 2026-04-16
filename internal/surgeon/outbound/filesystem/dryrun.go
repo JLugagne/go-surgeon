@@ -54,8 +54,8 @@ func (f *DryRunFileSystem) MkdirAll(ctx context.Context, path string) error {
 	return nil
 }
 
-func (f *DryRunFileSystem) ExecuteGoImports(ctx context.Context, files []string) error {
-	return nil
+func (f *DryRunFileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
+	return nil, nil
 }
 
 // PrintDiffs prints all accumulated diffs to stdout.

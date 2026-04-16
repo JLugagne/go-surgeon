@@ -439,7 +439,7 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		return "", &domain.Error{Code: "WRITE_ERROR", Message: "failed to write test file", Err: err}
 	}
 
-	_ = h.fs.ExecuteGoImports(ctx, []string{testFile})
+	_, _ = h.fs.ExecuteGoImports(ctx, []string{testFile})
 
 	return testFile, nil
 }

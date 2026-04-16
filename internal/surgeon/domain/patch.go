@@ -32,9 +32,10 @@ type PatchFunctionRequest struct {
 
 // PatchFunctionResult is the output of PatchFunction.
 type PatchFunctionResult struct {
-	Diff    string
-	Applied int
-	Preview bool
+	Diff         string
+	Applied      int
+	Preview      bool
+	AddedImports []string
 }
 
 // StructPatchOp is the operation type for a struct declaration patch.
@@ -73,9 +74,10 @@ type PatchStructRequest struct {
 
 // PatchStructResult is the output of PatchStruct.
 type PatchStructResult struct {
-	Diff    string
-	Applied int
-	Preview bool
+	Diff         string
+	Applied      int
+	Preview      bool
+	AddedImports []string
 }
 
 // InterfacePatchOp is the operation type for an interface declaration patch.
@@ -117,8 +119,9 @@ type PatchInterfaceRequest struct {
 
 // PatchInterfaceResult is the output of PatchInterface.
 type PatchInterfaceResult struct {
-	Diff        string
-	Applied     int
-	Preview     bool
-	MockUpdated bool // true if the mock was regenerated
+	Diff         string
+	Applied      int
+	Preview      bool
+	MockUpdated  bool // true if the mock was regenerated
+	AddedImports []string
 }

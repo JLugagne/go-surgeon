@@ -191,7 +191,7 @@ func (h *ExecutePlanHandler) deleteMock(ctx context.Context, mockFile, mockName 
 	if err := h.fs.WriteFile(ctx, mockFile, updated); err != nil {
 		return "", &domain.Error{Code: "WRITE_ERROR", Message: "failed to write mock file", Err: err}
 	}
-	_ = h.fs.ExecuteGoImports(ctx, []string{mockFile})
+	_, _ = h.fs.ExecuteGoImports(ctx, []string{mockFile})
 
 	return fmt.Sprintf("removed mock %s from %s", receiverName, filepath.Base(mockFile)), nil
 }
