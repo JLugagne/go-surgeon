@@ -112,28 +112,28 @@ func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) strin
 }
 
 // findSymbols mirrors the CLI symbol command's multi-form query resolution.
-func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string, module string) []domain.SymbolResult {
+func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string, module string, context string) []domain.SymbolResult {
 	parts := strings.Split(queryStr, ".")
 	var allResults []domain.SymbolResult
 
 	if len(parts) == 1 {
-		query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: module}
+		query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: module, Context: context}
 		results, _ := queries.FindSymbols(ctx, query, dir)
 		allResults = append(allResults, results...)
 	}
 
 	if len(parts) == 2 {
-		query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: module}
+		query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context}
 		results1, _ := queries.FindSymbols(ctx, query1, dir)
 		allResults = append(allResults, results1...)
 
-		query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: module}
+		query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context}
 		results2, _ := queries.FindSymbols(ctx, query2, dir)
 		allResults = append(allResults, results2...)
 	}
 
 	if len(parts) == 3 {
-		query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: module}
+		query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: module, Context: context}
 		results, _ := queries.FindSymbols(ctx, query, dir)
 		allResults = append(allResults, results...)
 	}
@@ -211,6 +211,16 @@ func formatSymbolResults(results []domain.SymbolResult, showBody bool, queryStr 
 			sb.WriteString("Imports:\n")
 			for _, imp := range res.Imports {
 				fmt.Fprintf(&sb, "  %s\n", imp)
+			}
+		}
+		if len(res.FileOutline) > 0 {
+			sb.WriteString("File outline:\n")
+			for _, e := range res.FileOutline {
+				if e.Receiver != "" {
+					fmt.Fprintf(&sb, "  L%d-%d (%s) %s.%s: %s\n", e.LineStart, e.LineEnd, e.Kind, e.Receiver, e.Name, e.Signature)
+				} else {
+					fmt.Fprintf(&sb, "  L%d-%d (%s) %s: %s\n", e.LineStart, e.LineEnd, e.Kind, e.Name, e.Signature)
+				}
 			}
 		}
 	}
