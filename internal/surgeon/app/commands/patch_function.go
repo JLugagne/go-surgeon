@@ -272,6 +272,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		if body := formatNumberedSource(src, funcStart.Offset, funcEnd.Offset, funcStart.Line); body != "" {
 			msg += fmt.Sprintf("\n\nCurrent body of %s (lines %d-%d):\n%s", req.Identifier, funcStart.Line, funcEnd.Line, body)
 		}
+		msg += "\nHint: retry with from_line/to_line targeting using the line numbers above."
 		return domain.PatchFunctionResult{}, &domain.Error{
 			Code:    "PATCH_FAILED",
 			Message: msg,
