@@ -145,3 +145,32 @@ type PatchInterfaceResult struct {
 	// Warnings are non-fatal notes, mirroring PatchFunctionResult.Warnings for API symmetry. Currently always empty.
 	Warnings []string
 }
+
+// FilePatch describes one whole-file text substitution. Exactly one of Match
+// (literal, all occurrences) or MatchRegex (RE2, $1/$2 submatch substitutions
+// in Replace) must be set. Patches run in order listed, each seeing the
+// result of the previous one.
+type FilePatch struct {
+	Match      string // literal text; all occurrences are replaced
+	MatchRegex string // RE2 alternative to Match; mutually exclusive
+	Replace    string // replacement text; supports $1, $2, ... for MatchRegex
+}
+
+// PatchFileRequest is the input to PatchFile — whole-file text substitution
+// with AST safety guarantees (re-parse and reject on syntax break, gofmt).
+type PatchFileRequest struct {
+	FilePath string
+	Patches  []FilePatch
+	Preview  bool // if true, return diff without writing
+}
+
+// PatchFileResult is the output of PatchFile.
+type PatchFileResult struct {
+	Diff         string
+	Applied      int   // number of patches that ran (= len(req.Patches))
+	Hits         []int // per-patch match count (parallel to req.Patches)
+	Preview      bool
+	AddedImports []string
+	// Warnings collects non-fatal notes — e.g. "patch #N: zero matches."
+	Warnings []string
+}

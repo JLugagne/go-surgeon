@@ -321,6 +321,17 @@ type editOutput struct {
 	AddedImports  []string     `json:"added_imports,omitempty"`
 }
 
+// patchFileOutput is the structured result for patch_file.
+type patchFileOutput struct {
+	File         string   `json:"file"`
+	Applied      int      `json:"applied"`
+	Hits         []int    `json:"hits,omitempty"`
+	Preview      bool     `json:"preview,omitempty"`
+	Diff         string   `json:"diff,omitempty"`
+	AddedImports []string `json:"added_imports,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+}
+
 // patchOutput is the structured result for patch_function, patch_struct and patch_interface.
 type patchOutput struct {
 	File         string   `json:"file"`
