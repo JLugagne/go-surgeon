@@ -200,6 +200,20 @@ func formatSymbolResults(results []domain.SymbolResult, showBody bool, queryStr 
 	}
 	bodyLines := res.LineEnd - res.LineStart + 1
 	fmt.Fprintf(&sb, "File: %s:%d-%d (%d lines body)\n", res.File, res.LineStart, res.LineEnd, bodyLines)
+	if showBody {
+		// Package + imports header: gives the agent enough ambient context
+		// to patch without a follow-up Read (covers "do I need to add an
+		// import?" and "what package is this in?" in one response).
+		if res.Package != "" {
+			fmt.Fprintf(&sb, "Package: %s\n", res.Package)
+		}
+		if len(res.Imports) > 0 {
+			sb.WriteString("Imports:\n")
+			for _, imp := range res.Imports {
+				fmt.Fprintf(&sb, "  %s\n", imp)
+			}
+		}
+	}
 	if res.Doc != "" {
 		fmt.Fprintf(&sb, "Doc:\n%s\n", res.Doc)
 	}
