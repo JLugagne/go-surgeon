@@ -330,6 +330,7 @@ type patchOutput struct {
 	Diff         string   `json:"diff,omitempty"`
 	MockUpdated  bool     `json:"mock_updated,omitempty"`
 	AddedImports []string `json:"added_imports,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
 }
 
 // implementOutput is the structured result for the implement tool.
