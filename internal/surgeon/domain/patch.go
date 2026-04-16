@@ -86,6 +86,8 @@ type PatchStructResult struct {
 	Applied      int
 	Preview      bool
 	AddedImports []string
+	// Warnings are non-fatal notes, mirroring PatchFunctionResult.Warnings for API symmetry. Currently always empty.
+	Warnings []string
 }
 
 // InterfacePatchOp is the operation type for an interface declaration patch.
@@ -132,4 +134,6 @@ type PatchInterfaceResult struct {
 	Preview      bool
 	MockUpdated  bool // true if the mock was regenerated
 	AddedImports []string
+	// Warnings are non-fatal notes, mirroring PatchFunctionResult.Warnings for API symmetry. Currently always empty.
+	Warnings []string
 }
