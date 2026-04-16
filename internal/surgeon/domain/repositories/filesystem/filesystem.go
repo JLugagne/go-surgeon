@@ -11,5 +11,5 @@ type FileSystem interface {
 	ReadDir(ctx context.Context, path string) ([]string, error)
 	IsDir(ctx context.Context, path string) (bool, error)
 	MkdirAll(ctx context.Context, path string) error
-	ExecuteGoImports(ctx context.Context, files []string) error
+	ExecuteGoImports(ctx context.Context, files []string) ([]string, error)
 }

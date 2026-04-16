@@ -81,9 +81,9 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 	if err := h.fs.WriteFile(ctx, req.FilePath, newSrc); err != nil {
 		return domain.PatchStructResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	_ = h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
+	addedImports, _ := h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
-	return domain.PatchStructResult{Diff: diff, Applied: len(req.Patches)}, nil
+	return domain.PatchStructResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports}, nil
 }
 
 // element is the in-memory model of one field in a struct or one method/embed

@@ -85,7 +85,7 @@ func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.Patc
 	if err := h.fs.WriteFile(ctx, req.FilePath, newSrc); err != nil {
 		return domain.PatchInterfaceResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	_ = h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
+	addedImports, _ := h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
 	// Regenerate mock if requested and the method set changed.
 	mockUpdated := false
@@ -101,9 +101,10 @@ func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.Patc
 	}
 
 	return domain.PatchInterfaceResult{
-		Diff:        diff,
-		Applied:     len(req.Patches),
-		MockUpdated: mockUpdated,
+		Diff:         diff,
+		Applied:      len(req.Patches),
+		MockUpdated:  mockUpdated,
+		AddedImports: addedImports,
 	}, nil
 }
 

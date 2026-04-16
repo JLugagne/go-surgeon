@@ -578,6 +578,9 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if result.Preview {
 			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
 		}
+		if len(result.AddedImports) > 0 {
+			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
+		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
 			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
@@ -649,6 +652,9 @@ func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
 			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if len(result.AddedImports) > 0 {
+			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
@@ -726,6 +732,9 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 		}
 		if result.MockUpdated {
 			prefix += " (mock regenerated)"
+		}
+		if len(result.AddedImports) > 0 {
+			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)

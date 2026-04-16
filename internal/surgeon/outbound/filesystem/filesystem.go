@@ -153,13 +153,54 @@ func warnUnresolvedImports(path string, src []byte) {
 	}
 }
 
-// ExecuteGoImports executes goimports -w on the provided files.
-func (f *FileSystem) ExecuteGoImports(ctx context.Context, files []string) error {
+// ExecuteGoImports executes goimports -w on the provided files and returns the import paths that were added (net-new after goimports runs).
+func (f *FileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
 	if len(files) == 0 {
-		return nil
+		return nil, nil
+	}
+
+	before := make(map[string]map[string]bool, len(files))
+	for _, path := range files {
+		src, err := os.ReadFile(path)
+		if err == nil {
+			before[path] = parseImportPaths(path, src)
+		}
 	}
 
 	args := append([]string{"-w"}, files...)
 	cmd := exec.CommandContext(ctx, "goimports", args...)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+
+	var added []string
+	seen := make(map[string]bool)
+	for _, path := range files {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		after := parseImportPaths(path, src)
+		prev := before[path]
+		for imp := range after {
+			if !prev[imp] && !seen[imp] {
+				added = append(added, imp)
+				seen[imp] = true
+			}
+		}
+	}
+	return added, nil
+}
+
+func parseImportPaths(path string, src []byte) map[string]bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]bool, len(f.Imports))
+	for _, imp := range f.Imports {
+		m[strings.Trim(imp.Path.Value, `"`)] = true
+	}
+	return m
 }

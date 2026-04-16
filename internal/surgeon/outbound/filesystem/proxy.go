@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
 )
 
@@ -30,6 +31,6 @@ func (p *ProxyFileSystem) MkdirAll(ctx context.Context, path string) error {
 	return p.Active.MkdirAll(ctx, path)
 }
 
-func (p *ProxyFileSystem) ExecuteGoImports(ctx context.Context, files []string) error {
+func (p *ProxyFileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
 	return p.Active.ExecuteGoImports(ctx, files)
 }

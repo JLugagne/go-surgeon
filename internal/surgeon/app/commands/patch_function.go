@@ -170,7 +170,15 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 
 		switch p.Op {
 		case domain.PatchOpReplace:
-			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: p.Replace}
+			repl := p.Replace
+			// Re-apply the original line's indentation when the replacement has none,
+			// so callers don't need to reproduce leading whitespace.
+			if repl != "" && !startsWithWhitespace(repl) {
+				if indent := lineIndent(origBody, hit[0]); indent != "" && hit[0] == lineStartOffset(origBody, hit[0]) {
+					repl = reIndentReplacement(repl, indent)
+				}
+			}
+			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
 
 		case domain.PatchOpInsertBefore:
 			indent := lineIndent(origBody, hit[0])
@@ -251,9 +259,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	if err := h.fs.WriteFile(ctx, req.FilePath, newSrc); err != nil {
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	_ = h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
+	addedImports, _ := h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
-	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches)}, nil
+	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports}, nil
 }
 
 // safeRegexMatches compiles pattern and returns all non-empty match byte ranges
@@ -698,4 +706,25 @@ func diffStrings(filename, oldSrc, newSrc string) string {
 	}
 	text, _ := difflib.GetUnifiedDiffString(diff)
 	return text
+}
+
+// startsWithWhitespace reports whether s begins with a space or tab.
+func startsWithWhitespace(s string) bool {
+	return len(s) > 0 && (s[0] == ' ' || s[0] == '\t')
+}
+
+// reIndentReplacement prepends indent to the first line of repl and applies
+// the same indent to any subsequent lines that have no leading whitespace.
+// Lines that already carry their own indentation are left untouched.
+func reIndentReplacement(repl, indent string) string {
+	lines := strings.Split(repl, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		if !startsWithWhitespace(l) {
+			lines[i] = indent + l
+		}
+	}
+	return strings.Join(lines, "\n")
 }
