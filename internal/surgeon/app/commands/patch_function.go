@@ -88,6 +88,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	lbraceOff := fset.Position(targetFn.Body.Lbrace).Offset // offset of '{'
+	bodyStartLine := fset.Position(targetFn.Body.Lbrace).Line
 	rbraceOff := fset.Position(targetFn.Body.Rbrace).Offset // offset of '}'
 	origBody := string(src[lbraceOff+1 : rbraceOff])
 
@@ -100,8 +101,13 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	var errs []string
 
 	for i, p := range req.Patches {
-		if p.Match == "" && p.MatchRegex == "" {
-			errs = append(errs, fmt.Sprintf("patch #%d (%s): match or match_regex is required", i+1, p.Op))
+		lineMode := p.AtLine > 0 || p.FromLine > 0 || p.ToLine > 0
+		if lineMode && (p.Match != "" || p.MatchRegex != "") {
+			errs = append(errs, fmt.Sprintf("patch #%d (%s): line-based targets (at_line/from_line/to_line) are mutually exclusive with match/match_regex", i+1, p.Op))
+			continue
+		}
+		if !lineMode && p.Match == "" && p.MatchRegex == "" {
+			errs = append(errs, fmt.Sprintf("patch #%d (%s): match, match_regex, at_line, or from_line/to_line is required", i+1, p.Op))
 			continue
 		}
 		if p.Match != "" && p.MatchRegex != "" {
@@ -109,6 +115,26 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			continue
 		}
 
+		if lineMode {
+			fromL := p.FromLine
+			toL := p.ToLine
+			if fromL == 0 && toL == 0 {
+				fromL = p.AtLine
+				toL = p.AtLine
+			} else if fromL == 0 {
+				fromL = toL
+			} else if toL == 0 {
+				toL = fromL
+			}
+			start, end, ok := resolveBodyLineRange(origBody, bodyStartLine, fromL, toL)
+			if !ok {
+				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d out of %s body (body lines %d-%d)", i+1, p.Op, fromL, toL, req.Identifier, bodyStartLine, bodyStartLine+strings.Count(origBody, "\n")))
+				continue
+			}
+			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
+			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			continue
+		}
 		var hits [][2]int // [start, end] byte ranges in origBody
 		if p.MatchRegex != "" {
 			h, regexErr := safeRegexMatches(p.MatchRegex, origBody)
@@ -727,4 +753,92 @@ func reIndentReplacement(repl, indent string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// resolveBodyLineRange maps a file-absolute line range onto byte offsets
+// within origBody. bodyStartLine is the file line of the opening '{' of
+// the function. fromLine and toLine are inclusive and 1-based in the
+// file's numbering (the same numbers symbol body=true prints).
+//
+// Returns (startOffset, endOffset, ok). When ok is false, at least one
+// requested line falls outside the body.
+// resolveBodyLineRange maps a file-absolute line range onto byte offsets
+// within origBody. bodyStartLine is the file line of the opening '{' of
+// the function. fromLine and toLine are inclusive and 1-based in the
+// file's numbering (the same numbers symbol body=true prints).
+//
+// Returns (startOffset, endOffset, ok). When ok is false, at least one
+// requested line falls outside the body.
+func resolveBodyLineRange(origBody string, bodyStartLine, fromLine, toLine int) (int, int, bool) {
+	if fromLine <= 0 || toLine < fromLine {
+		return 0, 0, false
+	}
+	// origBody starts immediately after '{'. Line of offset 0 is bodyStartLine.
+	// Advance through the body tracking where each line starts.
+	line := bodyStartLine
+	startOff := -1
+	endOff := -1
+	lineStart := 0
+	for i := 0; i <= len(origBody); i++ {
+		if line == fromLine && startOff < 0 {
+			startOff = lineStart
+		}
+		if line == toLine+1 && endOff < 0 {
+			endOff = lineStart
+		}
+		if i == len(origBody) {
+			break
+		}
+		if origBody[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+	if startOff < 0 {
+		return 0, 0, false
+	}
+	if endOff < 0 {
+		endOff = len(origBody)
+	}
+	return startOff, endOff, true
+}
+
+// buildLineModeEdit converts a FunctionPatch with line-based targeting
+// into a resolvedEdit ready for Phase 2 application. start/end are byte
+// offsets into origBody (already resolved from line numbers).
+//
+// Returns start, end, replacement. Unknown ops return an empty replacement
+// with start==end==0 (the caller should have rejected them earlier, but we
+// don't panic on surprise input).
+func buildLineModeEdit(p domain.FunctionPatch, origBody string, start, end int) (int, int, string) {
+	switch p.Op {
+	case domain.PatchOpReplace:
+		repl := p.Replace
+		// Re-indent to match the original line, like the match branch does.
+		if repl != "" && !startsWithWhitespace(repl) {
+			if indent := lineIndent(origBody, start); indent != "" && start == lineStartOffset(origBody, start) {
+				repl = reIndentReplacement(repl, indent)
+			}
+		}
+		// Ensure trailing newline if we're replacing a line range and the
+		// replacement doesn't already end with one.
+		if end > start && origBody[end-1] == '\n' && (repl == "" || repl[len(repl)-1] != '\n') {
+			repl += "\n"
+		}
+		return start, end, repl
+	case domain.PatchOpInsertBefore:
+		indent := lineIndent(origBody, start)
+		line := indent + strings.TrimSpace(p.Code) + "\n"
+		return start, start, line
+	case domain.PatchOpInsertAfter:
+		indent := lineIndent(origBody, start)
+		line := indent + strings.TrimSpace(p.Code) + "\n"
+		return end, end, line
+	case domain.PatchOpDelete:
+		return start, end, ""
+	}
+	// PatchOpWrap in line mode isn't defined — wrap is always about
+	// wrapping a matched substring, which doesn't map cleanly to a line
+	// range. Callers using line mode should pick a different op.
+	return start, end, p.Replace
 }
