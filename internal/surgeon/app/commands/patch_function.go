@@ -135,6 +135,11 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
+				if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+start), fromL); w != "" {
+					warnings = append(warnings, w)
+				}
+			}
 			continue
 		}
 		var hits [][2]int // [start, end] byte ranges in origBody
@@ -231,12 +236,18 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			line := indent + strings.TrimSpace(p.Code) + "\n"
 			lineStart := lineStartOffset(origBody, hit[0])
 			edits[i] = resolvedEdit{start: lineStart, end: lineStart, replacement: line}
+			if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+hit[0]), bodyStartLine+strings.Count(origBody[:hit[0]], "\n")); w != "" {
+				warnings = append(warnings, w)
+			}
 
 		case domain.PatchOpInsertAfter:
 			indent := lineIndent(origBody, hit[0])
 			line := indent + strings.TrimSpace(p.Code) + "\n"
 			lineEnd := lineEndOffset(origBody, hit[0])
 			edits[i] = resolvedEdit{start: lineEnd, end: lineEnd, replacement: line}
+			if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+hit[0]), bodyStartLine+strings.Count(origBody[:hit[0]], "\n")); w != "" {
+				warnings = append(warnings, w)
+			}
 
 		case domain.PatchOpDelete:
 			start, end := deletionRange(origBody, hit[0], hit[1])

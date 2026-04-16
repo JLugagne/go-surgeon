@@ -1423,3 +1423,117 @@ func TestFindTokenMatches(t *testing.T) {
 		assert.Len(t, hits, 2)
 	})
 }
+
+func TestPatchFunction_InnerScopeWarning_InsertInForLoop(t *testing.T) {
+	// insert_after lands at a line inside a for-loop body. Expect the
+	// warning wording to mention "for-loop body" and the line number.
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Walk(items []int) int {
+	total := 0
+	for _, it := range items {
+		total += it
+		_ = it
+	}
+	return total
+}
+`)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Walk",
+		Patches: []domain.FunctionPatch{{
+			Op:    domain.PatchOpInsertAfter,
+			Match: "total += it",
+			Code:  "total++",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Warnings, 1, "expected a single inner-scope warning")
+	assert.Contains(t, res.Warnings[0], "for-loop body")
+	assert.Regexp(t, `L\d+`, res.Warnings[0])
+}
+
+func TestPatchFunction_InnerScopeWarning_InsertAtTopLevelIsSilent(t *testing.T) {
+	// insert_after at the function's top level (not inside any inner block)
+	// must not emit an inner-scope warning.
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Walk(items []int) int {
+	total := 0
+	for _, it := range items {
+		total += it
+	}
+	return total
+}
+`)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Walk",
+		Patches: []domain.FunctionPatch{{
+			Op:    domain.PatchOpInsertAfter,
+			Match: "total := 0",
+			Code:  "total++",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Warnings, "top-level insert should not warn")
+}
+
+func TestPatchFunction_InnerScopeWarning_IfBranch(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Pick(x int) int {
+	if x > 0 {
+		x = x * 2
+	}
+	return x
+}
+`)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Pick",
+		Patches: []domain.FunctionPatch{{
+			Op:    domain.PatchOpInsertBefore,
+			Match: "x = x * 2",
+			Code:  "x++",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "if/else branch")
+}
+
+func TestPatchFunction_InnerScopeWarning_LineMode(t *testing.T) {
+	// Same detection must apply when the insert is triggered via line-mode
+	// targeting (from_line/to_line) rather than match text.
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Walk(items []int) int {
+	total := 0
+	for _, it := range items {
+		total += it
+	}
+	return total
+}
+`)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Walk",
+		Patches: []domain.FunctionPatch{{
+			Op:     domain.PatchOpInsertAfter,
+			AtLine: 6, // the `total += it` line
+			Code:   "total++",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "for-loop body")
+}
