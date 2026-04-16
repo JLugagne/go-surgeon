@@ -253,7 +253,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		}
 		idx := findElement(*working, p.Name)
 		if idx == -1 {
-			return fmt.Sprintf("field %q not found. Current fields: %s", p.Name, listNames(*working))
+			return fieldNotFoundMsg(p.Name, *working)
 		}
 		*working = append((*working)[:idx], (*working)[idx+1:]...)
 		return ""
@@ -264,7 +264,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		}
 		idx := findElement(*working, p.From)
 		if idx == -1 {
-			return fmt.Sprintf("field %q not found. Current fields: %s", p.From, listNames(*working))
+			return fieldNotFoundMsg(p.From, *working)
 		}
 		if findElement(*working, p.To) != -1 {
 			return fmt.Sprintf("field %q already exists — cannot rename %q to a colliding name", p.To, p.From)
@@ -279,7 +279,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		}
 		idx := findElement(*working, p.Name)
 		if idx == -1 {
-			return fmt.Sprintf("field %q not found. Current fields: %s", p.Name, listNames(*working))
+			return fieldNotFoundMsg(p.Name, *working)
 		}
 		(*working)[idx].typeExpr = p.Type
 		(*working)[idx].dirty = true
@@ -291,7 +291,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		}
 		idx := findElement(*working, p.Name)
 		if idx == -1 {
-			return fmt.Sprintf("field %q not found. Current fields: %s", p.Name, listNames(*working))
+			return fieldNotFoundMsg(p.Name, *working)
 		}
 		(*working)[idx].tag = formatTag(p.Tag)
 		(*working)[idx].dirty = true
@@ -303,7 +303,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 		}
 		idx := findElement(*working, p.Name)
 		if idx == -1 {
-			return fmt.Sprintf("field %q not found. Current fields: %s", p.Name, listNames(*working))
+			return fieldNotFoundMsg(p.Name, *working)
 		}
 		(*working)[idx].doc = p.Doc
 		(*working)[idx].dirty = true
@@ -524,4 +524,12 @@ func extractLineRange(src []byte, fset *token.FileSet, start, end token.Pos) str
 		e++
 	}
 	return string(src[s:e])
+}
+
+// fieldNotFoundMsg formats the standard "field not found" error used by
+// applyStructPatch across remove/rename/retype/set_tag/set_doc branches.
+// Keeping one format string makes sure the error message stays consistent
+// whenever the hint format evolves.
+func fieldNotFoundMsg(name string, working []*element) string {
+	return fmt.Sprintf("field %q not found. Current fields: %s", name, listNames(working))
 }
