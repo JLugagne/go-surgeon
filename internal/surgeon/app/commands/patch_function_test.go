@@ -1537,3 +1537,266 @@ func Walk(items []int) int {
 	require.Len(t, res.Warnings, 1)
 	assert.Contains(t, res.Warnings[0], "for-loop body")
 }
+
+func TestPatchFunction_SetSignature_FreeFunction_ParamsOnly(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Greet(name string) string {
+	return "hi " + name
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Greet",
+		Patches: []domain.FunctionPatch{{
+			Op:     domain.PatchOpSetSignature,
+			Params: "(ctx context.Context, name string)",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "func Greet(ctx context.Context, name string) string")
+	// Body must be untouched.
+	assert.Contains(t, content, `return "hi " + name`)
+}
+
+func TestPatchFunction_SetSignature_FreeFunction_ReturnsOnly(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Load(name string) string {
+	return name
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Load",
+		Patches: []domain.FunctionPatch{{
+			Op:      domain.PatchOpSetSignature,
+			Returns: "([]byte, error)",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "func Load(name string) ([]byte, error)")
+	// Existing params and body unchanged.
+	assert.Contains(t, content, "name string")
+	assert.Contains(t, content, "return name")
+}
+
+func TestPatchFunction_SetSignature_FreeFunction_Both(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Do(x int) int {
+	return x + 1
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Do",
+		Patches: []domain.FunctionPatch{{
+			Op:      domain.PatchOpSetSignature,
+			Params:  "(ctx context.Context, x int)",
+			Returns: "(int, error)",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "func Do(ctx context.Context, x int) (int, error)")
+	assert.Contains(t, content, "return x + 1")
+}
+
+func TestPatchFunction_SetSignature_Method_PreservesReceiver(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+type S struct{}
+
+func (s *S) Run(x int) error {
+	_ = x
+	return nil
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "S.Run",
+		Patches: []domain.FunctionPatch{{
+			Op:      domain.PatchOpSetSignature,
+			Params:  "(ctx context.Context, x int)",
+			Returns: "error",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	// Receiver must be intact.
+	assert.Contains(t, content, "func (s *S) Run(ctx context.Context, x int) error")
+	assert.Contains(t, content, "return nil")
+}
+
+func TestPatchFunction_SetSignature_Generic_PreservesTypeParams(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo[T any](x T) T {
+	return x
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:      domain.PatchOpSetSignature,
+			Params:  "(x T, y T)",
+			Returns: "T",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	// Generic type params must still be there.
+	assert.Contains(t, content, "func Foo[T any](x T, y T) T")
+	assert.Contains(t, content, "return x")
+}
+
+func TestPatchFunction_SetSignature_InvalidParamsRejected(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo(x int) int {
+	return x
+}
+`)
+	_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:     domain.PatchOpSetSignature,
+			Params: "(x int, ,)", // syntactically invalid
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "set_signature")
+	// File must not have been rewritten.
+	assert.Contains(t, getFile(fs, "f.go"), "func Foo(x int) int")
+}
+
+func TestPatchFunction_SetSignature_RequiresParamsOrReturns(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo(x int) int { return x }
+`)
+	_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op: domain.PatchOpSetSignature,
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one of params or returns")
+}
+
+func TestPatchFunction_SetSignature_ParamsNeedParens(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo(x int) int { return x }
+`)
+	_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:     domain.PatchOpSetSignature,
+			Params: "x int",
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parens")
+}
+
+func TestPatchFunction_SetSignature_WithBodyPatch(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Add(a int, b int) int {
+	return a + b
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Add",
+		Patches: []domain.FunctionPatch{
+			{
+				Op:      domain.PatchOpSetSignature,
+				Params:  "(a, b, c int)",
+				Returns: "int",
+			},
+			{
+				Op:      domain.PatchOpReplace,
+				Match:   "return a + b",
+				Replace: "return a + b + c",
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "func Add(a, b, c int) int")
+	assert.Contains(t, content, "return a + b + c")
+	assert.NotContains(t, content, "return a + b\n")
+}
+
+func TestPatchFunction_SetSignature_Preview(t *testing.T) {
+	h, fs := newPatchHandler()
+	original := `package p
+
+func Foo(x int) int {
+	return x
+}
+`
+	setFile(fs, "f.go", original)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Preview:    true,
+		Patches: []domain.FunctionPatch{{
+			Op:     domain.PatchOpSetSignature,
+			Params: "(x, y int)",
+		}},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Preview)
+	assert.NotEmpty(t, res.Diff)
+	assert.Contains(t, res.Diff, "func Foo(x, y int) int")
+	// File on disk is unchanged.
+	assert.Equal(t, original, getFile(fs, "f.go"))
+}
+
+func TestPatchFunction_SetSignature_AddReturnsWhereNoneExisted(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo(x int) {
+	_ = x
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:      domain.PatchOpSetSignature,
+			Returns: "error",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "func Foo(x int) error")
+}
