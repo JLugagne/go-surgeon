@@ -70,6 +70,8 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerOtherTools(s, commands)
 	registerPatchTools(s, commands)
 
+	s.AddReceivingMiddleware(schemaHintMiddleware())
+
 	return s
 }
 
