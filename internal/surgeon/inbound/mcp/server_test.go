@@ -166,7 +166,7 @@ func TestToolsList(t *testing.T) {
 	}
 
 	expected := []string{
-		"graph", "symbol",
+		"overview", "symbol",
 		"create", "update", "delete",
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
@@ -181,7 +181,7 @@ func TestToolsList(t *testing.T) {
 
 // --- Graph tool tests ---
 
-func TestGraph_ListsPackages(t *testing.T) {
+func TestOverview_ListsPackages(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
 			assert.Equal(t, ".", opts.Dir)
@@ -193,14 +193,14 @@ func TestGraph_ListsPackages(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	result := callTool(t, cs, "graph", map[string]any{})
+	result := callTool(t, cs, "overview", map[string]any{})
 	text := resultText(t, result)
 	assert.Contains(t, text, "cmd/app")
 	assert.Contains(t, text, "internal/domain")
 	assert.False(t, result.IsError)
 }
 
-func TestGraph_Error(t *testing.T) {
+func TestOverview_Error(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, _ domain.GraphOptions) ([]domain.GraphPackage, error) {
 			return nil, errors.New("walk failed")
@@ -208,12 +208,12 @@ func TestGraph_Error(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	result := callTool(t, cs, "graph", map[string]any{})
+	result := callTool(t, cs, "overview", map[string]any{})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "walk failed")
 }
 
-func TestGraph_FocusImpliesFlags(t *testing.T) {
+func TestOverview_FocusImpliesFlags(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
 			assert.True(t, opts.Symbols, "focus should imply symbols")
@@ -225,7 +225,7 @@ func TestGraph_FocusImpliesFlags(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	callTool(t, cs, "graph", map[string]any{"focus": "internal/domain"})
+	callTool(t, cs, "overview", map[string]any{"focus": "internal/domain"})
 }
 
 // --- Symbol tool tests ---
@@ -909,7 +909,7 @@ func TestExtractInterface_Error(t *testing.T) {
 
 // --- Graph formatting edge cases ---
 
-func TestGraph_WithSymbols(t *testing.T) {
+func TestOverview_WithSymbols(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
 			return []domain.GraphPackage{{
@@ -923,14 +923,14 @@ func TestGraph_WithSymbols(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	result := callTool(t, cs, "graph", map[string]any{"symbols": true, "dir": "internal/domain"})
+	result := callTool(t, cs, "overview", map[string]any{"symbols": true, "dir": "internal/domain"})
 	text := resultText(t, result)
 	assert.Contains(t, text, "book.go")
 	assert.Contains(t, text, "type Book struct")
 	assert.Contains(t, text, "func NewBook")
 }
 
-func TestGraph_EmptyResult(t *testing.T) {
+func TestOverview_EmptyResult(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, _ domain.GraphOptions) ([]domain.GraphPackage, error) {
 			return nil, nil
@@ -938,12 +938,12 @@ func TestGraph_EmptyResult(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	result := callTool(t, cs, "graph", map[string]any{})
+	result := callTool(t, cs, "overview", map[string]any{})
 	text := resultText(t, result)
 	assert.Contains(t, text, "No Go packages found")
 }
 
-func TestGraph_WithSummaryAndDeps(t *testing.T) {
+func TestOverview_WithSummaryAndDeps(t *testing.T) {
 	queries := &mockQueries{
 		graphFn: func(_ context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error) {
 			assert.True(t, opts.Summary)
@@ -957,7 +957,7 @@ func TestGraph_WithSummaryAndDeps(t *testing.T) {
 	}
 	cs := setupTest(t, &mockCommands{}, queries)
 
-	result := callTool(t, cs, "graph", map[string]any{"summary": true, "deps": true})
+	result := callTool(t, cs, "overview", map[string]any{"summary": true, "deps": true})
 	text := resultText(t, result)
 	assert.True(t, strings.Contains(text, "Core domain types"))
 	assert.True(t, strings.Contains(text, "internal/util"))

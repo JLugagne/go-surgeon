@@ -15,9 +15,9 @@ const serverInstructions = `go-surgeon is the AST-aware editor for Go files. It 
 The mental model has two layers:
 
 EXPLORE (before you edit, to understand what's there)
-- graph: list packages and symbols across the project. Start here on an unfamiliar codebase.
+- overview: list packages and symbols across the project. START HERE on an unfamiliar codebase — one call shows the package tree + (with symbols=true) per-file signatures.
 - symbol: read one declaration. Two modes:
-    - exact (query): fetch a known function/method/type. Set body=true to see the implementation — do this before every edit.
+    - exact (query): fetch a known function/method/type. Set body=true to see the implementation — do this before every edit. body=true also returns the file's package line and import block for free. Add context=file to additionally get an outline of sibling declarations (signatures only) so you see the whole file's shape in one call.
     - regex (pattern): list every declaration whose name matches. Use instead of Grep for discovery: it matches only declarations, so you don't wade through usages.
 - Both accept module='github.com/org/repo' to look inside a dependency's source instead of the current project. Use this rather than find/cat inside $GOMODCACHE.
 
@@ -102,8 +102,8 @@ type symbolInput struct {
 
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "graph",
-		Description: "List packages and (optionally) their symbols in a Go project. Reach for this first on an unfamiliar codebase, and whenever you'd otherwise run find/ls/glob on .go paths. Focus on one package with focus='pkg/path', list symbols with symbols=true, or explore a dependency with module='github.com/org/repo' instead of digging into $GOMODCACHE. token_budget caps output on large projects.",
+		Name:        "overview",
+		Description: "USE THIS FIRST when you're dropped into an unfamiliar Go codebase and need to see its shape. Returns the package tree, optionally with per-file symbol signatures (symbols=true). Skip find/ls/glob on .go paths — this is the structural map. Focus on one package with focus='pkg/path' for full detail; explore a dependency with module='github.com/org/repo' instead of digging into $GOMODCACHE. After overview, use symbol to read individual declarations or symbol context=file for one file's outline. token_budget caps output on large projects.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in graphInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -172,7 +172,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 		results := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module, in.Context)
 		if len(results) == 0 {
-			return textResult(fmt.Sprintf("No matches found for '%s'.\nHint: run 'graph' with symbols=true and dir set to list available symbols.", in.Query)), nil, nil
+			return textResult(fmt.Sprintf("No matches found for '%s'.\nHint: run 'overview' with symbols=true and dir set to list available symbols.", in.Query)), nil, nil
 		}
 
 		text := formatSymbolResults(results, in.Body, in.Query)
