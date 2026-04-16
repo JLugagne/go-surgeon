@@ -22,7 +22,7 @@ func TestDryRunFileSystem(t *testing.T) {
 	err := os.WriteFile(testFile, []byte("package main\n"), 0644)
 	require.NoError(t, err)
 
-	err = dryFS.WriteFile(ctx, testFile, []byte("package main\n\nfunc main() {}\n"))
+	_, err = dryFS.WriteFile(ctx, testFile, []byte("package main\n\nfunc main() {}\n"))
 	require.NoError(t, err)
 
 	content, err := dryFS.ReadFile(ctx, testFile)
@@ -42,7 +42,7 @@ func TestProxyFileSystem(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "proxy.txt")
 
-	err := proxy.WriteFile(ctx, testFile, []byte("hello"))
+	_, err := proxy.WriteFile(ctx, testFile, []byte("hello"))
 	require.NoError(t, err)
 
 	content, err := proxy.ReadFile(ctx, testFile)

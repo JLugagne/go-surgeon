@@ -140,7 +140,7 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 		updatedSrc = formattedSrc
 	}
 
-	if err := h.fs.WriteFile(ctx, req.FilePath, updatedSrc); err != nil {
+	if _, err := h.fs.WriteFile(ctx, req.FilePath, updatedSrc); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 

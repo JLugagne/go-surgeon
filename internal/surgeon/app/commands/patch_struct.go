@@ -78,10 +78,10 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 		return domain.PatchStructResult{Diff: diff, Applied: len(req.Patches), Preview: true}, nil
 	}
 
-	if err := h.fs.WriteFile(ctx, req.FilePath, newSrc); err != nil {
+	addedImports, err := h.fs.WriteFile(ctx, req.FilePath, newSrc)
+	if err != nil {
 		return domain.PatchStructResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	addedImports, _ := h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
 	return domain.PatchStructResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports}, nil
 }

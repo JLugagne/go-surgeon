@@ -15,7 +15,7 @@ func (p *ProxyFileSystem) ReadFile(ctx context.Context, path string) ([]byte, er
 	return p.Active.ReadFile(ctx, path)
 }
 
-func (p *ProxyFileSystem) WriteFile(ctx context.Context, path string, data []byte) error {
+func (p *ProxyFileSystem) WriteFile(ctx context.Context, path string, data []byte) ([]string, error) {
 	return p.Active.WriteFile(ctx, path, data)
 }
 
@@ -29,8 +29,4 @@ func (p *ProxyFileSystem) IsDir(ctx context.Context, path string) (bool, error) 
 
 func (p *ProxyFileSystem) MkdirAll(ctx context.Context, path string) error {
 	return p.Active.MkdirAll(ctx, path)
-}
-
-func (p *ProxyFileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
-	return p.Active.ExecuteGoImports(ctx, files)
 }

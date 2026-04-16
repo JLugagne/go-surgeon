@@ -60,11 +60,11 @@ func NewInterfaceCommand(surgeon service.SurgeonCommands, actionType domain.Acti
 			)
 			switch actionType {
 			case domain.ActionTypeAddInterface:
-				result, err = surgeon.AddInterface(ctx, req)
+				result, _, err = surgeon.AddInterface(ctx, req)
 			case domain.ActionTypeUpdateInterface:
-				result, err = surgeon.UpdateInterface(ctx, req)
+				result, _, err = surgeon.UpdateInterface(ctx, req)
 			case domain.ActionTypeDeleteInterface:
-				result, err = surgeon.DeleteInterface(ctx, req)
+				result, _, err = surgeon.DeleteInterface(ctx, req)
 			default:
 				return fmt.Errorf("ERROR (%s): unknown action type %s", name, actionType)
 			}

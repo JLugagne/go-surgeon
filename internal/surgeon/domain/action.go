@@ -53,6 +53,8 @@ type PlanResult struct {
 	// Files lists the file paths that were written during plan execution.
 	Files    []string
 	Warnings []string
+	// AddedImports lists import paths that goimports added to any file written during plan execution (deduped across actions).
+	AddedImports []string
 }
 
 // Plan is a collection of actions to be executed.

@@ -105,7 +105,7 @@ func (h *ExecutePlanHandler) MockFromSource(ctx context.Context, interfaceSource
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
 		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
-	if err := h.fs.WriteFile(ctx, mockFile, buf.Bytes()); err != nil {
+	if _, err := h.fs.WriteFile(ctx, mockFile, buf.Bytes()); err != nil {
 		return "", fmt.Errorf("failed to write mock file: %w", err)
 	}
 

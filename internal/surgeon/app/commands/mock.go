@@ -76,7 +76,7 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	if err := h.fs.WriteFile(ctx, req.FilePath, buf.Bytes()); err != nil {
+	if _, err := h.fs.WriteFile(ctx, req.FilePath, buf.Bytes()); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

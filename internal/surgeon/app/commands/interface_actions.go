@@ -14,14 +14,15 @@ import (
 )
 
 // AddInterface appends an interface type declaration to a file and optionally generates a mock.
-func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	action := domain.Action{
 		Action:   domain.ActionTypeAddStruct,
 		FilePath: req.FilePath,
 		Content:  req.Content,
 	}
-	if _, err := h.executeAction(ctx, action); err != nil {
-		return "", err
+	_, addedImports, err := h.executeAction(ctx, action)
+	if err != nil {
+		return "", nil, err
 	}
 
 	ifaceName := extractTypeName(req.Content)
@@ -29,16 +30,16 @@ func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.Interf
 	if req.MockFile != "" && req.MockName != "" {
 		mockResult, err := h.MockFromSource(ctx, req.Content, req.MockName, req.MockFile, req.FilePath)
 		if err != nil {
-			return "", fmt.Errorf("failed to generate mock: %w", err)
+			return "", nil, fmt.Errorf("failed to generate mock: %w", err)
 		}
-		return fmt.Sprintf("Added %s to %s, %s", ifaceName, filepath.Base(req.FilePath), mockResult), nil
+		return fmt.Sprintf("Added %s to %s, %s", ifaceName, filepath.Base(req.FilePath), mockResult), addedImports, nil
 	}
 
-	return fmt.Sprintf("Added %s to %s", ifaceName, filepath.Base(req.FilePath)), nil
+	return fmt.Sprintf("Added %s to %s", ifaceName, filepath.Base(req.FilePath)), addedImports, nil
 }
 
 // UpdateInterface replaces an existing interface type declaration and regenerates its mock.
-func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	action := domain.Action{
 		Action:     domain.ActionTypeUpdateStruct,
 		FilePath:   req.FilePath,
@@ -47,9 +48,9 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		Doc:        req.Doc,
 		StripDoc:   req.StripDoc,
 	}
-	warnings, err := h.executeAction(ctx, action)
+	warnings, addedImports, err := h.executeAction(ctx, action)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	var fallback bool
@@ -74,7 +75,7 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 	if req.MockFile != "" && req.MockName != "" {
 		mockResult, err := h.MockFromSource(ctx, req.Content, req.MockName, req.MockFile, req.FilePath)
 		if err != nil {
-			return "", fmt.Errorf("failed to regenerate mock: %w", err)
+			return "", nil, fmt.Errorf("failed to regenerate mock: %w", err)
 		}
 		msg += ", regenerated " + mockResult
 	}
@@ -83,7 +84,7 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		msg += fmt.Sprintf("\nWARNING (update-interface): %s", w)
 	}
 
-	return msg, nil
+	return msg, addedImports, nil
 }
 
 // DeleteInterface removes an interface type declaration from a file. The mock is NOT auto-deleted unless req.DeleteMock is true.
@@ -92,21 +93,21 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 // mock struct, its methods, and its compile-time interface assertion from
 // MockFile — but leaves the file itself in place (even if empty) so other
 // mocks that might share the file are not disturbed.
-func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	action := domain.Action{
 		Action:     domain.ActionTypeDeleteStruct,
 		FilePath:   req.FilePath,
 		Identifier: req.Identifier,
 	}
-	if _, err := h.executeAction(ctx, action); err != nil {
-		return "", err
+	if _, _, err := h.executeAction(ctx, action); err != nil {
+		return "", nil, err
 	}
 
 	msg := fmt.Sprintf("SUCCESS: Deleted %s from %s", req.Identifier, filepath.Base(req.FilePath))
 
 	if req.DeleteMock {
 		if req.MockFile == "" || req.MockName == "" {
-			return "", &domain.Error{
+			return "", nil, &domain.Error{
 				Code:    "INVALID_ARGUMENT",
 				Message: "delete_mock requires both mock_file and mock_name",
 			}
@@ -114,12 +115,12 @@ func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.Int
 		mockMsg, err := h.deleteMock(ctx, req.MockFile, req.MockName)
 		if err != nil {
 			// Interface was already deleted; report the partial success plus the mock error.
-			return "", fmt.Errorf("%s, but mock deletion failed: %w", msg, err)
+			return "", nil, fmt.Errorf("%s, but mock deletion failed: %w", msg, err)
 		}
 		msg += ", " + mockMsg
 	}
 
-	return msg, nil
+	return msg, nil, nil
 }
 
 // extractTypeName extracts the type name from a Go type declaration source string.
@@ -188,10 +189,9 @@ func (h *ExecutePlanHandler) deleteMock(ctx context.Context, mockFile, mockName 
 	}
 
 	updated := deleteRanges(src, ranges)
-	if err := h.fs.WriteFile(ctx, mockFile, updated); err != nil {
+	if _, err := h.fs.WriteFile(ctx, mockFile, updated); err != nil {
 		return "", &domain.Error{Code: "WRITE_ERROR", Message: "failed to write mock file", Err: err}
 	}
-	_, _ = h.fs.ExecuteGoImports(ctx, []string{mockFile})
 
 	return fmt.Sprintf("removed mock %s from %s", receiverName, filepath.Base(mockFile)), nil
 }

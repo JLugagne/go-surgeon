@@ -85,5 +85,6 @@ func (h *ExecutePlanHandler) ExtractInterface(ctx context.Context, req domain.Ex
 		MockName: req.MockName,
 	}
 
-	return h.AddInterface(ctx, actionReq)
+	msg, _, err := h.AddInterface(ctx, actionReq)
+	return msg, err
 }

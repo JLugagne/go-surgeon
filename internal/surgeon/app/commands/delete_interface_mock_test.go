@@ -47,7 +47,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead(p []byte) (int, error)\n\tClose() error\n}\n")
 		fs.files["mock.go"] = []byte(mockFileContent)
 
-		_, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		_, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 		})
@@ -64,7 +64,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead(p []byte) (int, error)\n\tClose() error\n}\n")
 		fs.files["mock.go"] = []byte(mockFileContent)
 
-		msg, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		msg, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "mock.go",
@@ -87,7 +87,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead() error\n}\n")
 		fs.files["mock.go"] = []byte(mockFileContent)
 
-		_, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		_, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "mock.go",
@@ -103,7 +103,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		h := commands.NewExecutePlanHandler(fs)
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead() error\n}\n")
 
-		_, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		_, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			DeleteMock: true,
@@ -118,7 +118,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		h := commands.NewExecutePlanHandler(fs)
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead() error\n}\n")
 
-		msg, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		msg, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "missing.go",
@@ -136,7 +136,7 @@ func TestDeleteInterface_MockRemoval(t *testing.T) {
 		// File exists but has no MockReader struct.
 		fs.files["mock.go"] = []byte("package repo\n\ntype OtherMock struct{}\n")
 
-		msg, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		msg, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "mock.go",
@@ -178,7 +178,7 @@ var _ Writer = (*MockWriter)(nil)
 `
 		fs.files["mock.go"] = []byte(sharedMockFile)
 
-		_, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		_, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "mock.go",
@@ -204,7 +204,7 @@ var _ Writer = (*MockWriter)(nil)
 		h := commands.NewExecutePlanHandler(fs)
 		fs.files["repo.go"] = []byte("package repo\n\ntype Reader interface {\n\tRead() error\n}\n")
 
-		_, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		_, _, err := h.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   "repo.go",
 			Identifier: "Reader",
 			MockFile:   "missing.go",

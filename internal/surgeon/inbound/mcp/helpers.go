@@ -294,16 +294,18 @@ type editOutput struct {
 	FilesModified []string     `json:"files_modified"`
 	Symbols       []symbolEdit `json:"symbols,omitempty"`
 	Warnings      []string     `json:"warnings,omitempty"`
+	AddedImports  []string     `json:"added_imports,omitempty"`
 }
 
 // patchOutput is the structured result for patch_function, patch_struct and patch_interface.
 type patchOutput struct {
-	File        string `json:"file"`
-	Identifier  string `json:"identifier"`
-	Applied     int    `json:"applied"`
-	Preview     bool   `json:"preview,omitempty"`
-	Diff        string `json:"diff,omitempty"`
-	MockUpdated bool   `json:"mock_updated,omitempty"`
+	File         string   `json:"file"`
+	Identifier   string   `json:"identifier"`
+	Applied      int      `json:"applied"`
+	Preview      bool     `json:"preview,omitempty"`
+	Diff         string   `json:"diff,omitempty"`
+	MockUpdated  bool     `json:"mock_updated,omitempty"`
+	AddedImports []string `json:"added_imports,omitempty"`
 }
 
 // implementOutput is the structured result for the implement tool.
