@@ -24,6 +24,7 @@ EXPLORE (before you edit, to understand what's there)
 EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewrite more)
 - Changing a few lines inside one function body      → patch_function
 - Same rename across many functions in one file      → patch_file (bulk text substitution with AST safety)
+- Editing the VALUE of a top-level const or var      → patch_decl (multi-line string const, error var, etc.)
 - Single field change on a struct                    → patch_struct
 - Single method change on an interface               → patch_interface (regenerates the mock too)
 - Inserting one statement at a fixed position        → insert_call
@@ -34,7 +35,7 @@ EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewr
 - Updating or deleting an interface                  → update_interface / delete_interface (keep the mock in sync via mock_file/mock_name/delete_mock)
 - Several coordinated edits                          → execute_plan (atomic, up to 15 actions)
 
-Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
+Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_decl/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
 
 VALIDATE (after you edit, to confirm the change is sound)
 - build_check: runs 'go build' scoped to a package or directory (default './...') and returns structured diagnostics (file, line, column, message) deduplicated per file. Call this after any edit that could affect compilation instead of asking the user to run 'go build' or shelling out. Set tests=true to also compile test files. timeout_seconds caps the run (default 60, max 600). 'go vet' is out of scope; use build_check only for compile errors.
@@ -679,6 +680,7 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	registerPatchStructTool(s, commands)
 	registerPatchInterfaceTool(s, commands)
 	registerPatchFileTool(s, commands)
+	registerPatchDeclTool(s, commands)
 }
 
 // --- patch_file ---
@@ -1094,4 +1096,72 @@ type testRunInput struct {
 	Race           bool   `json:"race,omitempty" jsonschema:"enable the race detector"`
 	Tags           string `json:"tags,omitempty" jsonschema:"build tags (whitelist [a-z_][a-z0-9_,.]*)"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"overall timeout in seconds (default 120, max 600)"`
+}
+
+type patchDeclInput struct {
+	File       string         `json:"file" jsonschema:"target Go file path"`
+	Identifier string         `json:"identifier" jsonschema:"top-level const or var identifier, e.g. serverInstructions or ErrNotFound"`
+	Patches    []patchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
+	Preview    bool           `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+}
+
+func registerPatchDeclTool(s *mcp.Server, commands service.SurgeonCommands) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "patch_decl",
+		Description: "Edit the VALUE of a top-level const or var declaration by matching on text — the const/var equivalent of patch_function. " +
+			"Targets the value expression of the named identifier (works on grouped const/var blocks too: identifier=\"B\" in `const (A=1; B=2)` picks B). " +
+			"For a single string-literal value (including multi-line backtick raw strings), matches apply to the text INSIDE the quotes/backticks — delimiters are preserved automatically. " +
+			"For any other value expression (composite literal, function call, number, ...), matches apply to the full value text as it appears in source. " +
+			"ops: replace, insert_before, insert_after, delete, wrap. match is whitespace-normalized. Disambiguate with occurrence (1-based). " +
+			"LINE TARGETING: use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) instead of text matching — faster and unambiguous. Mutually exclusive with match/match_regex. " +
+			"match_regex: RE2 alternative to match (no backrefs/lookarounds). " +
+			"Typed vars without an initializer (var x int) cannot be patched — use update to add a value. " +
+			"preview=true returns diff without writing.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchDeclInput) (*mcp.CallToolResult, any, error) {
+		if err := validateGoFile(in.File); err != nil {
+			return err, nil, nil
+		}
+		patches := make([]domain.FunctionPatch, len(in.Patches))
+		for i, p := range in.Patches {
+			patches[i] = domain.FunctionPatch{
+				Op:         domain.PatchOp(p.Op),
+				Match:      p.Match,
+				MatchRegex: p.MatchRegex,
+				Occurrence: p.Occurrence,
+				Replace:    p.Replace,
+				Code:       p.Code,
+				Wrap:       p.Wrap,
+				AtLine:     p.AtLine,
+				FromLine:   p.FromLine,
+				ToLine:     p.ToLine,
+			}
+		}
+		result, err := commands.PatchDecl(ctx, domain.PatchDeclRequest{
+			FilePath:   in.File,
+			Identifier: in.Identifier,
+			Patches:    patches,
+			Preview:    in.Preview,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (patch_decl): %v", err)), nil, nil
+		}
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
+		if result.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", result.Applied)
+		}
+		if len(result.AddedImports) > 0 {
+			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
+		}
+		for _, w := range result.Warnings {
+			prefix += "\n  WARNING: " + w
+		}
+		if result.Diff != "" {
+			res := textResult(prefix + "\n\n" + result.Diff)
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
+			return res, nil, nil
+		}
+		res := textResult(prefix)
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
+		return res, nil, nil
+	})
 }

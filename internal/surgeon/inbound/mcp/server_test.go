@@ -29,6 +29,7 @@ type mockCommands struct {
 	patchStructFn      func(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
 	patchInterfaceFn   func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 	patchFileFn        func(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
+	patchDeclFn        func(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -188,7 +189,7 @@ func TestToolsList(t *testing.T) {
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
-		"patch_function", "patch_struct", "patch_interface", "patch_file",
+		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -1064,6 +1065,13 @@ func (m *mockCommands) PatchFile(ctx context.Context, req domain.PatchFileReques
 	return domain.PatchFileResult{}, nil
 }
 
+func (m *mockCommands) PatchDecl(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error) {
+	if m.patchDeclFn != nil {
+		return m.patchDeclFn(ctx, req)
+	}
+	return domain.PatchDeclResult{}, nil
+}
+
 func TestTestRun_Success(t *testing.T) {
 	queries := &mockQueries{
 		testRunFn: func(_ context.Context, req domain.TestRunRequest) (domain.TestRunResult, error) {
@@ -1130,4 +1138,33 @@ func TestTestRun_Error(t *testing.T) {
 	result := callTool(t, cs, "test_run", map[string]any{"tags": "not;valid"})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "invalid build tags")
+}
+
+// TestPatchDecl_ToolRoutesToHandler verifies that the patch_decl tool is
+// registered, accepts the expected arguments schema, and routes to the
+// PatchDecl command handler with correctly-mapped fields.
+func TestPatchDecl_ToolRoutesToHandler(t *testing.T) {
+	var received domain.PatchDeclRequest
+	commands := &mockCommands{
+		patchDeclFn: func(_ context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error) {
+			received = req
+			return domain.PatchDeclResult{Applied: 1, Diff: "diff"}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "patch_decl", map[string]any{
+		"file":       "foo.go",
+		"identifier": "serverInstructions",
+		"patches": []map[string]any{
+			{"op": "replace", "match": "hello", "replace": "hi"},
+		},
+	})
+	require.False(t, result.IsError, resultText(t, result))
+	assert.Equal(t, "foo.go", received.FilePath)
+	assert.Equal(t, "serverInstructions", received.Identifier)
+	require.Len(t, received.Patches, 1)
+	assert.Equal(t, domain.PatchOpReplace, received.Patches[0].Op)
+	assert.Equal(t, "hello", received.Patches[0].Match)
+	assert.Equal(t, "hi", received.Patches[0].Replace)
 }
