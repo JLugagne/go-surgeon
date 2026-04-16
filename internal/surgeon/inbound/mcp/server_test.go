@@ -98,6 +98,7 @@ type mockQueries struct {
 	findSymbolsFn func(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
 	graphFn       func(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
 	buildCheckFn  func(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
+	testRunFn     func(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
 }
 
 func (m *mockQueries) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {
@@ -119,6 +120,13 @@ func (m *mockQueries) BuildCheck(ctx context.Context, req domain.BuildCheckReque
 		return m.buildCheckFn(ctx, req)
 	}
 	return domain.BuildCheckResult{Success: true}, nil
+}
+
+func (m *mockQueries) TestRun(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error) {
+	if m.testRunFn != nil {
+		return m.testRunFn(ctx, req)
+	}
+	return domain.TestRunResult{}, nil
 }
 
 // --- Test helpers ---
@@ -175,7 +183,7 @@ func TestToolsList(t *testing.T) {
 	}
 
 	expected := []string{
-		"overview", "symbol", "build_check",
+		"overview", "symbol", "build_check", "test_run",
 		"create", "update", "delete",
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
@@ -1054,4 +1062,72 @@ func (m *mockCommands) PatchFile(ctx context.Context, req domain.PatchFileReques
 		return m.patchFileFn(ctx, req)
 	}
 	return domain.PatchFileResult{}, nil
+}
+
+func TestTestRun_Success(t *testing.T) {
+	queries := &mockQueries{
+		testRunFn: func(_ context.Context, req domain.TestRunRequest) (domain.TestRunResult, error) {
+			assert.Equal(t, "internal/foo", req.Dir)
+			assert.Equal(t, "TestFoo", req.Run)
+			assert.Equal(t, 3, req.Count)
+			assert.True(t, req.Race)
+			return domain.TestRunResult{
+				Success: true,
+				Tests: []domain.TestCaseResult{
+					{Package: "testmod", Name: "TestFoo", Status: "pass", ElapsedMS: 12},
+				},
+				Summary:    "1 passed, 0 failed in 1 package (0.0s)",
+				DurationMS: 42,
+			}, nil
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "test_run", map[string]any{
+		"dir":   "internal/foo",
+		"run":   "TestFoo",
+		"count": 3,
+		"race":  true,
+	})
+	text := resultText(t, result)
+	assert.Contains(t, text, "SUCCESS")
+	assert.Contains(t, text, "1 passed")
+	assert.False(t, result.IsError)
+}
+
+func TestTestRun_FailureShowsFileLine(t *testing.T) {
+	queries := &mockQueries{
+		testRunFn: func(_ context.Context, _ domain.TestRunRequest) (domain.TestRunResult, error) {
+			return domain.TestRunResult{
+				Success: false,
+				Tests: []domain.TestCaseResult{{
+					Package: "testmod", Name: "TestBad", Status: "fail",
+					FailureFile:    "math_test.go",
+					FailureLine:    6,
+					FailureMessage: "unexpected result: 42",
+				}},
+				Summary: "0 passed, 1 failed in 1 package (0.0s)",
+			}, nil
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "test_run", map[string]any{})
+	text := resultText(t, result)
+	assert.Contains(t, text, "FAIL")
+	assert.Contains(t, text, "math_test.go:6")
+	assert.Contains(t, text, "unexpected result: 42")
+}
+
+func TestTestRun_Error(t *testing.T) {
+	queries := &mockQueries{
+		testRunFn: func(_ context.Context, _ domain.TestRunRequest) (domain.TestRunResult, error) {
+			return domain.TestRunResult{}, errors.New("invalid build tags")
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "test_run", map[string]any{"tags": "not;valid"})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "invalid build tags")
 }
