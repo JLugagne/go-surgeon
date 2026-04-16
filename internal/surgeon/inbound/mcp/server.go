@@ -15,9 +15,9 @@ const serverInstructions = `go-surgeon is the AST-aware editor for Go files. It 
 The mental model has two layers:
 
 EXPLORE (before you edit, to understand what's there)
-- overview: list packages and symbols across the project. START HERE on an unfamiliar codebase — one call shows the package tree + (with symbols=true) per-file signatures.
+- overview: list packages and symbols across the project. START HERE on an unfamiliar codebase — one call shows the package tree + (with symbols=true) per-file signatures. Also use when entering a new package for the first time: overview focus=pkg/path symbols=true shows every type/func/interface in one call, saving 5-10 individual symbol calls.
 - symbol: read one declaration. Two modes:
-    - exact (query): fetch a known function/method/type/var/const. Set body=true to see the implementation — do this before every edit. body=true also returns the file's package line and import block for free. Add context=file to additionally get an outline of sibling declarations (signatures only) so you see the whole file's shape in one call.
+    - exact (query): fetch a known function/method/type/var/const. Set body=true to see the implementation — do this before every edit. body=true also returns the file's package line and import block for free. When exploring an unfamiliar file, always set context=file: you get the symbol's body plus an outline of every sibling declaration in one call, saving 5+ follow-up symbol calls.
     - regex (pattern): list every declaration whose name matches. Use instead of Grep for discovery: it matches only declarations, so you don't wade through usages. Covers funcs, methods, types, vars, and consts.
 - Both accept module='github.com/org/repo' to look inside a dependency's source instead of the current project. Use this rather than find/cat inside $GOMODCACHE.
 
@@ -103,7 +103,7 @@ type symbolInput struct {
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "overview",
-		Description: "USE THIS FIRST when you're dropped into an unfamiliar Go codebase and need to see its shape. Returns the package tree, optionally with per-file symbol signatures (symbols=true). Skip find/ls/glob on .go paths — this is the structural map. Focus on one package with focus='pkg/path' for full detail; explore a dependency with module='github.com/org/repo' instead of digging into $GOMODCACHE. After overview, use symbol to read individual declarations or symbol context=file for one file's outline. token_budget caps output on large projects.",
+		Description: "List packages and symbols across the project. START HERE on an unfamiliar codebase. Also use when entering a new package: focus=pkg/path symbols=true shows every type/func/interface in one call. Explore dependencies with module='github.com/org/repo'. token_budget caps output on large projects.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in graphInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -141,7 +141,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one specific declaration (exact query='Name' / 'Receiver.Method' / 'pkg.Name') or list every declaration matching a regex (pattern=). Always use this instead of Read on a .go file; always use pattern instead of Grep to discover declarations (Grep mixes decls and usages, pattern doesn't). Indexes funcs, methods, types (struct/interface/alias), AND package-level vars/consts — searching for a constant by name returns its declaration directly, no Read fallback needed. Set body=true before any update or delete — seeing the current code prevents 'I replaced the wrong thing' mistakes; body=true also returns the file's package line + full import block so you don't need a follow-up Read to check what's already imported. Add context=file to get a sibling-declaration outline in the same call. Works on dependencies too via module='github.com/org/repo'. query and pattern are mutually exclusive.",
+		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). Indexes funcs, methods, types, vars, and consts. body=true shows the implementation plus the file's package line and import block. When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query and pattern are mutually exclusive.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -226,7 +226,7 @@ var deleteObjectMap = map[string]domain.ActionType{
 func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create",
-		Description: "Add a brand-new file, function, or struct to a Go package. Use this instead of Write/Edit whenever you're introducing something that doesn't exist yet. object='file' needs a path that doesn't exist yet; object='func' / 'struct' append to an existing file. content is raw Go (no package line, no import block — goimports handles imports). When you're adding several related items, bundle them with execute_plan instead of multiple create calls.",
+		Description: "Add a new file, function, or struct. object='file' creates a new file; 'func'/'struct' append to an existing file. When adding several related items, use execute_plan instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -263,7 +263,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace a whole function, method, struct, or file. Reach for this when the change is big enough that rewriting the entire declaration is clearer than a surgical edit; for small changes inside a function body, patch_function is usually better (fewer chances to drop code accidentally). identifier: 'FuncName' / 'Receiver.Method' / 'StructName'. content is the complete new declaration (signature + body), no package or imports. Read the current code with symbol body=true first. Doc comments are kept unless you set doc to replace them or strip_doc=true.",
+		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -303,7 +303,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete",
-		Description: "Remove a function, method, or struct. object='func' takes 'FuncName' (free function) or 'Receiver.Method' (method). object='struct' is broader than it looks: it removes the struct AND every method on it across the whole package — double-check that's what you want. Mocks are NOT cleaned up automatically; use delete_interface with delete_mock=true when the thing you're deleting is an interface with a mock.",
+		Description: "Remove a function, method, or struct. object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -354,7 +354,7 @@ type interfaceInput struct {
 func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "add_interface",
-		Description: "Add a new interface AND its mock in a single atomic step. Use this rather than create when adding an interface — almost every interface needs a mock alongside it, and creating the mock separately (via create or Write) leads to drift. Always set mock_file + mock_name. The generated mock uses func fields (e.g. CreateFunc) with a compile-time 'var _ I = (*MockI)(nil)' assertion so any future drift becomes a build error.",
+		Description: "Add a new interface and its mock atomically. Set mock_file + mock_name to generate a function-field mock with a compile-time var assertion. Prefer this over create for interfaces.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -381,7 +381,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_interface",
-		Description: "Replace an interface wholesale AND regenerate its mock in the same step. Use this for broad restructurings; for single-method changes (add/remove/rename/retype), patch_interface is narrower and less error-prone. Always pass mock_file + mock_name so the mock stays in lockstep — editing the mock by hand always drifts. content is the complete new interface declaration (no package or imports). Doc comments are kept unless you set doc or strip_doc=true.",
+		Description: "Replace an interface wholesale and regenerate its mock. For single-method changes, prefer patch_interface. Pass mock_file + mock_name to keep the mock in sync. Doc comments are kept unless you set doc or strip_doc=true.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -409,7 +409,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_interface",
-		Description: "Delete an interface. If the interface has a mock, pass delete_mock=true together with mock_file + mock_name so the mock struct, its methods, and the var-assertion all vanish in the same atomic step — otherwise the build will fail on the dangling 'var _ I = (*MockI)(nil)'. The mock file itself is kept even if it ends up empty, so other mocks that share it are safe.",
+		Description: "Delete an interface. Pass delete_mock=true with mock_file + mock_name to also remove the mock struct, its methods, and the var assertion. The mock file is kept even if empty.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -455,7 +455,7 @@ type insertCallInput struct {
 func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "insert_call",
-		Description: "Insert a single statement into an existing function body at a specific position. Use this when you want to add exactly one line (e.g. a logger call, a new route registration) — it's narrower and safer than patch_function or update for that case. Idempotent: if the exact call is already present, it's skipped with a warning. position: 'before-return' (default, before the last return), 'end-of-body' (before the closing brace), or 'after:<marker>' (after the first line containing <marker>).",
+		Description: "Insert one statement into a function body. Idempotent: skipped if already present. position: 'before-return' (default), 'end-of-body', or 'after:<marker>'.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in insertCallInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -555,12 +555,11 @@ type patchFunctionInput struct {
 func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "patch_function",
-		Description: "Edit a few lines inside ONE function body by matching on text. Strongly preferred over update whenever you're changing a small portion of a function — update makes you re-emit the full body, which is a common source of accidental deletions. All patches are scoped to the named function and applied atomically (any failure → nothing written). " +
-			"ops: replace, insert_before, insert_after, delete, wrap (replaces match with fmt.Sprintf(wrap, match)). " +
-			"match is whitespace-normalized, so you don't need to reproduce indentation. When a match is ambiguous, disambiguate with occurrence (1-based) instead of guessing. " +
-			"LINE-BASED TARGETING: instead of match/match_regex, you can target edits by file-absolute line number — the same numbers symbol body=true prints (e.g. L259). Use at_line=259 for a single line or from_line=259/to_line=263 for a range. Line-based targeting is faster and more reliable than fuzzy text matching; reach for it after you've already called symbol body=true. Line-based and text-based targeting are mutually exclusive per patch. " +
-			"match_regex (RE2, no backrefs/lookarounds) is an alternative when text matching isn't enough; patterns are capped at 1KB, must match 1..1000 times, and cannot be zero-width. " +
-			"preview=true returns the diff without writing.",
+		Description: "Edit lines inside one function body by matching on text. Patches are scoped to the named function and applied atomically. " +
+			"ops: replace, insert_before, insert_after, delete, wrap. match is whitespace-normalized. Disambiguate with occurrence (1-based). " +
+			"LINE TARGETING: use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) instead of text matching — faster and unambiguous. Mutually exclusive with match/match_regex. " +
+			"match_regex: RE2 alternative to match (no backrefs/lookarounds). " +
+			"preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFunctionInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -636,9 +635,7 @@ type patchStructInput struct {
 func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "patch_struct",
-		Description: "Edit a struct's field list one field at a time: add_field, remove_field, rename_field, retype_field (keeps tag+doc), set_tag (replaces wholesale), set_doc. Strongly preferred over update for single-field changes — update re-emits the whole struct and can silently lose comments or reorder fields. " +
-			"Embedded fields are addressed by their bare type name (e.g. name='io.Reader'). All patches apply atomically; on failure the current field names are returned as suggestions. " +
-			"preview=true returns the diff without writing.",
+		Description: "Edit a struct's field list: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. Patches apply atomically. Embedded fields use their type name (e.g. name='io.Reader'). preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchStructInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -713,10 +710,7 @@ type patchInterfaceInput struct {
 func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "patch_interface",
-		Description: "Edit an interface's method list one method at a time, regenerating the mock alongside. Strongly preferred over update_interface for single-method changes — also the canonical way to add one method to an existing interface (there is no add_interface_method tool; patch_interface add_method is it). " +
-			"ops: add_method (signature, optional doc/before/after/position), remove_method, rename_method, retype_method, set_doc, embed, remove_embed. " +
-			"Pass mock_file + mock_name so the mock regenerates automatically when the method set changes (same contract as update_interface). " +
-			"preview=true returns the diff without writing.",
+		Description: "Edit an interface's method list and regenerate the mock. ops: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed. Pass mock_file + mock_name for automatic mock regeneration. preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchInterfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -774,9 +768,8 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "execute_plan",
-		Description: "Apply several related AST edits atomically (up to 15 actions). Reach for this whenever the task has more than one edit — a single plan is safer than a sequence of tool calls because any failure rolls everything back. " +
-			"action values: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call. " +
-			"content fields are raw Go (no package or imports); goimports runs after each action.",
+		Description: "Apply up to 15 related AST edits atomically — any failure rolls everything back. " +
+			"Actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
 		actions := make([]domain.Action, len(in.Actions))
 		for i, a := range in.Actions {
@@ -827,7 +820,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "implement",
-		Description: "Generate the method stubs needed for a struct to satisfy an interface. Use this whenever you want to wire a struct to an interface contract — typing out signatures by hand is slower and more error-prone. Already-implemented methods are skipped, so it's safe to re-run. Stubs are marked '// TODO(go-surgeon): implement' for easy lookup. Works on any interface via fully-qualified path: local (github.com/org/repo/internal/pkg.Interface), stdlib (io.ReadCloser), or third-party.",
+		Description: "Generate method stubs for a struct to satisfy an interface. Already-implemented methods are skipped. Stubs are marked '// TODO(go-surgeon): implement'. Interface must be fully qualified (e.g. io.ReadCloser, github.com/org/repo/pkg.Interface).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in implementInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -864,7 +857,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "mock",
-		Description: "Generate a function-field mock for an interface you DON'T own (stdlib, third-party). For interfaces in your own project, use add_interface (with mock_file) instead — it keeps the interface and mock in sync as you evolve them. Interface must be fully qualified: e.g. io.Writer or github.com/org/repo/pkg.Interface.",
+		Description: "Generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, use add_interface with mock_file instead. Interface must be fully qualified.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mockInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -884,7 +877,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "test",
-		Description: "Scaffold a table-driven _test.go for a function or method. Use this whenever you're about to write tests — the skeleton handles boilerplate (t.Run loop, tt struct, receiver setup) so you can focus on cases. identifier: 'FuncName' or 'Type.Method'. The test file is placed next to the source file automatically.",
+		Description: "Scaffold a table-driven _test.go for a function or method. Handles boilerplate (t.Run loop, tt struct, receiver setup). identifier: 'FuncName' or 'Type.Method'.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -900,7 +893,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tag",
-		Description: "Manage struct field tags. Two modes: bulk (auto='json' or 'bson') generates snake_case tags on every exported field at once — ideal when preparing a struct for (de)serialization. Targeted (field + set) updates a single field's tag. identifier is the struct name. For single-field work, patch_struct set_tag is an equivalent alternative.",
+		Description: "Manage struct field tags. Bulk: auto='json'/'bson' generates snake_case tags on all exported fields. Targeted: field + set updates one field's tag. patch_struct set_tag is an alternative for single fields.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in tagInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -922,7 +915,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "extract_interface",
-		Description: "Derive an interface from an existing struct's exported methods. Reach for this when you want to make a concrete type testable via a mock — faster and more accurate than writing the interface by hand. Use 'out' to place the interface in a specific file (e.g. a domain package), and set mock_file + mock_name to generate the mock in the same step.",
+		Description: "Derive an interface from a struct's exported methods. Use out to place it in a specific file. Set mock_file + mock_name to generate the mock in the same step.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in extractInterfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

@@ -1324,3 +1324,102 @@ func Count() int {
 	assert.Contains(t, res.Warnings[0], "2 more match")
 	assert.Regexp(t, `L\d+, L\d+`, res.Warnings[0])
 }
+
+func TestPatchFunction_TokenBasedFallback(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("match ignores inline comment in body", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		// Body has an inline comment that the match string omits.
+		// Steps 1-3 (whitespace normalization) cannot handle this because
+		// comments are not whitespace. Step 4 (token matching) succeeds
+		// because go/scanner skips comments.
+		setFile(fs, "f.go", `package p
+
+func Build() {
+	req := CreateRequest{
+		Title: /* required */ "Clean Code",
+	}
+	_ = req
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "Build",
+			Patches: []domain.FunctionPatch{{
+				Op:      domain.PatchOpReplace,
+				Match:   "req := CreateRequest{\n\tTitle: \"Clean Code\",\n}",
+				Replace: "req := CreateRequest{\n\tTitle: \"Clean Architecture\",\n}",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, getFile(fs, "f.go"), "Clean Architecture")
+		assert.NotContains(t, getFile(fs, "f.go"), "Clean Code")
+	})
+
+	t.Run("match ignores block comment spanning lines", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+
+func Do() {
+	x := 1
+	/* TODO: remove this later */
+	y := 2
+	_ = x + y
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "Do",
+			Patches: []domain.FunctionPatch{{
+				Op:      domain.PatchOpReplace,
+				Match:   "x := 1\ny := 2",
+				Replace: "x := 10\ny := 20",
+			}},
+		})
+		require.NoError(t, err)
+		got := getFile(fs, "f.go")
+		assert.Contains(t, got, "x := 10")
+		assert.Contains(t, got, "y := 20")
+	})
+}
+
+func TestFindTokenMatches(t *testing.T) {
+	t.Run("basic single-line", func(t *testing.T) {
+		body := "\tx := 1\n"
+		match := "x := 1"
+		hits := commands.FindTokenMatches(body, match)
+		require.Len(t, hits, 1)
+		assert.Equal(t, body[hits[0][0]:hits[0][1]], "\tx := 1")
+	})
+
+	t.Run("multi-line with different indentation", func(t *testing.T) {
+		body := "\treq := Req{\n\t\tFoo: 1,\n\t}\n"
+		match := "req := Req{\n    Foo: 1,\n}"
+		hits := commands.FindTokenMatches(body, match)
+		require.Len(t, hits, 1)
+		assert.Contains(t, body[hits[0][0]:hits[0][1]], "req := Req{")
+		assert.Contains(t, body[hits[0][0]:hits[0][1]], "Foo: 1,")
+	})
+
+	t.Run("skips comments in body", func(t *testing.T) {
+		body := "\ta := /* init */ 1\n"
+		match := "a := 1"
+		hits := commands.FindTokenMatches(body, match)
+		require.Len(t, hits, 1)
+	})
+
+	t.Run("no match returns nil", func(t *testing.T) {
+		body := "\tx := 1\n"
+		match := "y := 2"
+		hits := commands.FindTokenMatches(body, match)
+		assert.Nil(t, hits)
+	})
+
+	t.Run("multiple matches", func(t *testing.T) {
+		body := "\tx := 1\n\ty := 2\n\tx := 1\n"
+		match := "x := 1"
+		hits := commands.FindTokenMatches(body, match)
+		assert.Len(t, hits, 2)
+	})
+}

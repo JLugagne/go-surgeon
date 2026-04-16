@@ -34,7 +34,6 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 			Message: fmt.Sprintf("struct %q not found in %s", req.Identifier, req.FilePath),
 		}
 	}
-	_ = typeSpec
 
 	elements := parseStructFields(fset, src, structType)
 
@@ -50,9 +49,22 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 	}
 
 	if len(errs) > 0 {
+		msg := strings.Join(errs, "\n")
+		// Include the full struct definition with line numbers so the agent
+		// can see current fields and retry without a symbol call.
+		startOff := fset.Position(typeSpec.Pos()).Offset
+		for startOff > 0 && src[startOff-1] != '\n' {
+			startOff--
+		}
+		startLine := fset.Position(typeSpec.Pos()).Line
+		endLine := fset.Position(structType.End()).Line
+		endOff := fset.Position(structType.End()).Offset
+		if body := formatNumberedSource(src, startOff, endOff, startLine); body != "" {
+			msg += fmt.Sprintf("\n\nCurrent definition of %s (lines %d-%d):\n%s", req.Identifier, startLine, endLine, body)
+		}
 		return domain.PatchStructResult{}, &domain.Error{
 			Code:    "PATCH_FAILED",
-			Message: strings.Join(errs, "\n"),
+			Message: msg,
 		}
 	}
 
