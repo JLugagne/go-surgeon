@@ -9,6 +9,10 @@ const (
 	PatchOpInsertAfter  PatchOp = "insert_after"
 	PatchOpDelete       PatchOp = "delete"
 	PatchOpWrap         PatchOp = "wrap"
+	// PatchOpSetSignature rewrites only the parameter list and/or result list
+	// of the targeted function or method. The body and the name (plus any
+	// generic type parameters) are left intact.
+	PatchOpSetSignature PatchOp = "set_signature"
 )
 
 // FunctionPatch describes one scoped edit inside a function body.
@@ -26,6 +30,10 @@ type FunctionPatch struct {
 	FromLine int
 	// ToLine is the last line of a line range (1-based, inclusive). Must be >= FromLine.
 	ToLine int
+	// Params is the new parameter list for set_signature, including the surrounding parens, e.g. "(ctx context.Context, x int)". Empty means keep the existing params.
+	Params string
+	// Returns is the new results list for set_signature, e.g. "error" or "([]byte, error)". Empty means keep the existing returns.
+	Returns string
 }
 
 // PatchFunctionRequest is the input to PatchFunction.

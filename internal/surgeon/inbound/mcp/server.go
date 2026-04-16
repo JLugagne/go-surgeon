@@ -545,6 +545,8 @@ type patchOpInput struct {
 	AtLine     int    `json:"at_line,omitempty" jsonschema:"target a single line by file-absolute line number (1-based, matches symbol body=true output). Mutually exclusive with match/match_regex."`
 	FromLine   int    `json:"from_line,omitempty" jsonschema:"first line of a file-absolute line range (1-based, inclusive). Pair with to_line."`
 	ToLine     int    `json:"to_line,omitempty" jsonschema:"last line of a file-absolute line range (1-based, inclusive). Must be >= from_line."`
+	Params     string `json:"params,omitempty" jsonschema:"for set_signature: new parameter list including parens, e.g. '(ctx context.Context, x int)'. Empty keeps the current params."`
+	Returns    string `json:"returns,omitempty" jsonschema:"for set_signature: new result list, e.g. 'error' or '([]byte, error)'. Empty keeps the current returns."`
 }
 
 type patchFunctionInput struct {
@@ -558,7 +560,8 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "patch_function",
 		Description: "Edit lines inside one function body by matching on text. Patches are scoped to the named function and applied atomically. " +
-			"ops: replace, insert_before, insert_after, delete, wrap. match is whitespace-normalized. Disambiguate with occurrence (1-based). " +
+			"ops: replace, insert_before, insert_after, delete, wrap, set_signature. match is whitespace-normalized. Disambiguate with occurrence (1-based). " +
+			"SIGNATURE EDITS: set_signature rewrites only the params list and/or the results list of the function or method, leaving the body, name, receiver, and any generic type parameters intact. Supply params (with parens) and/or returns; at least one is required. " +
 			"LINE TARGETING: use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) instead of text matching — faster and unambiguous. Mutually exclusive with match/match_regex. " +
 			"match_regex: RE2 alternative to match (no backrefs/lookarounds). " +
 			"preview=true returns diff without writing.",
@@ -579,6 +582,8 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 				AtLine:     p.AtLine,
 				FromLine:   p.FromLine,
 				ToLine:     p.ToLine,
+				Params:     p.Params,
+				Returns:    p.Returns,
 			}
 		}
 		result, err := commands.PatchFunction(ctx, domain.PatchFunctionRequest{
@@ -636,7 +641,7 @@ type patchStructInput struct {
 
 func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "patch_struct",
+		Name:        "patch_struct",
 		Description: "Edit a struct's field list: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. Patches apply atomically. Embedded fields use their type name (e.g. name='io.Reader'). preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchStructInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
@@ -711,7 +716,7 @@ type patchInterfaceInput struct {
 
 func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "patch_interface",
+		Name:        "patch_interface",
 		Description: "Edit an interface's method list and regenerate the mock. ops: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed. Pass mock_file + mock_name for automatic mock regeneration. preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchInterfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {

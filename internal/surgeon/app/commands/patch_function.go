@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -100,9 +101,19 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		replacement string // text to substitute
 	}
 	edits := make([]resolvedEdit, len(req.Patches))
+	var sigEdits []signatureEdit
 	var errs []string
 
 	for i, p := range req.Patches {
+		if p.Op == domain.PatchOpSetSignature {
+			ses, sigErr := resolveSignatureEdit(fset, targetFn, src, p.Params, p.Returns)
+			if sigErr != nil {
+				errs = append(errs, fmt.Sprintf("patch #%d (set_signature): %v", i+1, sigErr))
+				continue
+			}
+			sigEdits = append(sigEdits, ses...)
+			continue
+		}
 		lineMode := p.AtLine > 0 || p.FromLine > 0 || p.ToLine > 0
 		if lineMode && (p.Match != "" || p.MatchRegex != "") {
 			errs = append(errs, fmt.Sprintf("patch #%d (%s): line-based targets (at_line/from_line/to_line) are mutually exclusive with match/match_regex", i+1, p.Op))
@@ -270,7 +281,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			edits[i] = resolvedEdit{start: lineStart, end: lineEnd, replacement: replacement + "\n"}
 
 		default:
-			errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap)", i+1, p.Op))
+			errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap, set_signature)", i+1, p.Op))
 		}
 	}
 
@@ -312,6 +323,18 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	newSrc = append(newSrc, src[rbraceOff:]...)
 
 	// Reject the patch before writing if it would produce invalid Go.
+	// Apply signature edits (set_signature) on the assembled file. Their
+	// offsets are absolute in src and unchanged in newSrc because sig edits
+	// sit before the body range that we replaced.
+	if len(sigEdits) > 0 {
+		sort.Slice(sigEdits, func(a, b int) bool { return sigEdits[a].start > sigEdits[b].start })
+		for _, se := range sigEdits {
+			newSrc = append(newSrc[:se.start], append([]byte(se.replacement), newSrc[se.end:]...)...)
+		}
+		if formatted, fmtErr := format.Source(newSrc); fmtErr == nil {
+			newSrc = formatted
+		}
+	}
 	if err := validateGoSource(req.FilePath, newSrc); err != nil {
 		return domain.PatchFunctionResult{}, err
 	}
@@ -975,4 +998,78 @@ func FindTokenMatches(body, match string) [][2]int {
 		}
 	}
 	return hits
+}
+
+// resolveSignatureEdit computes the absolute file-offset edits needed to
+// rewrite the params and/or results list of a function or method while
+// leaving the body, name, receiver, and any generic type-parameter block
+// (e.g. [T any]) intact.
+//
+// At least one of newParams or newReturns must be non-empty. newParams is
+// expected to include its surrounding parens (e.g. "(ctx context.Context, x int)").
+// newReturns is rendered exactly as supplied (a single type like "error"
+// or a parenthesised list like "([]byte, error)" both work).
+//
+// Each returned signatureEdit describes a byte range in src to splice.
+// When both params and returns are rewritten the function returns two
+// separate edits; applied descending they do not overlap.
+func resolveSignatureEdit(fset *token.FileSet, fn *ast.FuncDecl, src []byte, newParams, newReturns string) ([]signatureEdit, error) {
+	if strings.TrimSpace(newParams) == "" && strings.TrimSpace(newReturns) == "" {
+		return nil, fmt.Errorf("at least one of params or returns must be provided")
+	}
+	if fn.Type == nil || fn.Type.Params == nil {
+		return nil, fmt.Errorf("function has no parameter list")
+	}
+
+	// Validate supplied params/returns by parsing a synthetic function
+	// declaration. We keep the receiver off so methods and free functions
+	// validate the same way; the existing FuncDecl already encodes the
+	// receiver and we don't touch it.
+	probeParams := strings.TrimSpace(newParams)
+	if probeParams == "" {
+		probeParams = "()"
+	}
+	// Reject a bare (missing parens) params input so we don't accidentally
+	// turn "ctx context.Context, x int" into a syntax error after splicing.
+	if probeParams[0] != '(' {
+		return nil, fmt.Errorf("params must start with '(' and include the surrounding parens (got %q)", newParams)
+	}
+	probeSrc := "package p\nfunc _" + probeParams
+	if strings.TrimSpace(newReturns) != "" {
+		probeSrc += " " + newReturns
+	}
+	probeSrc += " {}\n"
+	probeFset := token.NewFileSet()
+	if _, perr := parser.ParseFile(probeFset, "", probeSrc, 0); perr != nil {
+		if newReturns != "" && newParams != "" {
+			return nil, fmt.Errorf("invalid params/returns: %w", perr)
+		}
+		if newReturns != "" {
+			return nil, fmt.Errorf("invalid returns %q: %w", newReturns, perr)
+		}
+		return nil, fmt.Errorf("invalid params %q: %w", newParams, perr)
+	}
+
+	paramsOpen := fset.Position(fn.Type.Params.Opening).Offset
+	paramsClose := fset.Position(fn.Type.Params.Closing).Offset + 1 // exclusive
+	sigEnd := fset.Position(fn.Type.End()).Offset                   // exclusive
+
+	var edits []signatureEdit
+	if newParams != "" {
+		edits = append(edits, signatureEdit{start: paramsOpen, end: paramsClose, replacement: newParams})
+	}
+	if newReturns != "" {
+		// returns range spans from just after the params' ')' to the end of
+		// the signature. If the function currently has no results, the range
+		// is empty (paramsClose == sigEnd) and we insert " <returns>".
+		edits = append(edits, signatureEdit{start: paramsClose, end: sigEnd, replacement: " " + newReturns})
+	}
+	return edits, nil
+}
+
+// signatureEdit describes a byte-range replacement used by the
+// set_signature patch op. Offsets are absolute in the original file source.
+type signatureEdit struct {
+	start, end  int
+	replacement string
 }
