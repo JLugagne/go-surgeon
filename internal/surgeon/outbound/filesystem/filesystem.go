@@ -27,21 +27,7 @@ func (f *FileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) 
 
 // WriteFile writes content to the file at path.
 func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
-	var addedImports []string
-	if strings.HasSuffix(path, ".go") {
-		before := parseImportPaths(path, content)
-		formatted, err := imports.Process(path, content, nil)
-		if err == nil {
-			content = formatted
-			after := parseImportPaths(path, content)
-			for imp := range after {
-				if !before[imp] {
-					addedImports = append(addedImports, imp)
-				}
-			}
-		}
-		warnUnresolvedImports(path, content)
-	}
+	content, addedImports := applyGoImports(path, content)
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		return nil, err
 	}
@@ -174,4 +160,33 @@ func parseImportPaths(path string, src []byte) map[string]bool {
 		m[strings.Trim(imp.Path.Value, `"`)] = true
 	}
 	return m
+}
+
+// applyGoImports runs goimports on content (if path is a .go file) and
+// returns the formatted bytes alongside the list of import paths that
+// were added compared to the pre-process content. It also emits
+// warnings about unresolved package references to stderr.
+//
+// Non-.go paths are returned untouched with a nil imports list.
+// If goimports fails (e.g. unparseable source), the original content
+// and a nil list are returned — the caller should still write.
+func applyGoImports(path string, content []byte) ([]byte, []string) {
+	if !strings.HasSuffix(path, ".go") {
+		return content, nil
+	}
+	before := parseImportPaths(path, content)
+	formatted, err := imports.Process(path, content, nil)
+	if err != nil {
+		warnUnresolvedImports(path, content)
+		return content, nil
+	}
+	after := parseImportPaths(path, formatted)
+	var addedImports []string
+	for imp := range after {
+		if !before[imp] {
+			addedImports = append(addedImports, imp)
+		}
+	}
+	warnUnresolvedImports(path, formatted)
+	return formatted, addedImports
 }

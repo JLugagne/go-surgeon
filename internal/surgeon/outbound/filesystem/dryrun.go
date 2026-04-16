@@ -3,11 +3,9 @@ package filesystem
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
 	"github.com/pmezard/go-difflib/difflib"
-	"golang.org/x/tools/imports"
 )
 
 // DryRunFileSystem accumulates file changes in memory and prints unified diffs on Close.
@@ -31,21 +29,7 @@ func (f *DryRunFileSystem) ReadFile(ctx context.Context, path string) ([]byte, e
 }
 
 func (f *DryRunFileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
-	var addedImports []string
-	if strings.HasSuffix(path, ".go") {
-		before := parseImportPaths(path, content)
-		formatted, err := imports.Process(path, content, nil)
-		if err == nil {
-			content = formatted
-			after := parseImportPaths(path, content)
-			for imp := range after {
-				if !before[imp] {
-					addedImports = append(addedImports, imp)
-				}
-			}
-		}
-		warnUnresolvedImports(path, content)
-	}
+	content, addedImports := applyGoImports(path, content)
 	f.files[path] = content
 	return addedImports, nil
 }
