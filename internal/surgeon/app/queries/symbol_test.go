@@ -188,3 +188,70 @@ func HelperFunc() {}
 		assert.Empty(t, res)
 	})
 }
+
+func TestFindSymbols_VarsAndConsts(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "globals.go")
+	code := `package testpkg
+
+// MaxRetries bounds retry attempts.
+const MaxRetries = 3
+
+// ServerName identifies this instance.
+var ServerName = "primary"
+
+const (
+	StatusOK     = 200
+	StatusNotOK  = 500
+)
+
+var (
+	logPrefix  = "[svc]"
+	cacheSize  int
+)
+`
+	err := os.WriteFile(filePath, []byte(code), 0644)
+	require.NoError(t, err)
+
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(code)}}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	t.Run("finds a lone const", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "MaxRetries"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "MaxRetries", res[0].Name)
+		assert.Equal(t, "MaxRetries bounds retry attempts.", res[0].Doc)
+		assert.Contains(t, res[0].Signature, "const MaxRetries")
+	})
+
+	t.Run("finds a lone var", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "ServerName"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "ServerName", res[0].Name)
+		assert.Contains(t, res[0].Signature, "var ServerName")
+	})
+
+	t.Run("finds a const inside a grouped block", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "StatusOK"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "StatusOK", res[0].Name)
+		assert.Contains(t, res[0].Signature, "const StatusOK")
+	})
+
+	t.Run("finds a var inside a grouped block", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Name: "cacheSize"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "cacheSize", res[0].Name)
+		assert.Contains(t, res[0].Signature, "var cacheSize int")
+	})
+
+	t.Run("pattern matches across vars and consts", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "^Status"}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 2)
+	})
+}

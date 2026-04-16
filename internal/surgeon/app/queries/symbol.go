@@ -111,6 +111,19 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 						results = append(results, h.extractStructResult(fset, src, f, gen, typeSpec, path, outline))
 					}
 				}
+			} else if gen, ok := decl.(*ast.GenDecl); ok && (gen.Tok == token.VAR || gen.Tok == token.CONST) && query.Receiver == "" {
+				for _, spec := range gen.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, id := range vs.Names {
+						vsMatches := nameRE != nil && nameRE.MatchString(id.Name) || nameRE == nil && id.Name == query.Name
+						if vsMatches {
+							results = append(results, h.extractValueResult(fset, src, f, gen, vs, id, path, outline))
+						}
+					}
+				}
 			}
 		}
 
@@ -351,4 +364,64 @@ func getRecvTypeFromFields(recv *ast.FieldList) string {
 		}
 	}
 	return ""
+}
+
+// extractValueResult builds a SymbolResult for a single package-level
+// var/const declaration (one of the ValueSpec names inside a GenDecl).
+// Unlike funcs and types, the "signature" is rendered as "var Name Type"
+// or "const Name Type = Value" for human readability; the Code field
+// contains the surrounding GenDecl source so the agent can patch it.
+func (h *SurgeonQueriesHandler) extractValueResult(fset *token.FileSet, src []byte, f *ast.File, gen *ast.GenDecl, spec *ast.ValueSpec, name *ast.Ident, path string, outline []domain.OutlineEntry) domain.SymbolResult {
+	// Use the whole GenDecl as the extracted range when the spec is alone,
+	// otherwise just the spec itself. This mirrors how extractStructResult
+	// handles single-spec vs. multi-spec type blocks.
+	var startPos, endPos token.Position
+	if len(gen.Specs) == 1 {
+		startPos = fset.Position(gen.Pos())
+		endPos = fset.Position(gen.End())
+	} else {
+		startPos = fset.Position(spec.Pos())
+		endPos = fset.Position(spec.End())
+	}
+
+	doc := ""
+	if spec.Doc != nil {
+		doc = strings.TrimSpace(spec.Doc.Text())
+	} else if len(gen.Specs) == 1 && gen.Doc != nil {
+		doc = strings.TrimSpace(gen.Doc.Text())
+	}
+
+	kind := "var"
+	if gen.Tok == token.CONST {
+		kind = "const"
+	}
+	typeStr := ""
+	if spec.Type != nil {
+		typeStr = " " + strings.TrimSpace(string(src[fset.Position(spec.Type.Pos()).Offset:fset.Position(spec.Type.End()).Offset]))
+	}
+	signature := kind + " " + name.Name + typeStr
+
+	codeLines := strings.Split(string(src[startPos.Offset:endPos.Offset]), "\n")
+	var buf bytes.Buffer
+	currentLine := startPos.Line
+	for _, line := range codeLines {
+		if strings.TrimSpace(line) != "" {
+			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
+		}
+		currentLine++
+	}
+
+	return domain.SymbolResult{
+		File:        path,
+		Package:     filePackageName(f),
+		Imports:     fileImportPaths(f),
+		FileOutline: outline,
+		LineStart:   startPos.Line,
+		LineEnd:     endPos.Line,
+		Name:        name.Name,
+		Receiver:    "",
+		Signature:   signature,
+		Doc:         doc,
+		Code:        strings.TrimSuffix(buf.String(), "\n"),
+	}
 }
