@@ -96,6 +96,7 @@ type symbolInput struct {
 	Tests       bool   `json:"tests,omitempty" jsonschema:"include test files in the search"`
 	Dir         string `json:"dir,omitempty" jsonschema:"directory to search in, defaults to current directory"`
 	Module      string `json:"module,omitempty" jsonschema:"import path of a dependency to search in instead of the current project, e.g. 'github.com/spf13/cobra'"`
+	Context     string `json:"context,omitempty" jsonschema:"optional 'file' to additionally return an outline of sibling declarations in the same file (signatures only, with line ranges) — set this when you might edit nearby code and want to see the file's shape in one call"`
 	TokenBudget int    `json:"token_budget,omitempty" jsonschema:"approximate max tokens in output (pattern mode), 0 means unlimited"`
 }
 
@@ -155,7 +156,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 		}
 
 		if in.Pattern != "" {
-			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: in.Pattern, Tests: in.Tests, Module: in.Module}, dir)
+			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: in.Pattern, Tests: in.Tests, Module: in.Module, Context: in.Context}, dir)
 			if err != nil {
 				return errorResult(err.Error()), nil, nil
 			}
@@ -169,7 +170,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			return textResult(text), nil, nil
 		}
 
-		results := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module)
+		results := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module, in.Context)
 		if len(results) == 0 {
 			return textResult(fmt.Sprintf("No matches found for '%s'.\nHint: run 'graph' with symbols=true and dir set to list available symbols.", in.Query)), nil, nil
 		}

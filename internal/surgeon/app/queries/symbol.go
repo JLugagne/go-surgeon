@@ -80,6 +80,10 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 			return nil
 		}
 
+		var outline []domain.OutlineEntry
+		if query.Context == "file" {
+			outline = buildFileOutline(fset, src, f)
+		}
 		if query.PackageName != "" && f.Name.Name != query.PackageName {
 			return nil
 		}
@@ -93,7 +97,7 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 
 				nameMatches := nameRE != nil && nameRE.MatchString(fn.Name.Name) || nameRE == nil && fn.Name.Name == query.Name
 				if nameMatches && (query.Receiver == "" || query.Receiver == recvName) {
-					results = append(results, h.extractFuncResult(fset, src, f, fn, path, recvName))
+					results = append(results, h.extractFuncResult(fset, src, f, fn, path, recvName, outline))
 				}
 			} else if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE && query.Receiver == "" {
 				for _, spec := range gen.Specs {
@@ -104,7 +108,7 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 						return n == query.Name
 					}
 					if typeSpec, ok := spec.(*ast.TypeSpec); ok && tsMatches(typeSpec.Name.Name) {
-						results = append(results, h.extractStructResult(fset, src, f, gen, typeSpec, path))
+						results = append(results, h.extractStructResult(fset, src, f, gen, typeSpec, path, outline))
 					}
 				}
 			}
@@ -139,7 +143,7 @@ func getRecvType(recv *ast.FieldList) string {
 	return ""
 }
 
-func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byte, f *ast.File, fn *ast.FuncDecl, path, recv string) domain.SymbolResult {
+func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byte, f *ast.File, fn *ast.FuncDecl, path, recv string, outline []domain.OutlineEntry) domain.SymbolResult {
 	startPos := fset.Position(fn.Pos())
 	endPos := fset.Position(fn.End())
 
@@ -166,20 +170,21 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 	}
 
 	return domain.SymbolResult{
-		File:      path,
-		Package:   filePackageName(f),
-		Imports:   fileImportPaths(f),
-		LineStart: startPos.Line,
-		LineEnd:   endPos.Line,
-		Name:      fn.Name.Name,
-		Receiver:  recv,
-		Signature: signature,
-		Doc:       doc,
-		Code:      strings.TrimSuffix(buf.String(), "\n"),
+		File:        path,
+		Package:     filePackageName(f),
+		Imports:     fileImportPaths(f),
+		FileOutline: outline,
+		LineStart:   startPos.Line,
+		LineEnd:     endPos.Line,
+		Name:        fn.Name.Name,
+		Receiver:    recv,
+		Signature:   signature,
+		Doc:         doc,
+		Code:        strings.TrimSuffix(buf.String(), "\n"),
 	}
 }
 
-func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []byte, f *ast.File, gen *ast.GenDecl, typeSpec *ast.TypeSpec, path string) domain.SymbolResult {
+func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []byte, f *ast.File, gen *ast.GenDecl, typeSpec *ast.TypeSpec, path string, outline []domain.OutlineEntry) domain.SymbolResult {
 	startPos := fset.Position(typeSpec.Pos())
 	endPos := fset.Position(typeSpec.End())
 
@@ -207,16 +212,17 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 	}
 
 	return domain.SymbolResult{
-		File:      path,
-		Package:   filePackageName(f),
-		Imports:   fileImportPaths(f),
-		LineStart: startPos.Line,
-		LineEnd:   endPos.Line,
-		Name:      typeSpec.Name.Name,
-		Receiver:  "",
-		Signature: signature,
-		Doc:       doc,
-		Code:      strings.TrimSuffix(buf.String(), "\n"),
+		File:        path,
+		Package:     filePackageName(f),
+		Imports:     fileImportPaths(f),
+		FileOutline: outline,
+		LineStart:   startPos.Line,
+		LineEnd:     endPos.Line,
+		Name:        typeSpec.Name.Name,
+		Receiver:    "",
+		Signature:   signature,
+		Doc:         doc,
+		Code:        strings.TrimSuffix(buf.String(), "\n"),
 	}
 }
 
@@ -238,4 +244,111 @@ func fileImportPaths(f *ast.File) []string {
 		paths = append(paths, strings.Trim(imp.Path.Value, "\""))
 	}
 	return paths
+}
+
+// buildFileOutline walks every top-level declaration in f and returns
+// compact signature entries (no bodies). Used when SymbolQuery.Context
+// is "file" so the caller sees the whole file's structure in one shot.
+func buildFileOutline(fset *token.FileSet, src []byte, f *ast.File) []domain.OutlineEntry {
+	if f == nil {
+		return nil
+	}
+	var out []domain.OutlineEntry
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			startPos := fset.Position(d.Pos())
+			endPos := fset.Position(d.End())
+			sigEnd := d.Pos()
+			if d.Body != nil {
+				sigEnd = d.Body.Pos()
+			} else {
+				sigEnd = d.End()
+			}
+			sig := strings.TrimSpace(string(src[startPos.Offset:fset.Position(sigEnd).Offset]))
+			kind := "func"
+			recv := ""
+			if d.Recv != nil {
+				kind = "method"
+				recv = getRecvTypeFromFields(d.Recv)
+			}
+			out = append(out, domain.OutlineEntry{
+				Kind:      kind,
+				Name:      d.Name.Name,
+				Receiver:  recv,
+				Signature: sig,
+				LineStart: startPos.Line,
+				LineEnd:   endPos.Line,
+			})
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					startPos := fset.Position(s.Pos())
+					endPos := fset.Position(s.End())
+					kind := "type"
+					name := s.Name.Name
+					sig := outlineTypeSignature(s)
+					out = append(out, domain.OutlineEntry{
+						Kind:      kind,
+						Name:      name,
+						Signature: sig,
+						LineStart: startPos.Line,
+						LineEnd:   endPos.Line,
+					})
+				case *ast.ValueSpec:
+					kind := "var"
+					if d.Tok == token.CONST {
+						kind = "const"
+					}
+					for _, id := range s.Names {
+						startPos := fset.Position(id.Pos())
+						endPos := fset.Position(s.End())
+						typeStr := ""
+						if s.Type != nil {
+							typeStr = " " + strings.TrimSpace(string(src[fset.Position(s.Type.Pos()).Offset:fset.Position(s.Type.End()).Offset]))
+						}
+						out = append(out, domain.OutlineEntry{
+							Kind:      kind,
+							Name:      id.Name,
+							Signature: kind + " " + id.Name + typeStr,
+							LineStart: startPos.Line,
+							LineEnd:   endPos.Line,
+						})
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// outlineTypeSignature renders a compact one-line signature for a type
+// declaration: "type Name struct", "type Name interface", "type Name alias".
+func outlineTypeSignature(ts *ast.TypeSpec) string {
+	switch ts.Type.(type) {
+	case *ast.StructType:
+		return "type " + ts.Name.Name + " struct"
+	case *ast.InterfaceType:
+		return "type " + ts.Name.Name + " interface"
+	default:
+		return "type " + ts.Name.Name
+	}
+}
+
+// getRecvTypeFromFields extracts the receiver type name from a FuncDecl's
+// Recv list (strips pointer stars, returns the bare type identifier).
+func getRecvTypeFromFields(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+	switch t := recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		if id, ok := t.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
 }
