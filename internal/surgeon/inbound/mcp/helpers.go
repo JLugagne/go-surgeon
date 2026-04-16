@@ -379,3 +379,84 @@ type extractInterfaceOutput struct {
 	MockFile      string `json:"mock_file,omitempty"`
 	MockName      string `json:"mock_name,omitempty"`
 }
+
+// buildDiagnostic is the JSON representation of a single compile diagnostic.
+type buildDiagnostic struct {
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column,omitempty"`
+	Message string `json:"message"`
+}
+
+// buildCheckOutput is the structured result for the build_check tool.
+type buildCheckOutput struct {
+	Success     bool              `json:"success"`
+	Diagnostics []buildDiagnostic `json:"diagnostics,omitempty"`
+	RawOutput   string            `json:"raw_output,omitempty"`
+	ExitCode    int               `json:"exit_code"`
+	DurationMs  int64             `json:"duration_ms"`
+	TimedOut    bool              `json:"timed_out,omitempty"`
+	Truncated   bool              `json:"truncated,omitempty"`
+}
+
+func convertBuildDiagnostics(diags []domain.BuildDiagnostic) []buildDiagnostic {
+	if len(diags) == 0 {
+		return nil
+	}
+	out := make([]buildDiagnostic, len(diags))
+	for i, d := range diags {
+		out[i] = buildDiagnostic{File: d.File, Line: d.Line, Column: d.Column, Message: d.Message}
+	}
+	return out
+}
+
+// formatBuildCheckResult renders the structured BuildCheckResult into a
+// compact human-readable summary: a status header, a grouped list of
+// diagnostics (at most a few per file), and the timing/exit metadata.
+func formatBuildCheckResult(r domain.BuildCheckResult) string {
+	var sb strings.Builder
+	switch {
+	case r.TimedOut:
+		fmt.Fprintf(&sb, "TIMED OUT after %dms (exit_code=%d)\n", r.DurationMs, r.ExitCode)
+	case r.Success:
+		fmt.Fprintf(&sb, "SUCCESS (build_check): no diagnostics in %dms\n", r.DurationMs)
+	default:
+		fmt.Fprintf(&sb, "FAILED (build_check): %d diagnostic(s) in %dms (exit_code=%d)\n", len(r.Diagnostics), r.DurationMs, r.ExitCode)
+	}
+
+	if len(r.Diagnostics) > 0 {
+		// Group by file preserving first-seen order.
+		order := []string{}
+		groups := map[string][]domain.BuildDiagnostic{}
+		for _, d := range r.Diagnostics {
+			if _, ok := groups[d.File]; !ok {
+				order = append(order, d.File)
+			}
+			groups[d.File] = append(groups[d.File], d)
+		}
+		sb.WriteByte('\n')
+		for _, file := range order {
+			fmt.Fprintf(&sb, "%s\n", file)
+			for _, d := range groups[file] {
+				if d.Column > 0 {
+					fmt.Fprintf(&sb, "  %d:%d  %s\n", d.Line, d.Column, d.Message)
+				} else {
+					fmt.Fprintf(&sb, "  %d  %s\n", d.Line, d.Message)
+				}
+			}
+		}
+	} else if !r.Success && r.RawOutput != "" {
+		// Compile failed but no parseable diagnostics — surface the raw output so the agent isn't blind.
+		sb.WriteByte('\n')
+		sb.WriteString("Raw output:\n")
+		sb.WriteString(r.RawOutput)
+		if !strings.HasSuffix(r.RawOutput, "\n") {
+			sb.WriteByte('\n')
+		}
+	}
+
+	if r.Truncated {
+		sb.WriteString("\n(note: raw build output was truncated at 64 KiB)\n")
+	}
+	return sb.String()
+}
