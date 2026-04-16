@@ -12,7 +12,7 @@ import (
 
 const serverInstructions = `go-surgeon is the AST-aware editor for Go files. It replaces Read/Edit/Write/Grep/Glob/Bash for anything that touches a .go file — use it for reading Go code too, not just editing. This applies end-to-end: don't start with go-surgeon and then fall back to Grep mid-task.
 
-The mental model has two layers:
+The mental model has three layers:
 
 EXPLORE (before you edit, to understand what's there)
 - overview: list packages and symbols across the project. START HERE on an unfamiliar codebase — one call shows the package tree + (with symbols=true) per-file signatures. Also use when entering a new package for the first time: overview focus=pkg/path symbols=true shows every type/func/interface in one call, saving 5-10 individual symbol calls.
@@ -35,6 +35,10 @@ EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewr
 - Several coordinated edits                          → execute_plan (atomic, up to 15 actions)
 
 Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
+
+VALIDATE (after you edit, to confirm the change is sound)
+- build_check: runs 'go build' scoped to a package or directory (default './...') and returns structured diagnostics (file, line, column, message) deduplicated per file. Call this after any edit that could affect compilation instead of asking the user to run 'go build' or shelling out. Set tests=true to also compile test files. timeout_seconds caps the run (default 60, max 600). 'go vet' is out of scope; use build_check only for compile errors.
+- test_run: runs 'go test' for a package/directory and reports pass/fail plus failing test output.
 
 INTERFACE WORKFLOWS
 - To add ONE method to an existing interface: use patch_interface add_method. There is no add_interface_method tool, and update_interface is overkill here.
@@ -90,6 +94,12 @@ type graphInput struct {
 	Exclude     []string `json:"exclude,omitempty" jsonschema:"glob patterns for directories to skip"`
 	TokenBudget int      `json:"token_budget,omitempty" jsonschema:"approximate max tokens in output, 0 means unlimited"`
 	Module      string   `json:"module,omitempty" jsonschema:"import path of a dependency to explore instead of the current project, e.g. 'github.com/spf13/cobra'; dir and focus are relative to the module root when set"`
+}
+
+type buildCheckInput struct {
+	Dir            string `json:"dir,omitempty" jsonschema:"relative directory or package pattern to build, defaults to './...'. Absolute paths and '..' traversal are rejected."`
+	Tests          bool   `json:"tests,omitempty" jsonschema:"compile test files too (uses 'go test -count=0 -run ^$' instead of 'go build')"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"timeout in seconds, default 60, max 600"`
 }
 
 type symbolInput struct {
@@ -180,6 +190,33 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 		text := formatSymbolResults(results, in.Body, in.Query)
 		return textResult(text), nil, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "build_check",
+		Description: "Run `go build` against a package/directory and return structured compile diagnostics. Use this AFTER editing Go code to verify the package still compiles — diagnostics carry file:line:column + message, deduplicated per file. Set tests=true to also compile _test.go files. dir defaults to './...' (the whole module); pass a relative path like 'internal/foo' or 'internal/foo/...' to scope the check. timeout_seconds defaults to 60 (max 600). `go vet` is out of scope — this tool only reports errors the compiler itself sees.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in buildCheckInput) (*mcp.CallToolResult, any, error) {
+		result, err := queries.BuildCheck(ctx, domain.BuildCheckRequest{
+			Dir:            in.Dir,
+			Tests:          in.Tests,
+			TimeoutSeconds: in.TimeoutSeconds,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("build_check failed: %v", err)), nil, nil
+		}
+
+		text := formatBuildCheckResult(result)
+		res := textResult(text)
+		res.StructuredContent = buildCheckOutput{
+			Success:     result.Success,
+			Diagnostics: convertBuildDiagnostics(result.Diagnostics),
+			RawOutput:   result.RawOutput,
+			ExitCode:    result.ExitCode,
+			DurationMs:  result.DurationMs,
+			TimedOut:    result.TimedOut,
+			Truncated:   result.Truncated,
+		}
+		return res, nil, nil
 	})
 }
 

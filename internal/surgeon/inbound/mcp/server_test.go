@@ -97,6 +97,7 @@ func (m *mockCommands) ExtractInterface(ctx context.Context, req domain.ExtractI
 type mockQueries struct {
 	findSymbolsFn func(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
 	graphFn       func(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
+	buildCheckFn  func(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
 }
 
 func (m *mockQueries) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {
@@ -111,6 +112,13 @@ func (m *mockQueries) Graph(ctx context.Context, opts domain.GraphOptions) ([]do
 		return m.graphFn(ctx, opts)
 	}
 	return nil, nil
+}
+
+func (m *mockQueries) BuildCheck(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error) {
+	if m.buildCheckFn != nil {
+		return m.buildCheckFn(ctx, req)
+	}
+	return domain.BuildCheckResult{Success: true}, nil
 }
 
 // --- Test helpers ---
@@ -167,7 +175,7 @@ func TestToolsList(t *testing.T) {
 	}
 
 	expected := []string{
-		"overview", "symbol",
+		"overview", "symbol", "build_check",
 		"create", "update", "delete",
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
@@ -306,6 +314,62 @@ func TestSymbol_MultipleMatches(t *testing.T) {
 	text := resultText(t, result)
 	assert.Contains(t, text, "Found 2 matches")
 	assert.Contains(t, text, "Matches (Methods):")
+}
+
+// --- build_check tool tests ---
+
+func TestBuildCheck_SuccessRendersSummary(t *testing.T) {
+	var received domain.BuildCheckRequest
+	queries := &mockQueries{
+		buildCheckFn: func(_ context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error) {
+			received = req
+			return domain.BuildCheckResult{Success: true, DurationMs: 12}, nil
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "build_check", map[string]any{"dir": "internal/foo"})
+	text := resultText(t, result)
+	assert.Contains(t, text, "SUCCESS (build_check)")
+	assert.False(t, result.IsError)
+	assert.Equal(t, "internal/foo", received.Dir)
+}
+
+func TestBuildCheck_FailureListsDiagnostics(t *testing.T) {
+	queries := &mockQueries{
+		buildCheckFn: func(_ context.Context, _ domain.BuildCheckRequest) (domain.BuildCheckResult, error) {
+			return domain.BuildCheckResult{
+				Success:  false,
+				ExitCode: 1,
+				Diagnostics: []domain.BuildDiagnostic{
+					{File: "pkg/a.go", Line: 10, Column: 5, Message: "undefined: Foo"},
+					{File: "pkg/a.go", Line: 12, Column: 3, Message: "expected ';'"},
+				},
+				DurationMs: 8,
+			}, nil
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "build_check", map[string]any{})
+	text := resultText(t, result)
+	assert.Contains(t, text, "FAILED (build_check)")
+	assert.Contains(t, text, "pkg/a.go")
+	assert.Contains(t, text, "10:5")
+	assert.Contains(t, text, "undefined: Foo")
+}
+
+func TestBuildCheck_TimedOutRendersTimeoutHeader(t *testing.T) {
+	queries := &mockQueries{
+		buildCheckFn: func(_ context.Context, _ domain.BuildCheckRequest) (domain.BuildCheckResult, error) {
+			return domain.BuildCheckResult{TimedOut: true, ExitCode: -1, DurationMs: 60000}, nil
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "build_check", map[string]any{"timeout_seconds": 60})
+	text := resultText(t, result)
+	assert.Contains(t, text, "TIMED OUT")
 }
 
 // --- Create tool tests ---
