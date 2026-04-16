@@ -256,10 +256,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), Preview: true}, nil
 	}
 
-	if err := h.fs.WriteFile(ctx, req.FilePath, newSrc); err != nil {
+	addedImports, err := h.fs.WriteFile(ctx, req.FilePath, newSrc)
+	if err != nil {
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	addedImports, _ := h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
 	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports}, nil
 }

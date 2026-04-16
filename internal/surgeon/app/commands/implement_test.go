@@ -23,9 +23,9 @@ func (m *mockFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return nil, os.ErrNotExist
 }
 
-func (m *mockFS) WriteFile(ctx context.Context, path string, content []byte) error {
+func (m *mockFS) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
 	m.files[path] = content
-	return nil
+	return nil, nil
 }
 
 func (m *mockFS) ReadDir(ctx context.Context, path string) ([]string, error) {
@@ -39,9 +39,6 @@ func (m *mockFS) ReadDir(ctx context.Context, path string) ([]string, error) {
 }
 func (m *mockFS) IsDir(ctx context.Context, path string) (bool, error) { return false, nil }
 func (m *mockFS) MkdirAll(ctx context.Context, path string) error      { return nil }
-func (m *mockFS) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
-	return nil, nil
-}
 
 func TestImplement(t *testing.T) {
 	tmpDir := t.TempDir()

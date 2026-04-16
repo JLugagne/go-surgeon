@@ -19,9 +19,9 @@ type mockCommands struct {
 	executePlanFn      func(ctx context.Context, plan domain.Plan) (domain.PlanResult, error)
 	implementFn        func(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error)
 	mockFn             func(ctx context.Context, req domain.MockRequest) (string, error)
-	addInterfaceFn     func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
-	updateInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
-	deleteInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, error)
+	addInterfaceFn     func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
+	updateInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
+	deleteInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
 	generateTestFn     func(ctx context.Context, filePath, identifier string) (string, error)
 	tagStructFn        func(ctx context.Context, req domain.TagRequest) error
 	extractInterfaceFn func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
@@ -51,25 +51,25 @@ func (m *mockCommands) Mock(ctx context.Context, req domain.MockRequest) (string
 	return "", nil
 }
 
-func (m *mockCommands) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (m *mockCommands) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	if m.addInterfaceFn != nil {
 		return m.addInterfaceFn(ctx, req)
 	}
-	return "", nil
+	return "", nil, nil
 }
 
-func (m *mockCommands) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (m *mockCommands) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	if m.updateInterfaceFn != nil {
 		return m.updateInterfaceFn(ctx, req)
 	}
-	return "", nil
+	return "", nil, nil
 }
 
-func (m *mockCommands) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, error) {
+func (m *mockCommands) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 	if m.deleteInterfaceFn != nil {
 		return m.deleteInterfaceFn(ctx, req)
 	}
-	return "", nil
+	return "", nil, nil
 }
 
 func (m *mockCommands) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
@@ -597,9 +597,9 @@ func TestExecutePlan_Warnings(t *testing.T) {
 func TestAddInterface(t *testing.T) {
 	var receivedReq domain.InterfaceActionRequest
 	commands := &mockCommands{
-		addInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, error) {
+		addInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 			receivedReq = req
-			return "SUCCESS: Created interface Repository in repo.go", nil
+			return "SUCCESS: Created interface Repository in repo.go", nil, nil
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})
@@ -620,9 +620,9 @@ func TestAddInterface(t *testing.T) {
 
 func TestUpdateInterface(t *testing.T) {
 	commands := &mockCommands{
-		updateInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, error) {
+		updateInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 			assert.Equal(t, "Repository", req.Identifier)
-			return "SUCCESS: Updated interface Repository", nil
+			return "SUCCESS: Updated interface Repository", nil, nil
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})
@@ -637,9 +637,9 @@ func TestUpdateInterface(t *testing.T) {
 
 func TestDeleteInterface(t *testing.T) {
 	commands := &mockCommands{
-		deleteInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, error) {
+		deleteInterfaceFn: func(_ context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
 			assert.Equal(t, "Repository", req.Identifier)
-			return "SUCCESS: Deleted interface Repository", nil
+			return "SUCCESS: Deleted interface Repository", nil, nil
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})
@@ -653,8 +653,8 @@ func TestDeleteInterface(t *testing.T) {
 
 func TestAddInterface_Error(t *testing.T) {
 	commands := &mockCommands{
-		addInterfaceFn: func(_ context.Context, _ domain.InterfaceActionRequest) (string, error) {
-			return "", errors.New("duplicate interface")
+		addInterfaceFn: func(_ context.Context, _ domain.InterfaceActionRequest) (string, []string, error) {
+			return "", nil, errors.New("duplicate interface")
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})

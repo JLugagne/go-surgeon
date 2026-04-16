@@ -39,7 +39,7 @@ func TestAddInterface_WithMock(t *testing.T) {
 		MockName: "MockBookRepository",
 	}
 
-	result, err := handler.AddInterface(context.Background(), req)
+	result, _, err := handler.AddInterface(context.Background(), req)
 	require.NoError(t, err)
 	assert.Contains(t, result, "BookRepository")
 	assert.Contains(t, result, "MockBookRepository")
@@ -70,7 +70,7 @@ func TestAddInterface_WithoutMock(t *testing.T) {
 		Content:  `type Doer interface { Do() error }`,
 	}
 
-	result, err := handler.AddInterface(context.Background(), req)
+	result, _, err := handler.AddInterface(context.Background(), req)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Doer")
 
@@ -93,9 +93,9 @@ type BookRepository interface {
 `
 	fs := &mockFS{
 		files: map[string][]byte{
-			ifaceFile:                           []byte(initialIface),
-			filepath.Join(mockDir, "base.go"):   []byte("package repotest\n"),
-			mockFile:                            []byte("package repotest\n// old mock\n"),
+			ifaceFile:                         []byte(initialIface),
+			filepath.Join(mockDir, "base.go"): []byte("package repotest\n"),
+			mockFile:                          []byte("package repotest\n// old mock\n"),
 		},
 	}
 	handler := commands.NewExecutePlanHandler(fs)
@@ -113,7 +113,7 @@ type BookRepository interface {
 		MockName:   "MockBookRepository",
 	}
 
-	result, err := handler.UpdateInterface(context.Background(), req)
+	result, _, err := handler.UpdateInterface(context.Background(), req)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Updated BookRepository")
 	assert.Contains(t, result, "MockBookRepository")
@@ -152,7 +152,7 @@ type OtherType struct{}
 		Identifier: "BookRepository",
 	}
 
-	result, err := handler.DeleteInterface(context.Background(), req)
+	result, _, err := handler.DeleteInterface(context.Background(), req)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Deleted BookRepository")
 
@@ -177,6 +177,6 @@ func TestDeleteInterface_NotFound(t *testing.T) {
 		Identifier: "NonExistent",
 	}
 
-	_, err := handler.DeleteInterface(context.Background(), req)
+	_, _, err := handler.DeleteInterface(context.Background(), req)
 	require.Error(t, err)
 }

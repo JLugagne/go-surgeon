@@ -255,6 +255,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), File: in.File}},
 			Warnings:      result.Warnings,
+			AddedImports:  result.AddedImports,
 		}
 		return res, nil, nil
 	})
@@ -294,6 +295,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
 			Warnings:      result.Warnings,
+			AddedImports:  result.AddedImports,
 		}
 		return res, nil, nil
 	})
@@ -329,6 +331,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
 			Warnings:      result.Warnings,
+			AddedImports:  result.AddedImports,
 		}
 		return res, nil, nil
 	})
@@ -355,7 +358,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		result, err := commands.AddInterface(ctx, domain.InterfaceActionRequest{
+		result, addedImports, err := commands.AddInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
 		})
@@ -370,6 +373,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "add_interface", Identifier: in.Identifier, File: in.File}},
+			AddedImports:  addedImports,
 		}
 		return res, nil, nil
 	})
@@ -381,7 +385,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		result, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
+		result, addedImports, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
 			Doc: in.Doc, StripDoc: in.StripDoc,
@@ -397,6 +401,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "update_interface", Identifier: in.Identifier, File: in.File}},
+			AddedImports:  addedImports,
 		}
 		return res, nil, nil
 	})
@@ -413,7 +418,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 				return err, nil, nil
 			}
 		}
-		result, err := commands.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		result, addedImports, err := commands.DeleteInterface(ctx, domain.InterfaceActionRequest{
 			FilePath:   in.File,
 			Identifier: in.Identifier,
 			MockFile:   in.MockFile,
@@ -431,6 +436,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "delete_interface", Identifier: in.Identifier, File: in.File}},
+			AddedImports:  addedImports,
 		}
 		return res, nil, nil
 	})
@@ -477,6 +483,7 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: "insert_call", Identifier: in.Function, File: in.File}},
 			Warnings:      result.Warnings,
+			AddedImports:  result.AddedImports,
 		}
 		return res, nil, nil
 	})
@@ -583,11 +590,11 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
-			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports}
 			return res, nil, nil
 		}
 		res := textResult(prefix)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports}
 		return res, nil, nil
 	})
 
@@ -658,11 +665,11 @@ func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
-			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports}
 			return res, nil, nil
 		}
 		res := textResult(prefix)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports}
 		return res, nil, nil
 	})
 }
@@ -738,11 +745,11 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
-			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, MockUpdated: result.MockUpdated}
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, MockUpdated: result.MockUpdated, AddedImports: result.AddedImports}
 			return res, nil, nil
 		}
 		res := textResult(prefix)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, MockUpdated: result.MockUpdated}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, MockUpdated: result.MockUpdated, AddedImports: result.AddedImports}
 		return res, nil, nil
 	})
 }
@@ -796,6 +803,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			FilesModified: result.Files,
 			Symbols:       symbols,
 			Warnings:      result.Warnings,
+			AddedImports:  result.AddedImports,
 		}
 		return res, nil, nil
 	})

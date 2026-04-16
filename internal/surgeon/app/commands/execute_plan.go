@@ -37,13 +37,21 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 
 	modifiedFiles := make(map[string]bool)
 	var warnings []string
+	var addedImports []string
+	seenImports := make(map[string]bool)
 
 	for _, action := range plan.Actions {
-		w, err := h.executeAction(ctx, action)
+		w, imps, err := h.executeAction(ctx, action)
 		if err != nil {
 			return domain.PlanResult{}, err
 		}
 		warnings = append(warnings, w...)
+		for _, imp := range imps {
+			if !seenImports[imp] {
+				addedImports = append(addedImports, imp)
+				seenImports[imp] = true
+			}
+		}
 		modifiedFiles[action.FilePath] = true
 	}
 
@@ -52,7 +60,7 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 		files = append(files, f)
 	}
 	sort.Strings(files)
-	return domain.PlanResult{FilesModified: len(modifiedFiles), Files: files, Warnings: warnings}, nil
+	return domain.PlanResult{FilesModified: len(modifiedFiles), Files: files, Warnings: warnings, AddedImports: addedImports}, nil
 }
 
 // ExecutePlan implements the SurgeonCommands interface.
@@ -60,12 +68,14 @@ func (h *ExecutePlanHandler) ExecutePlan(ctx context.Context, plan domain.Plan) 
 	return h.Handle(ctx, plan)
 }
 
-func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Action) ([]string, error) {
+func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Action) ([]string, []string, error) {
 	switch action.Action {
 	case domain.ActionTypeCreateFile:
-		return nil, h.handleCreateFile(ctx, action)
+		imps, err := h.handleCreateFile(ctx, action)
+		return nil, imps, err
 	case domain.ActionTypeReplaceFile:
-		return nil, h.handleReplaceFile(ctx, action)
+		imps, err := h.handleReplaceFile(ctx, action)
+		return nil, imps, err
 	case domain.ActionTypeUpdateFunc, domain.ActionTypeAddFunc, domain.ActionTypeUpdateStruct, domain.ActionTypeAddStruct, domain.ActionTypeDeleteFunc, domain.ActionTypeDeleteStruct, domain.ActionTypeInsertCall:
 		return h.handleASTAction(ctx, action)
 	case domain.ActionTypeAddInterface:
@@ -75,8 +85,8 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			MockFile: action.MockFile,
 			MockName: action.MockName,
 		}
-		_, err := h.AddInterface(ctx, req)
-		return nil, err
+		_, imps, err := h.AddInterface(ctx, req)
+		return nil, imps, err
 	case domain.ActionTypeUpdateInterface:
 		req := domain.InterfaceActionRequest{
 			FilePath:   action.FilePath,
@@ -87,27 +97,27 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			Doc:        action.Doc,
 			StripDoc:   action.StripDoc,
 		}
-		_, err := h.UpdateInterface(ctx, req)
-		return nil, err
+		_, imps, err := h.UpdateInterface(ctx, req)
+		return nil, imps, err
 	case domain.ActionTypeDeleteInterface:
 		req := domain.InterfaceActionRequest{
 			FilePath:   action.FilePath,
 			Identifier: action.Identifier,
 		}
-		_, err := h.DeleteInterface(ctx, req)
-		return nil, err
+		_, imps, err := h.DeleteInterface(ctx, req)
+		return nil, imps, err
 	default:
-		return nil, fmt.Errorf("invalid action type: %s", action.Action)
+		return nil, nil, fmt.Errorf("invalid action type: %s", action.Action)
 	}
 }
 
-func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain.Action) error {
+func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain.Action) ([]string, error) {
 	if _, err := h.fs.ReadFile(ctx, action.FilePath); err == nil {
-		return domain.ErrFileAlreadyExists
+		return nil, domain.ErrFileAlreadyExists
 	}
 	dir := filepath.Dir(action.FilePath)
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
-		return &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
+		return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
 	}
 	pkgName := action.PackagePath
 	if pkgName == "" {
@@ -120,13 +130,13 @@ func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain
 	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
 
-func (h *ExecutePlanHandler) handleReplaceFile(ctx context.Context, action domain.Action) error {
+func (h *ExecutePlanHandler) handleReplaceFile(ctx context.Context, action domain.Action) ([]string, error) {
 	existing, err := h.fs.ReadFile(ctx, action.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return domain.ErrFileNotFound
+			return nil, domain.ErrFileNotFound
 		}
-		return &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
+		return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
 	}
 	pkgName := extractPackageName(existing)
 	if pkgName == "" {
@@ -137,13 +147,13 @@ func (h *ExecutePlanHandler) handleReplaceFile(ctx context.Context, action domai
 		pkgName = filepath.Base(filepath.Dir(action.FilePath))
 	}
 	if pkgName == "" {
-		return &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("failed to determine package name from existing file %s", action.FilePath)}
+		return nil, &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("failed to determine package name from existing file %s", action.FilePath)}
 	}
 	content := ensurePackageHeader(action.Content, pkgName)
 	return h.fs.WriteFile(ctx, action.FilePath, []byte(content))
 }
 
-func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.Action) ([]string, error) {
+func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.Action) ([]string, []string, error) {
 	fset := token.NewFileSet()
 
 	src, err := h.fs.ReadFile(ctx, action.FilePath)
@@ -151,7 +161,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	if err != nil {
 		if os.IsNotExist(err) {
 			if action.Action != domain.ActionTypeAddFunc && action.Action != domain.ActionTypeAddStruct {
-				return nil, domain.ErrFileNotFound
+				return nil, nil, domain.ErrFileNotFound
 			}
 			isFileNew = true
 			pkgName := action.PackagePath
@@ -163,13 +173,13 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			}
 			src = []byte(fmt.Sprintf("package %s\n", pkgName))
 		} else {
-			return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
+			return nil, nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to read file", Err: err}
 		}
 	}
 
 	f, err := parser.ParseFile(fset, action.FilePath, src, parser.ParseComments)
 	if err != nil {
-		return nil, &domain.Error{Code: "PARSE_ERROR", Message: "failed to parse file", Err: err}
+		return nil, nil, &domain.Error{Code: "PARSE_ERROR", Message: "failed to parse file", Err: err}
 	}
 
 	var updated bool
@@ -189,7 +199,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			// Before falling back to add_func, check whether the identifier is an
 			// interface — update_func cannot update interfaces.
 			if _, isIface := findInterfaceOffset(fset, f, action.Identifier); isIface {
-				return nil, &domain.Error{
+				return nil, nil, &domain.Error{
 					Code:    "WRONG_OBJECT_TYPE",
 					Message: fmt.Sprintf("%q is an interface in %s; use update_interface (object='interface') instead of update_func (object='func')", action.Identifier, action.FilePath),
 				}
@@ -212,7 +222,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			if funcID, parseErr := extractFuncIdentifierFromContent(action.Content); parseErr == nil && funcID != "" {
 				if offsets, ok := findFuncOffsets(fset, f, funcID); ok {
 					existingBody := strings.TrimSpace(string(src[offsets.DocStart:offsets.End]))
-					return nil, &domain.Error{
+					return nil, nil, &domain.Error{
 						Code:    "NODE_ALREADY_EXISTS",
 						Message: fmt.Sprintf("function %q already declared in %s:\n\n%s", funcID, action.FilePath, existingBody),
 					}
@@ -231,7 +241,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			if structName, parseErr := extractStructNameFromContent(normalizedContent); parseErr == nil && structName != "" {
 				if offsets, ok := findStructOffsets(fset, f, structName); ok {
 					existingBody := strings.TrimSpace(string(src[offsets.DocStart:offsets.End]))
-					return nil, &domain.Error{
+					return nil, nil, &domain.Error{
 						Code:    "NODE_ALREADY_EXISTS",
 						Message: fmt.Sprintf("struct %q already declared in %s:\n\n%s", structName, action.FilePath, existingBody),
 					}
@@ -270,7 +280,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	case domain.ActionTypeInsertCall:
 		result, warn, err := insertCallIntoFunc(fset, f, src, action.Identifier, action.Content, action.Position)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if warn != "" {
 			warnings = append(warnings, warn)
@@ -298,20 +308,21 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 
 	if !updated {
 		if action.Action == domain.ActionTypeDeleteFunc || action.Action == domain.ActionTypeDeleteStruct {
-			return nil, domain.ErrNodeNotFound
+			return nil, nil, domain.ErrNodeNotFound
 		}
-		return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to apply AST action"}
+		return nil, nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to apply AST action"}
 	}
 
 	if isFileNew {
 		dir := filepath.Dir(action.FilePath)
 		if err := h.fs.MkdirAll(ctx, dir); err != nil {
-			return nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
+			return nil, nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
 		}
 	}
 
-	if err := h.fs.WriteFile(ctx, action.FilePath, updatedSrc); err != nil {
-		return nil, err
+	addedImports, err := h.fs.WriteFile(ctx, action.FilePath, updatedSrc)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Auto-generate test skeleton when requested (add_func / update_func only).
@@ -329,7 +340,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 		}
 	}
 
-	return warnings, nil
+	return warnings, addedImports, nil
 }
 
 func findFuncOffsets(fset *token.FileSet, f *ast.File, identifier string) (nodeOffsets, bool) {

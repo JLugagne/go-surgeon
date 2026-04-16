@@ -135,10 +135,9 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 		updatedSrc = append(updatedSrc[:rep.start], append([]byte(rep.newText), updatedSrc[rep.end:]...)...)
 	}
 
-	if err := h.fs.WriteFile(ctx, req.FilePath, updatedSrc); err != nil {
+	if _, err := h.fs.WriteFile(ctx, req.FilePath, updatedSrc); err != nil {
 		return &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
-	_, _ = h.fs.ExecuteGoImports(ctx, []string{req.FilePath})
 
 	return nil
 }

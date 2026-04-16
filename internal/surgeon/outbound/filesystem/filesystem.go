@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"strings"
 
 	"golang.org/x/tools/imports"
@@ -27,15 +26,26 @@ func (f *FileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) 
 }
 
 // WriteFile writes content to the file at path.
-func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) error {
+func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
+	var addedImports []string
 	if strings.HasSuffix(path, ".go") {
+		before := parseImportPaths(path, content)
 		formatted, err := imports.Process(path, content, nil)
 		if err == nil {
 			content = formatted
+			after := parseImportPaths(path, content)
+			for imp := range after {
+				if !before[imp] {
+					addedImports = append(addedImports, imp)
+				}
+			}
 		}
 		warnUnresolvedImports(path, content)
 	}
-	return os.WriteFile(path, content, 0644)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		return nil, err
+	}
+	return addedImports, nil
 }
 
 // ReadDir returns the names of the files and directories in path.
@@ -151,45 +161,6 @@ func warnUnresolvedImports(path string, src []byte) {
 	for pkg := range unresolved {
 		fmt.Fprintf(os.Stderr, "WARNING: goimports could not resolve package %q referenced in %s — you may need to add the import manually.\n", pkg, path)
 	}
-}
-
-// ExecuteGoImports executes goimports -w on the provided files and returns the import paths that were added (net-new after goimports runs).
-func (f *FileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	before := make(map[string]map[string]bool, len(files))
-	for _, path := range files {
-		src, err := os.ReadFile(path)
-		if err == nil {
-			before[path] = parseImportPaths(path, src)
-		}
-	}
-
-	args := append([]string{"-w"}, files...)
-	cmd := exec.CommandContext(ctx, "goimports", args...)
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-
-	var added []string
-	seen := make(map[string]bool)
-	for _, path := range files {
-		src, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		after := parseImportPaths(path, src)
-		prev := before[path]
-		for imp := range after {
-			if !prev[imp] && !seen[imp] {
-				added = append(added, imp)
-				seen[imp] = true
-			}
-		}
-	}
-	return added, nil
 }
 
 func parseImportPaths(path string, src []byte) map[string]bool {

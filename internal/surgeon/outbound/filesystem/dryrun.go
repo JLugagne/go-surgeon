@@ -30,16 +30,24 @@ func (f *DryRunFileSystem) ReadFile(ctx context.Context, path string) ([]byte, e
 	return f.real.ReadFile(ctx, path)
 }
 
-func (f *DryRunFileSystem) WriteFile(ctx context.Context, path string, content []byte) error {
+func (f *DryRunFileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
+	var addedImports []string
 	if strings.HasSuffix(path, ".go") {
+		before := parseImportPaths(path, content)
 		formatted, err := imports.Process(path, content, nil)
 		if err == nil {
 			content = formatted
+			after := parseImportPaths(path, content)
+			for imp := range after {
+				if !before[imp] {
+					addedImports = append(addedImports, imp)
+				}
+			}
 		}
 		warnUnresolvedImports(path, content)
 	}
 	f.files[path] = content
-	return nil
+	return addedImports, nil
 }
 
 func (f *DryRunFileSystem) ReadDir(ctx context.Context, path string) ([]string, error) {
@@ -52,10 +60,6 @@ func (f *DryRunFileSystem) IsDir(ctx context.Context, path string) (bool, error)
 
 func (f *DryRunFileSystem) MkdirAll(ctx context.Context, path string) error {
 	return nil
-}
-
-func (f *DryRunFileSystem) ExecuteGoImports(ctx context.Context, files []string) ([]string, error) {
-	return nil, nil
 }
 
 // PrintDiffs prints all accumulated diffs to stdout.
