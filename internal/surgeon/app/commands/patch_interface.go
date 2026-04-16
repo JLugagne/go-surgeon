@@ -67,6 +67,7 @@ func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.Patc
 		if body := formatNumberedSource(src, startOff, endOff, startLine); body != "" {
 			msg += fmt.Sprintf("\n\nCurrent definition of %s (lines %d-%d):\n%s", req.Identifier, startLine, endLine, body)
 		}
+		msg += "\nHint: use the line numbers and member names above to correct your patch."
 		return domain.PatchInterfaceResult{}, &domain.Error{
 			Code:    "PATCH_FAILED",
 			Message: msg,
