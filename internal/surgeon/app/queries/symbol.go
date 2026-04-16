@@ -272,7 +272,7 @@ func buildFileOutline(fset *token.FileSet, src []byte, f *ast.File) []domain.Out
 		case *ast.FuncDecl:
 			startPos := fset.Position(d.Pos())
 			endPos := fset.Position(d.End())
-			sigEnd := d.Pos()
+			var sigEnd token.Pos
 			if d.Body != nil {
 				sigEnd = d.Body.Pos()
 			} else {
