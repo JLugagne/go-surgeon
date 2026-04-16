@@ -205,7 +205,7 @@ func F() { x := 1 }
 			Patches:    []domain.FunctionPatch{{Op: domain.PatchOpReplace, Replace: "2"}},
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "match or match_regex is required")
+		assert.Contains(t, err.Error(), "match, match_regex, at_line, or from_line/to_line is required")
 	})
 
 	t.Run("match and match_regex both set errors", func(t *testing.T) {
@@ -1209,4 +1209,86 @@ func foo() error { return nil }
 
 	content := getFile(fs, "main.go")
 	assert.NotContains(t, content, "forcing YAML on JSON payload should fail")
+}
+
+func TestPatchFunction_LineBasedTargeting(t *testing.T) {
+	const sampleBody = `package p
+
+func Greet(name string) string {
+	if name == "" {
+		return "hello"
+	}
+	return "hello " + name
+}
+`
+
+	t.Run("at_line replaces the single line", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{"p.go": []byte(sampleBody)}}
+		h := commands.NewExecutePlanHandler(fs)
+		// Greet: func at L3, body lines inside at L4-L8, "return \"hello\"" at L5.
+		res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Greet",
+			Patches: []domain.FunctionPatch{{
+				Op:      domain.PatchOpReplace,
+				AtLine:  5,
+				Replace: "return \"hi\"",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Applied)
+		assert.Contains(t, string(fs.files["p.go"]), "return \"hi\"")
+		assert.NotContains(t, string(fs.files["p.go"]), "return \"hello\"\n")
+	})
+
+	t.Run("from_line/to_line deletes a range", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{"p.go": []byte(sampleBody)}}
+		h := commands.NewExecutePlanHandler(fs)
+		// Delete the `if name == "" { return "hello" }` block (lines 4-6).
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Greet",
+			Patches: []domain.FunctionPatch{{
+				Op:       domain.PatchOpDelete,
+				FromLine: 4,
+				ToLine:   6,
+			}},
+		})
+		require.NoError(t, err)
+		updated := string(fs.files["p.go"])
+		assert.NotContains(t, updated, "if name ==")
+		assert.Contains(t, updated, "return \"hello \" + name")
+	})
+
+	t.Run("at_line with match rejected", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{"p.go": []byte(sampleBody)}}
+		h := commands.NewExecutePlanHandler(fs)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Greet",
+			Patches: []domain.FunctionPatch{{
+				Op:     domain.PatchOpReplace,
+				AtLine: 5,
+				Match:  "hello",
+			}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("out-of-range line errors cleanly", func(t *testing.T) {
+		fs := &mockFS{files: map[string][]byte{"p.go": []byte(sampleBody)}}
+		h := commands.NewExecutePlanHandler(fs)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Greet",
+			Patches: []domain.FunctionPatch{{
+				Op:      domain.PatchOpReplace,
+				AtLine:  999,
+				Replace: "return \"\"",
+			}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "out of")
+	})
 }

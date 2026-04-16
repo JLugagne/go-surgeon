@@ -540,6 +540,9 @@ type patchOpInput struct {
 	Replace    string `json:"replace,omitempty" jsonschema:"replacement text (for replace op)"`
 	Code       string `json:"code,omitempty" jsonschema:"line of code to insert (for insert_before / insert_after ops)"`
 	Wrap       string `json:"wrap,omitempty" jsonschema:"wrap template with %s as the matched text (for wrap op)"`
+	AtLine     int    `json:"at_line,omitempty" jsonschema:"target a single line by file-absolute line number (1-based, matches symbol body=true output). Mutually exclusive with match/match_regex."`
+	FromLine   int    `json:"from_line,omitempty" jsonschema:"first line of a file-absolute line range (1-based, inclusive). Pair with to_line."`
+	ToLine     int    `json:"to_line,omitempty" jsonschema:"last line of a file-absolute line range (1-based, inclusive). Must be >= from_line."`
 }
 
 type patchFunctionInput struct {
@@ -555,6 +558,7 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		Description: "Edit a few lines inside ONE function body by matching on text. Strongly preferred over update whenever you're changing a small portion of a function — update makes you re-emit the full body, which is a common source of accidental deletions. All patches are scoped to the named function and applied atomically (any failure → nothing written). " +
 			"ops: replace, insert_before, insert_after, delete, wrap (replaces match with fmt.Sprintf(wrap, match)). " +
 			"match is whitespace-normalized, so you don't need to reproduce indentation. When a match is ambiguous, disambiguate with occurrence (1-based) instead of guessing. " +
+			"LINE-BASED TARGETING: instead of match/match_regex, you can target edits by file-absolute line number — the same numbers symbol body=true prints (e.g. L259). Use at_line=259 for a single line or from_line=259/to_line=263 for a range. Line-based targeting is faster and more reliable than fuzzy text matching; reach for it after you've already called symbol body=true. Line-based and text-based targeting are mutually exclusive per patch. " +
 			"match_regex (RE2, no backrefs/lookarounds) is an alternative when text matching isn't enough; patterns are capped at 1KB, must match 1..1000 times, and cannot be zero-width. " +
 			"preview=true returns the diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFunctionInput) (*mcp.CallToolResult, any, error) {
@@ -571,6 +575,9 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 				Replace:    p.Replace,
 				Code:       p.Code,
 				Wrap:       p.Wrap,
+				AtLine:     p.AtLine,
+				FromLine:   p.FromLine,
+				ToLine:     p.ToLine,
 			}
 		}
 		result, err := commands.PatchFunction(ctx, domain.PatchFunctionRequest{
