@@ -17,8 +17,8 @@ The mental model has two layers:
 EXPLORE (before you edit, to understand what's there)
 - overview: list packages and symbols across the project. START HERE on an unfamiliar codebase — one call shows the package tree + (with symbols=true) per-file signatures.
 - symbol: read one declaration. Two modes:
-    - exact (query): fetch a known function/method/type. Set body=true to see the implementation — do this before every edit. body=true also returns the file's package line and import block for free. Add context=file to additionally get an outline of sibling declarations (signatures only) so you see the whole file's shape in one call.
-    - regex (pattern): list every declaration whose name matches. Use instead of Grep for discovery: it matches only declarations, so you don't wade through usages.
+    - exact (query): fetch a known function/method/type/var/const. Set body=true to see the implementation — do this before every edit. body=true also returns the file's package line and import block for free. Add context=file to additionally get an outline of sibling declarations (signatures only) so you see the whole file's shape in one call.
+    - regex (pattern): list every declaration whose name matches. Use instead of Grep for discovery: it matches only declarations, so you don't wade through usages. Covers funcs, methods, types, vars, and consts.
 - Both accept module='github.com/org/repo' to look inside a dependency's source instead of the current project. Use this rather than find/cat inside $GOMODCACHE.
 
 EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewrite more)
@@ -141,7 +141,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one specific declaration (exact query='Name' / 'Receiver.Method' / 'pkg.Name') or list every declaration matching a regex (pattern=). Always use this instead of Read on a .go file; always use pattern instead of Grep to discover declarations (Grep mixes decls and usages, pattern doesn't). Set body=true before any update or delete — seeing the current code prevents 'I replaced the wrong thing' mistakes; body=true also returns the file's package line + full import block so you don't need a follow-up Read to check what's already imported. Works on dependencies too via module='github.com/org/repo'. query and pattern are mutually exclusive.",
+		Description: "Read one specific declaration (exact query='Name' / 'Receiver.Method' / 'pkg.Name') or list every declaration matching a regex (pattern=). Always use this instead of Read on a .go file; always use pattern instead of Grep to discover declarations (Grep mixes decls and usages, pattern doesn't). Indexes funcs, methods, types (struct/interface/alias), AND package-level vars/consts — searching for a constant by name returns its declaration directly, no Read fallback needed. Set body=true before any update or delete — seeing the current code prevents 'I replaced the wrong thing' mistakes; body=true also returns the file's package line + full import block so you don't need a follow-up Read to check what's already imported. Add context=file to get a sibling-declaration outline in the same call. Works on dependencies too via module='github.com/org/repo'. query and pattern are mutually exclusive.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
