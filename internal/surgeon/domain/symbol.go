@@ -18,7 +18,11 @@ type SymbolQuery struct {
 
 // SymbolResult represents the extracted information for a symbol.
 type SymbolResult struct {
-	File      string
+	File string
+	// Package is the package name of the file declaring this symbol.
+	Package string
+	// Imports lists the import paths of the file declaring this symbol.
+	Imports   []string
 	LineStart int
 	LineEnd   int
 	Name      string

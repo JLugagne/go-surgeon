@@ -140,7 +140,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one specific declaration (exact query='Name' / 'Receiver.Method' / 'pkg.Name') or list every declaration matching a regex (pattern=). Always use this instead of Read on a .go file; always use pattern instead of Grep to discover declarations (Grep mixes decls and usages, pattern doesn't). Set body=true before any update or delete — seeing the current code prevents 'I replaced the wrong thing' mistakes. Works on dependencies too via module='github.com/org/repo'. query and pattern are mutually exclusive.",
+		Description: "Read one specific declaration (exact query='Name' / 'Receiver.Method' / 'pkg.Name') or list every declaration matching a regex (pattern=). Always use this instead of Read on a .go file; always use pattern instead of Grep to discover declarations (Grep mixes decls and usages, pattern doesn't). Set body=true before any update or delete — seeing the current code prevents 'I replaced the wrong thing' mistakes; body=true also returns the file's package line + full import block so you don't need a follow-up Read to check what's already imported. Works on dependencies too via module='github.com/org/repo'. query and pattern are mutually exclusive.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {

@@ -93,7 +93,7 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 
 				nameMatches := nameRE != nil && nameRE.MatchString(fn.Name.Name) || nameRE == nil && fn.Name.Name == query.Name
 				if nameMatches && (query.Receiver == "" || query.Receiver == recvName) {
-					results = append(results, h.extractFuncResult(fset, src, fn, path, recvName))
+					results = append(results, h.extractFuncResult(fset, src, f, fn, path, recvName))
 				}
 			} else if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE && query.Receiver == "" {
 				for _, spec := range gen.Specs {
@@ -104,7 +104,7 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 						return n == query.Name
 					}
 					if typeSpec, ok := spec.(*ast.TypeSpec); ok && tsMatches(typeSpec.Name.Name) {
-						results = append(results, h.extractStructResult(fset, src, gen, typeSpec, path))
+						results = append(results, h.extractStructResult(fset, src, f, gen, typeSpec, path))
 					}
 				}
 			}
@@ -139,7 +139,7 @@ func getRecvType(recv *ast.FieldList) string {
 	return ""
 }
 
-func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, recv string) domain.SymbolResult {
+func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byte, f *ast.File, fn *ast.FuncDecl, path, recv string) domain.SymbolResult {
 	startPos := fset.Position(fn.Pos())
 	endPos := fset.Position(fn.End())
 
@@ -167,6 +167,8 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 
 	return domain.SymbolResult{
 		File:      path,
+		Package:   filePackageName(f),
+		Imports:   fileImportPaths(f),
 		LineStart: startPos.Line,
 		LineEnd:   endPos.Line,
 		Name:      fn.Name.Name,
@@ -177,7 +179,7 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 	}
 }
 
-func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []byte, gen *ast.GenDecl, typeSpec *ast.TypeSpec, path string) domain.SymbolResult {
+func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []byte, f *ast.File, gen *ast.GenDecl, typeSpec *ast.TypeSpec, path string) domain.SymbolResult {
 	startPos := fset.Position(typeSpec.Pos())
 	endPos := fset.Position(typeSpec.End())
 
@@ -206,6 +208,8 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 
 	return domain.SymbolResult{
 		File:      path,
+		Package:   filePackageName(f),
+		Imports:   fileImportPaths(f),
 		LineStart: startPos.Line,
 		LineEnd:   endPos.Line,
 		Name:      typeSpec.Name.Name,
@@ -214,4 +218,24 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 		Doc:       doc,
 		Code:      strings.TrimSuffix(buf.String(), "\n"),
 	}
+}
+
+// filePackageName returns the package name declared in f, or an empty string.
+func filePackageName(f *ast.File) string {
+	if f == nil || f.Name == nil {
+		return ""
+	}
+	return f.Name.Name
+}
+
+// fileImportPaths returns the import paths declared in f, in source order.
+func fileImportPaths(f *ast.File) []string {
+	if f == nil || len(f.Imports) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(f.Imports))
+	for _, imp := range f.Imports {
+		paths = append(paths, strings.Trim(imp.Path.Value, "\""))
+	}
+	return paths
 }
