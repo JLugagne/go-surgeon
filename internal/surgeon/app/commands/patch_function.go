@@ -92,6 +92,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	rbraceOff := fset.Position(targetFn.Body.Rbrace).Offset // offset of '}'
 	origBody := string(src[lbraceOff+1 : rbraceOff])
 
+	var warnings []string
 	// Phase 1: resolve all patches against the original body.
 	type resolvedEdit struct {
 		start, end  int    // byte offsets relative to origBody start
@@ -191,6 +192,24 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				continue
 			}
 			idx = p.Occurrence - 1
+			// Warn about unreplaced leftover matches so the agent knows to re-run
+			// if they meant all of them (pass-6 friction).
+			if p.Op == domain.PatchOpReplace && len(hits) > 1 {
+				var leftoverLines []int
+				for j, lh := range hits {
+					if j == idx {
+						continue
+					}
+					leftoverLines = append(leftoverLines, bodyStartLine+strings.Count(origBody[:lh[0]], "\n"))
+				}
+				if len(leftoverLines) > 0 {
+					numStrs := make([]string, len(leftoverLines))
+					for k, n := range leftoverLines {
+						numStrs[k] = fmt.Sprintf("L%d", n)
+					}
+					warnings = append(warnings, fmt.Sprintf("patch #%d: replaced occurrence %d; %d more match(es) remain at %s", i+1, p.Occurrence, len(leftoverLines), strings.Join(numStrs, ", ")))
+				}
+			}
 		}
 		hit := hits[idx]
 
@@ -279,7 +298,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
 
 	if req.Preview {
-		return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), Preview: true}, nil
+		return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), Preview: true, Warnings: warnings}, nil
 	}
 
 	addedImports, err := h.fs.WriteFile(ctx, req.FilePath, newSrc)
@@ -287,7 +306,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
 
-	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports}, nil
+	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports, Warnings: warnings}, nil
 }
 
 // safeRegexMatches compiles pattern and returns all non-empty match byte ranges

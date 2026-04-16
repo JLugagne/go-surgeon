@@ -596,13 +596,16 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if len(result.AddedImports) > 0 {
 			prefix += fmt.Sprintf(" (imports added: %s)", strings.Join(result.AddedImports, ", "))
 		}
+		for _, w := range result.Warnings {
+			prefix += "\n  WARNING: " + w
+		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
-			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports}
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
 			return res, nil, nil
 		}
 		res := textResult(prefix)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
 		return res, nil, nil
 	})
 

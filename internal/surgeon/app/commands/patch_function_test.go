@@ -1292,3 +1292,35 @@ func Greet(name string) string {
 		assert.Contains(t, err.Error(), "out of")
 	})
 }
+
+func TestPatchFunction_OccurrenceLeftoverWarning(t *testing.T) {
+	// Body contains three occurrences of `x := 1`. Asking to replace
+	// occurrence=2 should succeed and emit a warning pointing at the
+	// other two line numbers.
+	src := `package p
+
+func Count() int {
+	x := 1
+	x := 1
+	x := 1
+	return x
+}
+`
+	fs := &mockFS{files: map[string][]byte{"p.go": []byte(src)}}
+	h := commands.NewExecutePlanHandler(fs)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Count",
+		Patches: []domain.FunctionPatch{{
+			Op:         domain.PatchOpReplace,
+			Match:      "x := 1",
+			Replace:    "x := 2",
+			Occurrence: 2,
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Warnings, 1, "expected exactly one leftover-matches warning")
+	assert.Contains(t, res.Warnings[0], "2 more match")
+	assert.Regexp(t, `L\d+, L\d+`, res.Warnings[0])
+}

@@ -42,6 +42,8 @@ type PatchFunctionResult struct {
 	Applied      int
 	Preview      bool
 	AddedImports []string
+	// Warnings are non-fatal notes about this patch operation — e.g., "occurrence: N replaced, but the body still contains M more matches at lines X, Y."
+	Warnings []string
 }
 
 // StructPatchOp is the operation type for a struct declaration patch.
