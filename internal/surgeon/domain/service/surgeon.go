@@ -28,4 +28,5 @@ type SurgeonQueries interface {
 	FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
 	Graph(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
 	BuildCheck(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
+	TestRun(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
 }

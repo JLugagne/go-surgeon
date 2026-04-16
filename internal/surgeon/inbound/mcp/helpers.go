@@ -460,3 +460,52 @@ func formatBuildCheckResult(r domain.BuildCheckResult) string {
 	}
 	return sb.String()
 }
+
+// formatTestRunResult renders a compact, agent-friendly test report.
+// Passed tests are collapsed into counts; failed tests get file:line and a
+// short output snippet. Skipped tests are listed by name.
+func formatTestRunResult(r domain.TestRunResult) string {
+	var sb strings.Builder
+	if r.Success {
+		sb.WriteString("SUCCESS")
+	} else if r.TimedOut {
+		sb.WriteString("TIMEOUT")
+	} else {
+		sb.WriteString("FAIL")
+	}
+	fmt.Fprintf(&sb, " — %s (took %dms)\n", r.Summary, r.DurationMS)
+
+	var fails []domain.TestCaseResult
+	var skips []domain.TestCaseResult
+	for _, t := range r.Tests {
+		switch t.Status {
+		case "fail":
+			fails = append(fails, t)
+		case "skip":
+			skips = append(skips, t)
+		}
+	}
+
+	if len(fails) > 0 {
+		sb.WriteString("\nFailures:\n")
+		for _, t := range fails {
+			loc := ""
+			if t.FailureFile != "" {
+				loc = fmt.Sprintf(" at %s:%d", t.FailureFile, t.FailureLine)
+			}
+			fmt.Fprintf(&sb, "- %s/%s%s\n", t.Package, t.Name, loc)
+			if t.FailureMessage != "" {
+				fmt.Fprintf(&sb, "    %s\n", t.FailureMessage)
+			}
+		}
+	}
+
+	if len(skips) > 0 {
+		sb.WriteString("\nSkipped:\n")
+		for _, t := range skips {
+			fmt.Fprintf(&sb, "- %s/%s\n", t.Package, t.Name)
+		}
+	}
+
+	return sb.String()
+}

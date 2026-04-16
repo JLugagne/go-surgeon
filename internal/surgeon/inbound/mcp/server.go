@@ -51,6 +51,9 @@ CODE GENERATION
 - test: generate a table-driven test skeleton for a function or method.
 - tag: bulk-generate or set struct field tags (json, bson, …).
 
+VALIDATE (after editing, before declaring the task done)
+- test_run: run 'go test' scoped to a package/directory and get a compact pass/fail report with per-test timing and failure file:line references. Prefer this over shelling out to go test yourself. Pair with build_check for compile-time validation.
+
 UNIVERSAL RULES
 - content is raw Go code: never include 'package ...' or 'import ...' blocks — goimports runs after every edit and manages imports.
 - Always read with symbol body=true before update/delete — it's cheap and it prevents the "I replaced the wrong thing" class of bug.
@@ -216,6 +219,26 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			TimedOut:    result.TimedOut,
 			Truncated:   result.Truncated,
 		}
+		return res, nil, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "test_run",
+		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in testRunInput) (*mcp.CallToolResult, any, error) {
+		result, err := queries.TestRun(ctx, domain.TestRunRequest{
+			Dir:            in.Dir,
+			Run:            in.Run,
+			Count:          in.Count,
+			Race:           in.Race,
+			Tags:           in.Tags,
+			TimeoutSeconds: in.TimeoutSeconds,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("ERROR (test_run): %v", err)), nil, nil
+		}
+		res := textResult(formatTestRunResult(result))
+		res.StructuredContent = result
 		return res, nil, nil
 	})
 }
@@ -1062,4 +1085,13 @@ type executePlanActionInput struct {
 	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
 	Position   string `json:"position,omitempty" jsonschema:"insert position: before-return, end-of-body, or after:<marker>"`
 	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function"`
+}
+
+type testRunInput struct {
+	Dir            string `json:"dir,omitempty" jsonschema:"directory to test (relative to the project root). Defaults to ./..."`
+	Run            string `json:"run,omitempty" jsonschema:"optional -run regexp filter"`
+	Count          int    `json:"count,omitempty" jsonschema:"iterations per test (default 1)"`
+	Race           bool   `json:"race,omitempty" jsonschema:"enable the race detector"`
+	Tags           string `json:"tags,omitempty" jsonschema:"build tags (whitelist [a-z_][a-z0-9_,.]*)"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"overall timeout in seconds (default 120, max 600)"`
 }
