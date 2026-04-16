@@ -54,9 +54,22 @@ func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.Patc
 	}
 
 	if len(errs) > 0 {
+		msg := strings.Join(errs, "\n")
+		// Include the full interface definition with line numbers so the
+		// agent can see current methods and retry without a symbol call.
+		startOff := fset.Position(typeSpec.Pos()).Offset
+		for startOff > 0 && src[startOff-1] != '\n' {
+			startOff--
+		}
+		startLine := fset.Position(typeSpec.Pos()).Line
+		endLine := fset.Position(ifaceType.End()).Line
+		endOff := fset.Position(ifaceType.End()).Offset
+		if body := formatNumberedSource(src, startOff, endOff, startLine); body != "" {
+			msg += fmt.Sprintf("\n\nCurrent definition of %s (lines %d-%d):\n%s", req.Identifier, startLine, endLine, body)
+		}
 		return domain.PatchInterfaceResult{}, &domain.Error{
 			Code:    "PATCH_FAILED",
-			Message: strings.Join(errs, "\n"),
+			Message: msg,
 		}
 	}
 

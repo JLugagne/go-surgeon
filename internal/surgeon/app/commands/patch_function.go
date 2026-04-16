@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"regexp"
 	"sort"
@@ -263,9 +264,17 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	if len(errs) > 0 {
+		msg := strings.Join(errs, "\n")
+		// Include the full function body with line numbers so the agent can
+		// correct its patch without a follow-up symbol call.
+		funcStart := fset.Position(targetFn.Pos())
+		funcEnd := fset.Position(targetFn.End())
+		if body := formatNumberedSource(src, funcStart.Offset, funcEnd.Offset, funcStart.Line); body != "" {
+			msg += fmt.Sprintf("\n\nCurrent body of %s (lines %d-%d):\n%s", req.Identifier, funcStart.Line, funcEnd.Line, body)
+		}
 		return domain.PatchFunctionResult{}, &domain.Error{
 			Code:    "PATCH_FAILED",
-			Message: strings.Join(errs, "\n"),
+			Message: msg,
 		}
 	}
 
@@ -379,10 +388,11 @@ func safeRegexMatches(pattern, body string) ([][2]int, error) {
 
 // findNormalizedMatches returns all [start,end] byte ranges in body where
 // the whitespace-normalized content matches the normalized match string.
-// Matching is attempted at three granularities:
+// Matching is attempted at four granularities:
 //  1. whole-line  (match trims to the entire trimmed line)
 //  2. sub-string  (match found anywhere within a line after normalizing spaces)
 //  3. multi-line  (match spans multiple lines after collapsing all whitespace runs)
+//  4. token-based (go/scanner tokenization, ignoring whitespace and comments)
 func findNormalizedMatches(body, match string) [][2]int {
 	normMatch := normalizeWS(match)
 	var hits [][2]int
@@ -432,7 +442,13 @@ func findNormalizedMatches(body, match string) [][2]int {
 		}
 		searchFrom = absIdx + 1
 	}
-	return hits
+	if len(hits) > 0 {
+		return hits
+	}
+
+	// 4: token-based: scan both strings with go/scanner and match on
+	// token sequences, ignoring all whitespace and comment differences.
+	return FindTokenMatches(body, match)
 }
 
 // normalizeWS collapses all runs of whitespace (including tabs and newlines)
@@ -860,4 +876,91 @@ func buildLineModeEdit(p domain.FunctionPatch, origBody string, start, end int) 
 	// wrapping a matched substring, which doesn't map cleanly to a line
 	// range. Callers using line mode should pick a different op.
 	return start, end, p.Replace
+}
+
+// formatNumberedSource returns the file region between startOff..endOff
+// with file-absolute line numbers (one per line), so the agent can see
+// the current content and retry a failed patch without a follow-up symbol call.
+func formatNumberedSource(src []byte, startOff, endOff, startLine int) string {
+	if startOff < 0 || endOff > len(src) || startOff >= endOff {
+		return ""
+	}
+	lines := strings.Split(string(src[startOff:endOff]), "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		fmt.Fprintf(&b, " %d: %s\n", startLine+i, line)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// tokInfo represents a scanned Go token with its byte range in the source.
+type tokInfo struct {
+	text string
+	pos  int
+	end  int
+}
+
+// scanTokens tokenizes a Go source fragment using go/scanner.
+// Comments and implicit semicolons are omitted so that cosmetic
+// differences between match and body don't cause false negatives.
+func scanTokens(s string) []tokInfo {
+	src := []byte(s)
+	fset := token.NewFileSet()
+	file := fset.AddFile("", -1, len(src))
+	var sc scanner.Scanner
+	sc.Init(file, src, nil, 0)
+	var result []tokInfo
+	for {
+		pos, tok, lit := sc.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.SEMICOLON && lit == "\n" {
+			continue
+		}
+		off := file.Offset(pos)
+		text := lit
+		if text == "" {
+			text = tok.String()
+		}
+		result = append(result, tokInfo{text: text, pos: off, end: off + len(text)})
+	}
+	return result
+}
+
+// FindTokenMatches finds byte ranges in body where the Go token sequence
+// from match appears. Used as a fallback when whitespace normalization
+// alone isn't enough — handles comment differences and formatting
+// divergences that produce identical token streams. Returned ranges are
+// extended to full-line boundaries for consistent indentation handling.
+func FindTokenMatches(body, match string) [][2]int {
+	bodyToks := scanTokens(body)
+	matchToks := scanTokens(match)
+	if len(matchToks) == 0 || len(bodyToks) < len(matchToks) {
+		return nil
+	}
+	var hits [][2]int
+	for i := 0; i <= len(bodyToks)-len(matchToks); i++ {
+		found := true
+		for j := range matchToks {
+			if bodyToks[i+j].text != matchToks[j].text {
+				found = false
+				break
+			}
+		}
+		if found {
+			start := bodyToks[i].pos
+			end := bodyToks[i+len(matchToks)-1].end
+			// Extend to full-line boundaries so indentation handling
+			// works the same as whitespace-normalized matches.
+			for start > 0 && body[start-1] != '\n' {
+				start--
+			}
+			for end < len(body) && body[end] != '\n' {
+				end++
+			}
+			hits = append(hits, [2]int{start, end})
+		}
+	}
+	return hits
 }
