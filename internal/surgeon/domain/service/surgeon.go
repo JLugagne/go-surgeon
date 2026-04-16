@@ -21,6 +21,7 @@ type SurgeonCommands interface {
 	PatchStruct(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
 	PatchInterface(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 	PatchFile(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
+	PatchDecl(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
 }
 
 // SurgeonQueries defines the interface for querying the codebase AST.

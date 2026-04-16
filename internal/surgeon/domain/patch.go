@@ -174,3 +174,24 @@ type PatchFileResult struct {
 	// Warnings collects non-fatal notes — e.g. "patch #N: zero matches."
 	Warnings []string
 }
+
+// PatchDeclRequest is the input to PatchDecl. It targets the VALUE
+// expression of a top-level const or var declaration. Patches reuse
+// FunctionPatch (same ops, same match/line-based targeting).
+type PatchDeclRequest struct {
+	FilePath   string
+	Identifier string
+	Patches    []FunctionPatch
+	Preview    bool // if true, return diff without writing
+}
+
+// PatchDeclResult is the output of PatchDecl.
+type PatchDeclResult struct {
+	Diff         string
+	Applied      int
+	Preview      bool
+	AddedImports []string
+	// Warnings are non-fatal notes about this patch operation — e.g.,
+	// "occurrence: N replaced, but the value still contains M more matches at lines X, Y."
+	Warnings []string
+}

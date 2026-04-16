@@ -77,6 +77,23 @@ func TestSchemaHint_PatchInterfaceStringPatches(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "JSON-encoded string instead of an array")
 }
 
+// TestSchemaHint_PatchDeclStringPatches covers patch_decl.
+func TestSchemaHint_PatchDeclStringPatches(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "patch_decl",
+		Arguments: map[string]any{
+			"file":       "foo.go",
+			"identifier": "Foo",
+			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "JSON-encoded string instead of an array")
+}
+
 // TestSchemaHint_ArrayPatchesPassThrough verifies that the middleware does not
 // trigger on well-formed array 'patches' — it should be a no-op in the happy
 // path. We send a valid patch_function call and expect it to reach the business

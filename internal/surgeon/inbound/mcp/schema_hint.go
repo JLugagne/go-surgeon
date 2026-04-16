@@ -13,6 +13,7 @@ var patchToolNames = map[string]struct{}{
 	"patch_function":  {},
 	"patch_struct":    {},
 	"patch_interface": {},
+	"patch_decl":      {},
 }
 
 // schemaHintMiddleware intercepts tools/call before the SDK validates the
