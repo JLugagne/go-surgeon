@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/commands"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -385,8 +386,8 @@ type User struct {
 		})
 		require.NoError(t, err)
 		content := getFile(fs, "f.go")
-		assert.Contains(t, content, "Email string")
-		assert.Contains(t, content, "ID string")
+		assert.Regexp(t, `Email\s+string`, content)
+		assert.Regexp(t, `ID\s+string`, content)
 	})
 
 	t.Run("one bad patch writes nothing", func(t *testing.T) {
@@ -594,4 +595,40 @@ type User struct {
 		// after set_doc, Name gets a doc comment above; inline "display name" may be retained or moved
 		// the critical check is that ID's inline comment survives.
 	})
+}
+
+func TestPatchStruct_ChainedAddFieldAnchors(t *testing.T) {
+	// Three add_field patches in a single call. The 2nd anchors on the
+	// field added by the 1st; the 3rd anchors on the field added by the
+	// 2nd. Before this change the 2nd and 3rd patches failed with
+	// "anchor after=X not found".
+	src := `package p
+
+type Config struct {
+	Original string
+}
+`
+	fs := &mockFS{files: map[string][]byte{"p.go": []byte(src)}}
+	h := commands.NewExecutePlanHandler(fs)
+
+	_, err := h.PatchStruct(context.Background(), domain.PatchStructRequest{
+		FilePath:   "p.go",
+		Identifier: "Config",
+		Patches: []domain.StructPatch{
+			{Op: domain.StructPatchOpAddField, Name: "First", Type: "int", After: "Original"},
+			{Op: domain.StructPatchOpAddField, Name: "Second", Type: "int", After: "First"},
+			{Op: domain.StructPatchOpAddField, Name: "Third", Type: "int", After: "Second"},
+		},
+	})
+	require.NoError(t, err)
+
+	updated := string(fs.files["p.go"])
+	// The three new fields should appear in order right after Original.
+	idxOriginal := strings.Index(updated, "Original")
+	idxFirst := strings.Index(updated, "First")
+	idxSecond := strings.Index(updated, "Second")
+	idxThird := strings.Index(updated, "Third")
+	assert.Less(t, idxOriginal, idxFirst)
+	assert.Less(t, idxFirst, idxSecond)
+	assert.Less(t, idxSecond, idxThird)
 }

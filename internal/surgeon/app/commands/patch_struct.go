@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"strings"
@@ -67,6 +68,12 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 	newSrc = append(newSrc, []byte("\n"+newBody+"\n")...)
 	newSrc = append(newSrc, src[rbraceOff:]...)
 
+	// Run gofmt on the result so the diff we return already shows the
+	// final column alignment (goimports also runs on write, but by then
+	// the agent has already seen the diff).
+	if formatted, fmtErr := format.Source(newSrc); fmtErr == nil {
+		newSrc = formatted
+	}
 	// Reject the patch before writing if it would produce invalid Go.
 	if err := validateGoSource(req.FilePath, newSrc); err != nil {
 		return domain.PatchStructResult{}, err
@@ -329,27 +336,35 @@ func listNames(elems []*element) string {
 // insertElement inserts newElem into *working at the position specified by
 // before/after/position. Anchors are resolved against the ORIGINAL list so
 // multiple add_field patches in a row behave predictably.
+// insertElement inserts newElem into *working at the position specified by
+// before/after/position. Anchors are resolved against the WORKING list
+// (which already reflects previous patches in the same call), falling
+// back to the ORIGINAL list for anchors that may have been removed by
+// earlier patches — this way several add_field patches in a row can
+// reference each other's newly-added fields as anchors.
 func insertElement(working *[]*element, original []*element, before, after, position string, newElem *element) string {
 	switch {
 	case before != "":
-		idx := findElement(original, before)
-		if idx == -1 {
-			return fmt.Sprintf("anchor before=%q not found. Current fields: %s", before, listNames(original))
-		}
-		// Map original index to a working-list index by finding the element name.
 		wIdx := findElement(*working, before)
 		if wIdx == -1 {
-			wIdx = idx // anchor removed by earlier patch — best-effort fallback
+			// Anchor may have been removed by an earlier patch; fall back to
+			// the original list so the agent still sees it exists in intent.
+			if findElement(original, before) == -1 {
+				return fmt.Sprintf("anchor before=%q not found. Current fields: %s", before, listNames(*working))
+			}
+			// Removed-by-earlier-patch case: append at end as best-effort.
+			*working = append(*working, newElem)
+			return ""
 		}
 		*working = insertAt(*working, wIdx, newElem)
 	case after != "":
-		idx := findElement(original, after)
-		if idx == -1 {
-			return fmt.Sprintf("anchor after=%q not found. Current fields: %s", after, listNames(original))
-		}
 		wIdx := findElement(*working, after)
 		if wIdx == -1 {
-			wIdx = idx
+			if findElement(original, after) == -1 {
+				return fmt.Sprintf("anchor after=%q not found. Current fields: %s", after, listNames(*working))
+			}
+			*working = append(*working, newElem)
+			return ""
 		}
 		*working = insertAt(*working, wIdx+1, newElem)
 	case position == "first":
