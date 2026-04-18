@@ -21,6 +21,7 @@ Both surfaces are built on the same domain engine, so behavior is identical.
 - [CLI reference](#cli-reference)
   - [Global flags](#global-flags)
   - [Exploration: `graph`, `symbol`](#exploration-graph-symbol)
+  - [Type-aware refs + rename: `find-definition`, `find-references`, `rename-symbol`](#find-definition-find-references-rename-symbol)
   - [Editing: `create-file`, `add-func`, `update-func`, …](#editing-create-file-add-func-update-func-)
   - [Targeted inserts: `insert-call`](#targeted-inserts-insert-call)
   - [Interfaces and mocks: `add-interface`, `implement`, `mock`, `extract-interface`](#interfaces-and-mocks-add-interface-implement-mock-extract-interface)
@@ -77,15 +78,20 @@ Starts an [MCP](https://modelcontextprotocol.io) server over stdio. The server a
 
 | Tool | Purpose |
 |---|---|
-| [`graph`](#graph-tool) | Explore package structure (works on the current project or any dependency) |
+| [`overview`](#overview-tool) | Explore package structure (works on the current project or any dependency) |
 | [`symbol`](#symbol-tool) | Look up a function, method, or struct by name |
+| [`find_definition`](#find_definition-find_references-rename_symbol-tools) | Type-aware: locate a symbol's declaration across packages |
+| [`find_references`](#find_definition-find_references-rename_symbol-tools) | Type-aware: every reference to a symbol, deduplicated |
+| [`rename_symbol`](#find_definition-find_references-rename_symbol-tools) | Type-aware rename across the module |
 | [`create`](#create-update-delete-tools) | Add a file, function, or struct |
 | [`update`](#create-update-delete-tools) | Replace a file, function, or struct by AST identifier |
 | [`delete`](#create-update-delete-tools) | Remove a function or struct |
-| [`patch_function`](#patch_function-tool) | Text-match edits inside a single function body *(MCP only)* |
-| [`patch_struct`](#patch_struct-tool) | Granular field edits on a struct *(MCP only)* |
-| [`patch_interface`](#patch_interface-tool) | Granular method edits on an interface, with mock regeneration *(MCP only)* |
-| [`insert_call`](#insert_call-tool) | Insert a single statement into a function body |
+| [`patch_function`](#patch_function-tool) | Text-match edits inside a single function body |
+| [`patch_struct`](#patch_struct-tool) | Granular field edits on a struct |
+| [`patch_interface`](#patch_interface-tool) | Granular method edits on an interface, with mock regeneration |
+| [`patch_file`](#patch_file-tool) | Whole-file text substitution with AST safety |
+| [`patch_decl`](#patch_decl-tool) | Edit the value of a top-level const or var |
+| [`insert_call`](#insert_call-tool) | Insert a single statement; auto-lifts out of nested scopes |
 | [`add_interface`](#interface-tools) | Add an interface and auto-generate a mock |
 | [`update_interface`](#interface-tools) | Update an interface and regenerate its mock |
 | [`delete_interface`](#interface-tools) | Delete an interface, optionally its mock |
@@ -94,11 +100,15 @@ Starts an [MCP](https://modelcontextprotocol.io) server over stdio. The server a
 | [`extract_interface`](#extract_interface-tool) | Extract an interface from an existing struct |
 | [`test`](#test-tool) | Generate a table-driven test skeleton |
 | [`tag`](#tag-tool) | Add or update struct field tags |
-| [`execute_plan`](#execute_plan-tool) | Run up to 15 edits atomically from a YAML plan |
+| [`build_check`](#build_check-tool) | `go build` with structured diagnostics; `affected_by=file` narrows scope |
+| [`test_run`](#test_run-tool) | `go test` with compact pass/fail report; `affected_by=file` narrows scope |
+| [`execute_plan`](#execute_plan-tool) | Run up to 15 edits atomically — includes every `patch_*` action |
+| [`batch_query`](#batch_query-tool) | Up to 10 read-only queries in one round-trip |
+| [`describe_tool`](#describe_tool-tool) | Queryable catalog of every tool |
 
-#### `graph` tool
+#### `overview` tool
 
-Explore a Go project's package structure.
+Explore a Go project's package structure. Exposed as `go-surgeon graph` on the CLI for historical reasons — MCP clients should use `overview`.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -116,17 +126,51 @@ Explore a Go project's package structure.
 
 Setting `focus` automatically implies `symbols`, `summary`, and `recursive` for the focused package.
 
+When called from a Go module root with `dir='.'` and `symbols=true`, the tool auto-flips to recursive so subpackages surface even if the root has no top-level `.go` files.
+
 #### `symbol` tool
 
 Look up a function, method, or struct by name.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `query` | string | Symbol name. Formats: `Name`, `Receiver.Method`, or `pkg.Name` |
-| `body` | bool | Return the full body with line numbers |
+| `query` | string | Symbol name. Formats: `Name`, `Receiver.Method`, or `pkg.Name`. Mutually exclusive with `pattern` |
+| `pattern` | string | Regex to match against declaration names; returns the list of matches |
+| `body` | bool | Return the full body with line numbers. In pattern mode, bodies stream until `token_budget` is reached then degrade to signature-only |
+| `context` | string | Set to `file` to additionally return an outline of every sibling declaration in the same file |
 | `tests` | bool | Include `_test.go` files |
 | `dir` | string | Directory to search in. Default `.` |
 | `module` | string | Search in a dependency instead of the current project |
+| `token_budget` | int | Max tokens for pattern+body mode (0 = unlimited) |
+
+#### `find_definition`, `find_references`, `rename_symbol` tools
+
+Type-aware symbol lookup and rename, powered by `go/packages`. Unlike `symbol` (which walks the AST by name), these three load the full type graph — so renames and ref lookups don't false-match identifiers that happen to share a name in other packages.
+
+`find_definition`:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | string | Symbol name (required) |
+| `receiver` | string | Receiver type for methods (bare name, no pointer star) |
+| `package` | string | Package import path or name, for disambiguation |
+| `file`, `line` | string, int | Pin an exact declaration when the name is ambiguous |
+| `dir` | string | Directory to load packages from. Default `.` |
+| `tests` | bool | Include `_test.go` files |
+
+`find_references` takes the same parameters plus `include_definition` (bool) — when true, the definition site is returned alongside every reference.
+
+`rename_symbol`:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name`, `new_name` | string | Current and replacement identifiers |
+| `receiver`, `package`, `file`, `line` | … | Disambiguators (same as find_*) |
+| `dir` | string | Directory to load packages from |
+| `tests` | bool | Rewrite `_test.go` files too |
+| `preview` | bool | List affected sites without writing |
+
+Rejects renames that would flip export status (e.g. `Foo` → `foo`) or collide with an existing name in the same scope. On success, returns the list of rewritten files plus every site that changed.
 
 #### `create`, `update`, `delete` tools
 
@@ -288,6 +332,29 @@ patches:
     type: io.Closer
 ```
 
+##### `patch_file` tool
+
+Whole-file text substitution with AST safety — use this when the edit spans multiple functions in the same file (e.g. renaming an internal helper that's called from many sites). The result is re-parsed and `gofmt`'d; a parse failure rejects the patch without writing.
+
+| Parameter | Description |
+|---|---|
+| `file` | Target Go file path |
+| `patches` | Ordered list of `{match | match_regex, replace}` entries; each sees the result of the previous |
+| `preview` | Return the diff without writing |
+
+Prefer `patch_function` when edits are scoped to one body. Prefer `rename_symbol` when the scope is a whole symbol (it's type-aware; this tool is literal text).
+
+##### `patch_decl` tool
+
+Edit the **value** of a top-level `const` or `var` declaration (multi-line string constants, error values, config defaults, …). Same match/replace/regex surface as `patch_function`, scoped to the declaration's value expression.
+
+| Parameter | Description |
+|---|---|
+| `file` | Target Go file path |
+| `identifier` | Name of the const or var |
+| `patches` | Ordered list of patch operations (same shape as patch_function) |
+| `preview` | Return the diff without writing |
+
 #### `insert_call` tool
 
 Insert a single statement into a function body — use this instead of `update` when you only need to add one line.
@@ -391,6 +458,68 @@ Run up to 15 edits atomically from a YAML plan.
 | `plan` | YAML plan content |
 
 See [Batch plans: `execute`](#batch-plans-execute) below for the YAML schema.
+
+`execute_plan` accepts every individual edit action as an action type, including the in-place `patch_function`, `patch_struct`, `patch_interface`, `patch_file`, and `patch_decl`. Each action carries its own per-type `patch_*_ops` slice so batched in-place edits stay type-checkable.
+
+#### `build_check` tool
+
+Run `go build` scoped to a package/directory and return structured compile diagnostics.
+
+| Parameter | Description |
+|---|---|
+| `dir` | Relative directory or package pattern; defaults to `./...` |
+| `affected_by` | Path to a `.go` file — narrow the build to that file's owning package plus every in-module package that (transitively) imports it. Mutually exclusive with `dir`. |
+| `tests` | Also compile `_test.go` files |
+| `timeout_seconds` | Timeout, default 60, max 600 |
+
+Diagnostics come out as `{file, line, column, message}` deduplicated per file. On a large monorepo, `affected_by` is often an order of magnitude faster than `./...`.
+
+#### `test_run` tool
+
+Run `go test` scoped to a package/directory and return a compact pass/fail report.
+
+| Parameter | Description |
+|---|---|
+| `dir` | Directory to test; defaults to `./...` |
+| `affected_by` | Path to a `.go` file — same reverse-dep narrowing as `build_check`. Mutually exclusive with `dir`. |
+| `run` | Optional `-run` regexp filter |
+| `count`, `race`, `tags` | Passed through to `go test` |
+| `timeout_seconds` | Timeout, default 120, max 600 |
+
+#### `batch_query` tool
+
+Run up to 10 read-only queries in a single round-trip. Useful when exploration would otherwise be N sequential calls.
+
+| Parameter | Description |
+|---|---|
+| `queries` | Array of sub-queries; each has `op` (`symbol` / `overview` / `find_references` / `find_definition`) plus that op's normal parameters |
+
+Fail-soft: if one sub-query errors, the others still return. Shares the project's packages loader cache — N `find_references` calls in one batch cost roughly one `packages.Load`.
+
+#### `describe_tool` tool
+
+Queryable catalog of every go-surgeon tool. Prefer this over reading the full server instructions blob when you just need "what should I use for X".
+
+| Parameter | Description |
+|---|---|
+| `name` | Single tool detail (summary, example, related tools). Mutually exclusive with `category`. |
+| `category` | Filter to one group: `explore`, `refs`, `edit`, `interface`, `codegen`, `validate`, `batch`, `meta` |
+
+With no args, returns the full grouped list.
+
+#### Error shape
+
+Every tool's error response includes a structured `{code, message}` in `StructuredContent` alongside the human-readable text. Codes agents can branch on include:
+
+- `INVALID_ARGUMENT` — malformed input (missing required field, mutually-exclusive params both set)
+- `NOT_FOUND` — symbol / file / package doesn't exist
+- `CONFLICT` — rename would collide with an existing name in scope
+- `PATCH_FAILED` — match ambiguous, zero-match, or patch validation failed
+- `PATCH_PRODUCES_INVALID_GO` — the rewrite parsed/compiled wrong; file on disk untouched
+- `LOAD_ERROR` / `READ_ERROR` / `WRITE_ERROR` — I/O-level failures
+- `INTERNAL` — tool bug; report it
+- `ERROR` — validation errors that predate structured codes
+- `UNKNOWN` — error from a dependency that didn't carry a code
 
 ---
 
@@ -497,6 +626,34 @@ go-surgeon symbol Command.Execute --body --module github.com/spf13/cobra
 ```
 
 If the query matches multiple symbols, a disambiguation index is returned. Refine with `Receiver.Method` or `--dir`.
+
+#### `find-definition`, `find-references`, `rename-symbol`
+
+Type-aware lookup and rename. All three resolve the target via `go/packages`, so they ignore same-named identifiers in unrelated packages.
+
+```
+go-surgeon find-definition <NAME> [--receiver R] [--package P] [--file F --line N] [--dir D] [--tests]
+go-surgeon find-references <NAME> [--include-definition] [--receiver R] [--package P] [--dir D] [--tests]
+go-surgeon rename-symbol <OLD> <NEW> [--receiver R] [--package P] [--dir D] [--tests] [--preview]
+```
+
+Disambiguators (`--receiver`, `--package`, `--file`+`--line`) are the same on all three. `rename-symbol --preview` lists every rewrite site without touching files. Rename refuses export-status flips (`Foo` → `foo`) and same-scope collisions.
+
+**Examples:**
+
+```bash
+# Where is BookRepository defined?
+go-surgeon find-definition BookRepository
+
+# Show every call site, plus the declaration
+go-surgeon find-references BookRepository --include-definition
+
+# Dry-run a rename before committing
+go-surgeon rename-symbol BookRepo BookRepository --preview
+
+# Rename a method (disambiguate by receiver)
+go-surgeon rename-symbol Handle Serve --receiver BookHandler
+```
 
 ### Editing: `create-file`, `add-func`, `update-func`, …
 
