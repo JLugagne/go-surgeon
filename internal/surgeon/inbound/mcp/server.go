@@ -855,6 +855,7 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	registerPatchInterfaceTool(s, commands)
 	registerPatchFileTool(s, commands)
 	registerPatchDeclTool(s, commands)
+	registerPatchBulkTools(s, commands)
 }
 
 // --- patch_file ---
@@ -869,12 +870,13 @@ type patchFileInput struct {
 	File    string             `json:"file" jsonschema:"target Go file path"`
 	Patches []filePatchOpInput `json:"patches" jsonschema:"ordered list of substitutions; each patch sees the result of the previous one"`
 	Preview bool               `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+	Scope   string             `json:"scope,omitempty" jsonschema:"all (default), code_only, or identifiers_only"`
 }
 
 func registerPatchFileTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "patch_file",
-		Description: "Whole-file text substitution with AST safety — for cross-function batch edits (e.g. renaming a literal across many test functions). Each patch uses match (literal, all occurrences) or match_regex (RE2 with $1/$2 backrefs in replace). Patches apply sequentially; each sees the result of the previous one. After substitution the file is re-parsed and gofmt'd; if the result is invalid Go the patch is rejected and nothing is written. Zero-match patches are allowed and recorded as warnings. Complements patch_function (per-function) — prefer patch_function when edits are scoped to one body.",
+		Description: "Whole-file text substitution with AST safety — for cross-function batch edits (e.g. renaming a literal across many test functions). Each patch uses match (literal, all occurrences) or match_regex (RE2 with $1/$2 backrefs in replace). Patches apply sequentially; each sees the result of the previous one. Optional scope restricts where substitutions apply: all (default) matches every occurrence; code_only skips matches inside comments and string literals; identifiers_only only accepts matches that land exactly on an *ast.Ident boundary. After substitution the file is re-parsed and gofmt'd; if the result is invalid Go the patch is rejected and nothing is written. Zero-match patches are allowed and recorded as warnings. Complements patch_function (per-function) — prefer patch_function when edits are scoped to one body.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFileInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -891,6 +893,7 @@ func registerPatchFileTool(s *mcp.Server, commands service.SurgeonCommands) {
 			FilePath: in.File,
 			Patches:  patches,
 			Preview:  in.Preview,
+			Scope:    in.Scope,
 		})
 		if err != nil {
 			return errorResultWithCode(fmt.Sprintf("ERROR (patch_file): %v", err), err), nil, nil

@@ -17,21 +17,23 @@ import (
 // --- Mock service implementations ---
 
 type mockCommands struct {
-	executePlanFn      func(ctx context.Context, plan domain.Plan) (domain.PlanResult, error)
-	implementFn        func(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error)
-	mockFn             func(ctx context.Context, req domain.MockRequest) (string, error)
-	addInterfaceFn     func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
-	updateInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
-	deleteInterfaceFn  func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
-	generateTestFn     func(ctx context.Context, filePath, identifier string) (string, error)
-	tagStructFn        func(ctx context.Context, req domain.TagRequest) error
-	extractInterfaceFn func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
-	patchFunctionFn    func(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
-	patchStructFn      func(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
-	patchInterfaceFn   func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
-	patchFileFn        func(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
-	patchDeclFn        func(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
-	renameFn           func(ctx context.Context, req domain.RenameRequest) (domain.RenameResult, error)
+	executePlanFn       func(ctx context.Context, plan domain.Plan) (domain.PlanResult, error)
+	implementFn         func(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error)
+	mockFn              func(ctx context.Context, req domain.MockRequest) (string, error)
+	addInterfaceFn      func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
+	updateInterfaceFn   func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
+	deleteInterfaceFn   func(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error)
+	generateTestFn      func(ctx context.Context, filePath, identifier string) (string, error)
+	tagStructFn         func(ctx context.Context, req domain.TagRequest) error
+	extractInterfaceFn  func(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
+	patchFunctionFn     func(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
+	patchFunctionBulkFn func(ctx context.Context, req domain.PatchFunctionBulkRequest) (domain.PatchFunctionBulkResult, error)
+	patchStructFn       func(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
+	patchStructBulkFn   func(ctx context.Context, req domain.PatchStructBulkRequest) (domain.PatchStructBulkResult, error)
+	patchInterfaceFn    func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
+	patchFileFn         func(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
+	patchDeclFn         func(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
+	renameFn            func(ctx context.Context, req domain.RenameRequest) (domain.RenameResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -194,6 +196,7 @@ func TestToolsList(t *testing.T) {
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
 		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
+		"patch_struct_bulk", "patch_function_bulk",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
 		"describe_tool",
@@ -1414,4 +1417,18 @@ func TestPatchFunction_AutoLiftBannerLeadsText(t *testing.T) {
 	require.GreaterOrEqual(t, bannerIdx, 0)
 	require.GreaterOrEqual(t, okIdx, 0)
 	assert.Less(t, bannerIdx, okIdx, "banner must lead the text output")
+}
+
+func (m *mockCommands) PatchStructBulk(ctx context.Context, req domain.PatchStructBulkRequest) (domain.PatchStructBulkResult, error) {
+	if m.patchStructBulkFn != nil {
+		return m.patchStructBulkFn(ctx, req)
+	}
+	return domain.PatchStructBulkResult{}, nil
+}
+
+func (m *mockCommands) PatchFunctionBulk(ctx context.Context, req domain.PatchFunctionBulkRequest) (domain.PatchFunctionBulkResult, error) {
+	if m.patchFunctionBulkFn != nil {
+		return m.patchFunctionBulkFn(ctx, req)
+	}
+	return domain.PatchFunctionBulkResult{}, nil
 }

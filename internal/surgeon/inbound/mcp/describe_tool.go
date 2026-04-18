@@ -75,6 +75,8 @@ var toolCatalog = []toolEntry{
 	// BATCH
 	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch_function", "file": "a.go", "identifier": "Foo", "patch_function_ops": [...]}]}`, Related: "patch_function, create"},
 	{Name: "batch_query", Category: "batch", Summary: "run up to 10 read-only queries (symbol/overview/find_references/find_definition) in one round-trip; fail-soft per item", Example: `{"queries": [{"op": "overview", "focus": "internal"}, {"op": "symbol", "query": "NewServer"}]}`, Related: "symbol, overview"},
+	{Name: "patch_struct_bulk", Category: "batch", Summary: "apply the same kind of struct patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "A", "patches": [{"op": "add_field", "name": "Preview", "type": "bool"}]}]}`, Related: "patch_struct, execute_plan"},
+	{Name: "patch_function_bulk", Category: "batch", Summary: "apply the same kind of function-body patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch_function, execute_plan"},
 
 	// META
 	{Name: "describe_tool", Category: "meta", Summary: "query this catalog: no args → grouped list; name=X → detail; category=X → filtered list", Example: `{"name": "patch_function"}`},

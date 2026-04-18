@@ -18,7 +18,9 @@ type SurgeonCommands interface {
 	TagStruct(ctx context.Context, req domain.TagRequest) error
 	ExtractInterface(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error)
 	PatchFunction(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error)
+	PatchFunctionBulk(ctx context.Context, req domain.PatchFunctionBulkRequest) (domain.PatchFunctionBulkResult, error)
 	PatchStruct(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error)
+	PatchStructBulk(ctx context.Context, req domain.PatchStructBulkRequest) (domain.PatchStructBulkResult, error)
 	PatchInterface(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 	PatchFile(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
 	PatchDecl(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
