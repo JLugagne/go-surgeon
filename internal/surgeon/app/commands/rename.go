@@ -55,16 +55,28 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 			Message: fmt.Sprintf("rename: %q is not a valid Go identifier", req.NewName),
 		}
 	}
-	// Preserve exported-ness: renaming an exported symbol to an
-	// unexported one (or vice versa) is almost always a mistake.
-	// We reject it to protect callers from shooting their own foot;
-	// if they really want to change case, they can do a two-step
-	// rename through a temporary name.
+	// Preserve exported-ness by default: renaming an exported symbol
+	// to an unexported one (or vice versa) is almost always a mistake,
+	// so we reject it unless the caller opts in via AllowExportChange.
+	// When opt-in is set, we still emit a warning on the result so the
+	// caller can notice the flip.
+	var exportChangeWarning string
 	if isExportedIdent(req.Symbol.Name) != isExportedIdent(req.NewName) {
-		return domain.RenameResult{}, &domain.Error{
-			Code:    "INVALID_ARGUMENT",
-			Message: fmt.Sprintf("rename: changing export status (%q → %q) is not allowed; rename in two steps if intentional", req.Symbol.Name, req.NewName),
+		if !req.AllowExportChange {
+			return domain.RenameResult{}, &domain.Error{
+				Code:    "INVALID_ARGUMENT",
+				Message: fmt.Sprintf("rename: changing export status (%q → %q) is not allowed; rename in two steps if intentional, or pass allow_export_change=true", req.Symbol.Name, req.NewName),
+			}
 		}
+		oldStatus := "unexported"
+		if isExportedIdent(req.Symbol.Name) {
+			oldStatus = "exported"
+		}
+		newStatus := "unexported"
+		if isExportedIdent(req.NewName) {
+			newStatus = "exported"
+		}
+		exportChangeWarning = fmt.Sprintf("export status changed: %q (%s) → %q (%s)", req.Symbol.Name, oldStatus, req.NewName, newStatus)
 	}
 
 	dir := req.Dir
@@ -134,6 +146,9 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 		NewName: req.NewName,
 		Kind:    kind,
 		DryRun:  req.DryRun,
+	}
+	if exportChangeWarning != "" {
+		result.Warnings = append(result.Warnings, exportChangeWarning)
 	}
 
 	for _, file := range files {

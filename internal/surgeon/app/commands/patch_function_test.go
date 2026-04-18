@@ -1551,6 +1551,11 @@ func once(fn func()) { fn() }
 	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
 		FilePath:   "p.go",
 		Identifier: "Runner",
+		// IncludeNested=true restores the legacy behavior where a text
+		// match inside a closure is considered and then auto-lifted to the
+		// top-level statement. With the default top-level-only scope
+		// (task #26), the match would be filtered out entirely.
+		IncludeNested: true,
 		Patches: []domain.FunctionPatch{{
 			Op:    domain.PatchOpInsertAfter,
 			Match: "registerTools()",
@@ -1899,4 +1904,176 @@ func Foo(x int) {
 	assert.Equal(t, 1, res.Applied)
 	content := getFile(fs, "f.go")
 	assert.Contains(t, content, "func Foo(x int) error")
+}
+
+// TestPatchFunction_TopLevelOnly_Default covers task #26: by default,
+// patch_function restricts text matches to the target function's own
+// top-level body, ignoring anything inside nested closures.
+func TestPatchFunction_TopLevelOnly_Default(t *testing.T) {
+	// Fixture: three closures + the outer body all contain the same
+	// literal. The outer body has TWO hits of 'registerPatchTools(s, commands)';
+	// each closure contributes one more if nested scanning is enabled.
+	const fixture = `package p
+
+func registerAll(s *server, commands cmds) {
+	registerPatchTools(s, commands)
+	run(func() {
+		registerPatchTools(s, commands)
+	})
+	run(func() {
+		registerPatchTools(s, commands)
+	})
+	run(func() {
+		registerPatchTools(s, commands)
+	})
+	registerPatchTools(s, commands)
+}
+
+type server struct{}
+type cmds struct{}
+
+func run(fn func())                                   { fn() }
+func registerPatchTools(_ *server, _ cmds)             {}
+`
+
+	t.Run("default scope errors with only outer hits listed", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "registerAll",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "registerPatchTools(s, commands)", Replace: "registerOtherTools(s, commands)"},
+			},
+		})
+		require.Error(t, err)
+		// Only the two outer-body hits should be reported (not the three inside closures).
+		assert.Contains(t, err.Error(), "matched 2 times", "default scope must hide closure hits; expected 2 outer hits, got: %s", err.Error())
+		// The file must be unchanged (atomic failure).
+		assert.Equal(t, fixture, getFile(fs, "p.go"))
+	})
+
+	t.Run("occurrence targets only outer hits; closures untouched", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "registerAll",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "registerPatchTools(s, commands)", Occurrence: 1, Replace: "registerOtherTools(s, commands)"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Applied)
+		content := getFile(fs, "p.go")
+		// The first outer hit is replaced; the three closure hits and the second outer hit remain.
+		assert.Equal(t, 1, strings.Count(content, "registerOtherTools(s, commands)"))
+		assert.Equal(t, 4, strings.Count(content, "registerPatchTools(s, commands)"),
+			"three closure hits + one remaining outer hit should survive")
+	})
+
+	t.Run("include_nested=true restores legacy scope: 5 total hits", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:      "p.go",
+			Identifier:    "registerAll",
+			IncludeNested: true,
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "registerPatchTools(s, commands)", Replace: "registerOtherTools(s, commands)"},
+			},
+		})
+		require.Error(t, err)
+		// With nested scanning enabled, all 5 occurrences (2 outer + 3 in closures) show up.
+		assert.Contains(t, err.Error(), "matched 5 times", "include_nested=true must see all hits; got: %s", err.Error())
+	})
+}
+
+// TestPatchFunction_ClosurePathIdentifier covers task #28: the
+// identifier syntax 'Parent>closure[N]' targets the Nth *ast.FuncLit
+// inside Parent (0-based, by AST appearance order). Out-of-range
+// indices return a clear error.
+func TestPatchFunction_ClosurePathIdentifier(t *testing.T) {
+	const fixture = `package p
+
+func Outer() {
+	fn1 := func() {
+		markerA()
+	}
+	fn2 := func() {
+		markerB()
+	}
+	_ = fn1
+	_ = fn2
+}
+
+func markerA() {}
+func markerB() {}
+`
+
+	t.Run("closure[0] edits only fn1 body", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Outer>closure[0]",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "markerA()", Replace: "markerA_edited()"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Applied)
+		content := getFile(fs, "p.go")
+		assert.Contains(t, content, "markerA_edited()")
+		assert.NotContains(t, content, "\tmarkerA()\n")
+		// fn2 must be untouched.
+		assert.Contains(t, content, "markerB()")
+	})
+
+	t.Run("closure[1] edits only fn2 body", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Outer>closure[1]",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "markerB()", Replace: "markerB_edited()"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Applied)
+		content := getFile(fs, "p.go")
+		assert.Contains(t, content, "markerB_edited()")
+		assert.NotContains(t, content, "\tmarkerB()\n")
+		// fn1 must be untouched.
+		assert.Contains(t, content, "markerA()")
+	})
+
+	t.Run("closure[9] out of range errors clearly", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Outer>closure[9]",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "markerA()", Replace: "markerA_edited()"},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closure index 9 out of range (0..1)", "expected range-error message; got: %s", err.Error())
+	})
+
+	t.Run("invalid closure segment reports parse error", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "p.go", fixture)
+		_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "Outer>closure",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "markerA()", Replace: "x"},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid closure segment")
+	})
 }

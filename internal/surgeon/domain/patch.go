@@ -42,6 +42,8 @@ type PatchFunctionRequest struct {
 	Identifier string
 	Patches    []FunctionPatch
 	Preview    bool // if true, return diff without writing
+	// IncludeNested, when true, restores legacy behavior where text matches inside nested closures (*ast.FuncLit) are considered. Default (false) restricts matches to the target function's own body, stopping at every nested FuncLit.
+	IncludeNested bool
 }
 
 // PatchFunctionResult is the output of PatchFunction.

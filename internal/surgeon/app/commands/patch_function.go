@@ -59,8 +59,18 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "PARSE_ERROR", Message: "failed to parse file", Err: err}
 	}
 
-	// Locate the target function.
-	recvTarget, nameTarget := parseIdentifier(req.Identifier)
+	// Locate the target function. When req.Identifier contains '>', the
+	// trailing segments are a closure path (closure[N]>closure[M]...) that
+	// drills into the Nth *ast.FuncLit of the body resolved so far. The
+	// parent identifier before the first '>' is resolved like today.
+	parentID, closurePath, pathErr := parseClosurePath(req.Identifier)
+	if pathErr != nil {
+		return domain.PatchFunctionResult{}, &domain.Error{
+			Code:    "NODE_NOT_FOUND",
+			Message: fmt.Sprintf("invalid identifier %q: %v", req.Identifier, pathErr),
+		}
+	}
+	recvTarget, nameTarget := parseIdentifier(parentID)
 	var targetFn *ast.FuncDecl
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -89,10 +99,44 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 	}
 
-	lbraceOff := fset.Position(targetFn.Body.Lbrace).Offset // offset of '{'
-	bodyStartLine := fset.Position(targetFn.Body.Lbrace).Line
-	rbraceOff := fset.Position(targetFn.Body.Rbrace).Offset // offset of '}'
+	// Walk closurePath (if any) to drill into the Nth FuncLit of each body.
+	targetBody := targetFn.Body
+	for depth, idx := range closurePath {
+		children := directChildClosures(targetBody)
+		if idx >= len(children) {
+			var rangeMsg string
+			if len(children) == 0 {
+				rangeMsg = "no closures in this body"
+			} else {
+				rangeMsg = fmt.Sprintf("0..%d", len(children)-1)
+			}
+			return domain.PatchFunctionResult{}, &domain.Error{
+				Code:    "NODE_NOT_FOUND",
+				Message: fmt.Sprintf("closure index %d out of range (%s) at depth %d of %s", idx, rangeMsg, depth+1, req.Identifier),
+			}
+		}
+		if children[idx].Body == nil {
+			return domain.PatchFunctionResult{}, &domain.Error{
+				Code:    "NODE_NOT_FOUND",
+				Message: fmt.Sprintf("closure[%d] at depth %d in %s has no body", idx, depth+1, req.Identifier),
+			}
+		}
+		targetBody = children[idx].Body
+	}
+
+	lbraceOff := fset.Position(targetBody.Lbrace).Offset // offset of '{'
+	bodyStartLine := fset.Position(targetBody.Lbrace).Line
+	rbraceOff := fset.Position(targetBody.Rbrace).Offset // offset of '}'
 	origBody := string(src[lbraceOff+1 : rbraceOff])
+
+	// Build the closure-exclusion range set used to restrict text matches to
+	// the body's own top-level region (ignoring anything nested inside a
+	// *ast.FuncLit). When req.IncludeNested is true, we skip this and let
+	// matches land anywhere, including inside closures (legacy behavior).
+	var closureRanges [][2]int
+	if !req.IncludeNested {
+		closureRanges = collectClosureRanges(fset, targetBody, lbraceOff+1)
+	}
 
 	var warnings []string
 	var autoLifts []domain.AutoLiftInfo
@@ -153,6 +197,14 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d out of %s body (body lines %d-%d)", i+1, p.Op, fromL, toL, req.Identifier, bodyStartLine, bodyStartLine+strings.Count(origBody, "\n")))
 				continue
 			}
+			// Enforce the top-level scope on line-mode too: if the resolved
+			// range lies entirely inside a nested closure, refuse the edit.
+			// Pass include_nested=true or use identifier 'Parent>closure[N]'
+			// to target a closure explicitly.
+			if len(closureRanges) > 0 && hitInsideAnyRange(start, end, closureRanges) {
+				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d is inside a nested closure of %s. Pass include_nested=true, or use identifier 'Parent>closure[N]' to edit a closure directly.", i+1, p.Op, fromL, toL, req.Identifier))
+				continue
+			}
 			if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
 				plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, start)
 				edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line}
@@ -182,6 +234,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		} else {
 			hits = findNormalizedMatches(origBody, p.Match)
 		}
+		// Restrict text-match hits to the top-level body region by dropping
+		// any hit that lies entirely inside a nested closure's body.
+		hits = filterHitsByRanges(hits, closureRanges)
 
 		if len(hits) == 0 {
 			needle := p.Match
@@ -746,6 +801,9 @@ func firstErrorSnippet(src []byte, parseErr error) string {
 // errLocRegexp matches trailing "line:col:" in a parser error message.
 var errLocRegexp = regexpMustCompile(`:(\d+):(\d+):`)
 
+// closureSegRegexp matches a closure path segment like `closure[3]`.
+var closureSegRegexp = regexpMustCompile(`^closure\[(\d+)\]$`)
+
 func regexpMustCompile(p string) *regexp.Regexp { return regexp.MustCompile(p) }
 
 func atoi(s string) int {
@@ -1132,4 +1190,125 @@ func resolveSignatureEdit(fset *token.FileSet, fn *ast.FuncDecl, src []byte, new
 type signatureEdit struct {
 	start, end  int
 	replacement string
+}
+
+// parseClosurePath splits an identifier of the form Parent>closure[N]>closure[M]...
+// into the parent identifier and the sequence of 0-based closure indices to
+// traverse. When id contains no '>', the second return is nil and err is nil —
+// callers use the parent identifier as-is. Returns an error when a segment
+// does not match closure[<digits>] or when the index is negative.
+func parseClosurePath(id string) (string, []int, error) {
+	if !strings.Contains(id, ">") {
+		return id, nil, nil
+	}
+	parts := strings.Split(id, ">")
+	parent := parts[0]
+	if parent == "" {
+		return "", nil, fmt.Errorf("identifier has empty parent before '>'")
+	}
+	indices := make([]int, 0, len(parts)-1)
+	for _, seg := range parts[1:] {
+		m := closureSegRegexp.FindStringSubmatch(seg)
+		if m == nil {
+			return "", nil, fmt.Errorf("invalid closure segment %q: expected closure[N] with N>=0", seg)
+		}
+		n := atoi(m[1])
+		if n < 0 {
+			return "", nil, fmt.Errorf("invalid closure segment %q: index must be >= 0", seg)
+		}
+		indices = append(indices, n)
+	}
+	return parent, indices, nil
+}
+
+// directChildClosures returns every *ast.FuncLit whose body lies strictly
+// inside body (the argument), ordered by their appearance in the source
+// (AST walk order). Closures nested inside another closure are NOT returned
+// — only the immediate children, because that matches how the identifier
+// path drills down one level at a time.
+func directChildClosures(body *ast.BlockStmt) []*ast.FuncLit {
+	if body == nil {
+		return nil
+	}
+	var out []*ast.FuncLit
+	var inspect func(n ast.Node)
+	inspect = func(n ast.Node) {
+		ast.Inspect(n, func(nn ast.Node) bool {
+			if nn == n {
+				return true
+			}
+			if fl, ok := nn.(*ast.FuncLit); ok {
+				out = append(out, fl)
+				// Do not descend into this FuncLit; its closures are grandchildren.
+				return false
+			}
+			return true
+		})
+	}
+	inspect(body)
+	return out
+}
+
+// collectClosureRanges returns body-relative [start,end] byte ranges covering
+// every *ast.FuncLit whose body is strictly nested inside body (the argument).
+// bodyContentOff is the file offset of the first byte of body.List (i.e. the
+// byte just after the body's opening '{'). The ranges returned are relative
+// to that position, which is the same coordinate space as origBody in
+// PatchFunction.
+func collectClosureRanges(fset *token.FileSet, body *ast.BlockStmt, bodyContentOff int) [][2]int {
+	if body == nil {
+		return nil
+	}
+	var ranges [][2]int
+	ast.Inspect(body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		if fl.Body == nil {
+			return false
+		}
+		// We exclude the FuncLit's inner body (between '{' and '}'), NOT the
+		// 'func(...) {' prefix — so that an anchor matching text on the
+		// 'func(' line itself is still visible to the outer body.
+		start := fset.Position(fl.Body.Lbrace).Offset + 1 - bodyContentOff
+		end := fset.Position(fl.Body.Rbrace).Offset - bodyContentOff
+		if start < 0 {
+			start = 0
+		}
+		if end > start {
+			ranges = append(ranges, [2]int{start, end})
+		}
+		// Do not descend: deeper closures are already covered by this range.
+		return false
+	})
+	return ranges
+}
+
+// hitInsideAnyRange reports whether the [hitStart,hitEnd] byte range lies
+// entirely inside one of the excluded ranges. Touching a boundary counts
+// as inside so anchors cannot straddle a closure edge and land half in,
+// half out.
+func hitInsideAnyRange(hitStart, hitEnd int, ranges [][2]int) bool {
+	for _, r := range ranges {
+		if hitStart >= r[0] && hitEnd <= r[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// filterHitsByRanges returns the subset of hits that fall OUTSIDE every
+// exclusion range. When ranges is empty, hits is returned unchanged.
+func filterHitsByRanges(hits [][2]int, ranges [][2]int) [][2]int {
+	if len(ranges) == 0 || len(hits) == 0 {
+		return hits
+	}
+	out := make([][2]int, 0, len(hits))
+	for _, h := range hits {
+		if !hitInsideAnyRange(h[0], h[1], ranges) {
+			out = append(out, h)
+		}
+	}
+	return out
 }

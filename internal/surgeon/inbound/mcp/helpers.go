@@ -270,7 +270,7 @@ func validateGoFile(file string) *mcp.CallToolResult {
 // formatPatternResults renders pattern-mode symbol results as a compact list
 // grouped by kind (methods / functions / types). When tokenBudget > 0, output
 // is truncated with a trailer indicating how many results were omitted.
-func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern string, tokenBudget int) string {
+func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern string, tokenBudget int, outline bool) string {
 	var methods, funcs, types []domain.SymbolResult
 	for _, r := range results {
 		switch {
@@ -304,6 +304,13 @@ func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern 
 				fmt.Fprintf(&sb, "- (%s) %s — %s:%d\n", r.Receiver, r.Name, r.File, r.LineStart)
 			} else {
 				fmt.Fprintf(&sb, "- %s — %s:%d\n", r.Name, r.File, r.LineStart)
+			}
+			if outline {
+				fmt.Fprintf(&sb, "  %s\n", r.Signature)
+				if s := firstDocSentence(r.Doc); s != "" {
+					fmt.Fprintf(&sb, "    — %s\n", s)
+				}
+				continue
 			}
 			if !showBody {
 				continue
@@ -585,4 +592,39 @@ func errorResultWithCode(msg string, err error) *mcp.CallToolResult {
 		StructuredContent: out,
 		IsError:           true,
 	}
+}
+
+// firstDocSentence returns the first sentence of a doc comment in plain
+// text form: it strips any leading `//` / `/*` markers, collapses the
+// text up to the first `.` (followed by space or end of text) or the
+// first blank line, whichever comes first, and trims the trailing
+// period. Returns "" when doc is empty or only whitespace.
+func firstDocSentence(doc string) string {
+	s := strings.TrimSpace(doc)
+	if s == "" {
+		return ""
+	}
+	// Stop at the first blank line (paragraph break) — only consider the
+	// first paragraph as a summary candidate.
+	if idx := strings.Index(s, "\n\n"); idx >= 0 {
+		s = s[:idx]
+	}
+	// Within the first paragraph, collapse newlines to spaces so that a
+	// sentence spread over multiple lines stays together.
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.TrimSpace(s)
+	// Find the first ". " or ".\n" terminator; also accept a trailing "."
+	// at end-of-string as a sentence terminator.
+	for i := 0; i < len(s); i++ {
+		if s[i] != '.' {
+			continue
+		}
+		if i == len(s)-1 {
+			return strings.TrimSpace(s[:i])
+		}
+		if next := s[i+1]; next == ' ' || next == '\t' {
+			return strings.TrimSpace(s[:i])
+		}
+	}
+	return s
 }

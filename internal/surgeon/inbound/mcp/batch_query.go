@@ -162,7 +162,7 @@ func dispatchBatchSymbol(ctx context.Context, queries service.SurgeonQueries, it
 		if len(results) == 0 {
 			return fmt.Sprintf("No declarations match pattern %q.", item.Pattern), results, nil
 		}
-		text := formatPatternResults(results, item.Body, item.Pattern, 0)
+		text := formatPatternResults(results, item.Body, item.Pattern, 0, false)
 		return text, results, nil
 	}
 
