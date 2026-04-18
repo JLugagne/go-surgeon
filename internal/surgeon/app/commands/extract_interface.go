@@ -15,6 +15,12 @@ import (
 )
 
 func (h *ExecutePlanHandler) ExtractInterface(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error) {
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.ExtractInterface(ctx, child)
+	}
 	dir := filepath.Dir(req.FilePath)
 	files, err := h.fs.ReadDir(ctx, dir)
 	if err != nil {

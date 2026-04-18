@@ -15,12 +15,18 @@ import (
 
 // AddInterface appends an interface type declaration to a file and optionally generates a mock.
 func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.AddInterface(ctx, child)
+	}
 	action := domain.Action{
 		Action:   domain.ActionTypeAddStruct,
 		FilePath: req.FilePath,
 		Content:  req.Content,
 	}
-	_, addedImports, err := h.executeAction(ctx, action)
+	_, addedImports, err := h.executeAction(ctx, action, false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -40,6 +46,12 @@ func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.Interf
 
 // UpdateInterface replaces an existing interface type declaration and regenerates its mock.
 func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.UpdateInterface(ctx, child)
+	}
 	action := domain.Action{
 		Action:     domain.ActionTypeUpdateStruct,
 		FilePath:   req.FilePath,
@@ -48,7 +60,7 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		Doc:        req.Doc,
 		StripDoc:   req.StripDoc,
 	}
-	warnings, addedImports, err := h.executeAction(ctx, action)
+	warnings, addedImports, err := h.executeAction(ctx, action, false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -94,12 +106,18 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 // MockFile — but leaves the file itself in place (even if empty) so other
 // mocks that might share the file are not disturbed.
 func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.DeleteInterface(ctx, child)
+	}
 	action := domain.Action{
 		Action:     domain.ActionTypeDeleteStruct,
 		FilePath:   req.FilePath,
 		Identifier: req.Identifier,
 	}
-	if _, _, err := h.executeAction(ctx, action); err != nil {
+	if _, _, err := h.executeAction(ctx, action, false); err != nil {
 		return "", nil, err
 	}
 

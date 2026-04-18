@@ -37,7 +37,7 @@ EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewr
 
 WHEN TO BATCH WITH execute_plan
 Principle: if you're about to make 3+ related edits that must land together, use execute_plan — one atomic call with rollback on failure.
-- Example A (same change to two interfaces): bundle two update_interface actions in one execute_plan. Calling update_interface twice is two round-trips AND if the second fails the file is left in an intermediate state where only one interface carries the new method.
+- Example A (same change to two interfaces): bundle two patch_interface actions in one execute_plan (patch_interface actions carry their ops via patch_interface_ops). This is two round-trips as separate calls AND if the second fails the file is left with only one interface updated; the bundled form rolls both back on failure.
 - Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type.
 When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch_* tools already preserve everything you didn't touch.
 
@@ -112,6 +112,7 @@ type buildCheckInput struct {
 	Dir            string `json:"dir,omitempty" jsonschema:"relative directory or package pattern to build, defaults to './...'. Absolute paths and '..' traversal are rejected."`
 	Tests          bool   `json:"tests,omitempty" jsonschema:"compile test files too (uses 'go test -count=0 -run ^$' instead of 'go build')"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"timeout in seconds, default 60, max 600"`
+	AffectedBy     string `json:"affected_by,omitempty" jsonschema:"path to a .go file — narrow the build to the package that owns this file plus every package in the module that (transitively) imports it. Mutually exclusive with dir. Great after editing one file in a large monorepo — skips rebuilding unrelated packages."`
 }
 
 type symbolInput struct {
@@ -212,6 +213,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			Dir:            in.Dir,
 			Tests:          in.Tests,
 			TimeoutSeconds: in.TimeoutSeconds,
+			AffectedBy:     in.AffectedBy,
 		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("build_check failed: %v", err)), nil, nil
@@ -260,6 +262,7 @@ type createInput struct {
 	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
 	Identifier string `json:"identifier,omitempty" jsonschema:"ignored — identifier is inferred from content; accepted to avoid validation errors"`
 	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function (only applies when object=func)"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 type updateInput struct {
@@ -270,12 +273,14 @@ type updateInput struct {
 	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
 	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
 	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function (only applies when object=func)"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 type deleteInput struct {
 	Object     string `json:"object" jsonschema:"what to delete: func or struct"`
 	File       string `json:"file" jsonschema:"target file path"`
 	Identifier string `json:"identifier" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 var createObjectMap = map[string]domain.ActionType{
@@ -308,12 +313,15 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
 		}
 
-		result, err := commands.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{{
-			Action:   actionType,
-			FilePath: in.File,
-			Content:  in.Content,
-			WithTest: in.WithTest,
-		}}})
+		result, err := commands.ExecutePlan(ctx, domain.Plan{
+			Preview: in.Preview,
+			Actions: []domain.Action{{
+				Action:   actionType,
+				FilePath: in.File,
+				Content:  in.Content,
+				WithTest: in.WithTest,
+			}},
+		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (create %s): %v", in.Object, err)), nil, nil
 		}
@@ -322,20 +330,30 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
-		fmt.Fprintf(&sb, "SUCCESS (create %s): %d files modified", in.Object, result.FilesModified)
+		verb := "SUCCESS"
+		if result.Preview {
+			verb = "PREVIEW"
+		}
+		fmt.Fprintf(&sb, "%s (create %s): %d files modified", verb, in.Object, result.FilesModified)
+		if result.Diff != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(result.Diff)
+		}
 		res := textResult(sb.String())
 		res.StructuredContent = editOutput{
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), File: in.File}},
 			Warnings:      result.Warnings,
 			AddedImports:  result.AddedImports,
+			Preview:       result.Preview,
+			Diff:          result.Diff,
 		}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true.",
+		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -345,15 +363,18 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
 		}
 
-		result, err := commands.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{{
-			Action:     actionType,
-			FilePath:   in.File,
-			Identifier: in.Identifier,
-			Content:    in.Content,
-			Doc:        in.Doc,
-			StripDoc:   in.StripDoc,
-			WithTest:   in.WithTest,
-		}}})
+		result, err := commands.ExecutePlan(ctx, domain.Plan{
+			Preview: in.Preview,
+			Actions: []domain.Action{{
+				Action:     actionType,
+				FilePath:   in.File,
+				Identifier: in.Identifier,
+				Content:    in.Content,
+				Doc:        in.Doc,
+				StripDoc:   in.StripDoc,
+				WithTest:   in.WithTest,
+			}},
+		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update %s): %v", in.Object, err)), nil, nil
 		}
@@ -362,20 +383,30 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
-		fmt.Fprintf(&sb, "SUCCESS (update %s): %d files modified", in.Object, result.FilesModified)
+		verb := "SUCCESS"
+		if result.Preview {
+			verb = "PREVIEW"
+		}
+		fmt.Fprintf(&sb, "%s (update %s): %d files modified", verb, in.Object, result.FilesModified)
+		if result.Diff != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(result.Diff)
+		}
 		res := textResult(sb.String())
 		res.StructuredContent = editOutput{
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
 			Warnings:      result.Warnings,
 			AddedImports:  result.AddedImports,
+			Preview:       result.Preview,
+			Diff:          result.Diff,
 		}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete",
-		Description: "Remove a function, method, or struct. object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup).",
+		Description: "Remove a function, method, or struct. object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup). preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -385,11 +416,14 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			return errorResult(fmt.Sprintf("invalid object %q: must be func or struct", in.Object)), nil, nil
 		}
 
-		result, err := commands.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{{
-			Action:     actionType,
-			FilePath:   in.File,
-			Identifier: in.Identifier,
-		}}})
+		result, err := commands.ExecutePlan(ctx, domain.Plan{
+			Preview: in.Preview,
+			Actions: []domain.Action{{
+				Action:     actionType,
+				FilePath:   in.File,
+				Identifier: in.Identifier,
+			}},
+		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (delete %s): %v", in.Object, err)), nil, nil
 		}
@@ -398,13 +432,23 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
-		fmt.Fprintf(&sb, "SUCCESS (delete %s): %d files modified", in.Object, result.FilesModified)
+		verb := "SUCCESS"
+		if result.Preview {
+			verb = "PREVIEW"
+		}
+		fmt.Fprintf(&sb, "%s (delete %s): %d files modified", verb, in.Object, result.FilesModified)
+		if result.Diff != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(result.Diff)
+		}
 		res := textResult(sb.String())
 		res.StructuredContent = editOutput{
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: string(actionType), Identifier: in.Identifier, File: in.File}},
 			Warnings:      result.Warnings,
 			AddedImports:  result.AddedImports,
+			Preview:       result.Preview,
+			Diff:          result.Diff,
 		}
 		return res, nil, nil
 	})
@@ -421,20 +465,35 @@ type interfaceInput struct {
 	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix, update only)"`
 	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment (update only)"`
 	DeleteMock bool   `json:"delete_mock,omitempty" jsonschema:"delete only: also remove the mock struct, its methods and its compile-time assertion from mock_file; requires mock_file and mock_name"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "add_interface",
-		Description: "Add a new interface and its mock atomically. Set mock_file + mock_name to generate a function-field mock with a compile-time var assertion. Prefer this over create for interfaces.",
+		Description: "Add a new interface and its mock atomically. Set mock_file + mock_name to generate a function-field mock with a compile-time var assertion. Prefer this over create for interfaces. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		result, addedImports, err := commands.AddInterface(ctx, domain.InterfaceActionRequest{
+		reqDomain := domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
-		})
+		}
+		var result string
+		var addedImports []string
+		var diff string
+		var writtenFiles []string
+		var err error
+		if in.Preview {
+			diff, writtenFiles, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				result, addedImports, innerErr = sc.AddInterface(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			result, addedImports, err = commands.AddInterface(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (add_interface): %v", err)), nil, nil
 		}
@@ -442,27 +501,53 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if in.MockFile != "" {
 			files = append(files, in.MockFile)
 		}
-		res := textResult(result)
+		if in.Preview && len(writtenFiles) > 0 {
+			files = writtenFiles
+		}
+		msg := result
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW (add_interface): %s", result)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "add_interface", Identifier: in.Identifier, File: in.File}},
 			AddedImports:  addedImports,
+			Preview:       in.Preview,
+			Diff:          diff,
 		}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_interface",
-		Description: "Replace an interface wholesale and regenerate its mock. For single-method changes, prefer patch_interface. Pass mock_file + mock_name to keep the mock in sync. Doc comments are kept unless you set doc or strip_doc=true.",
+		Description: "Replace an interface wholesale and regenerate its mock. For single-method changes, prefer patch_interface. Pass mock_file + mock_name to keep the mock in sync. Doc comments are kept unless you set doc or strip_doc=true. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		result, addedImports, err := commands.UpdateInterface(ctx, domain.InterfaceActionRequest{
+		reqDomain := domain.InterfaceActionRequest{
 			FilePath: in.File, Identifier: in.Identifier, Content: in.Content,
 			MockFile: in.MockFile, MockName: in.MockName,
 			Doc: in.Doc, StripDoc: in.StripDoc,
-		})
+		}
+		var result string
+		var addedImports []string
+		var diff string
+		var writtenFiles []string
+		var err error
+		if in.Preview {
+			diff, writtenFiles, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				result, addedImports, innerErr = sc.UpdateInterface(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			result, addedImports, err = commands.UpdateInterface(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (update_interface): %v", err)), nil, nil
 		}
@@ -470,18 +555,30 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if in.MockFile != "" {
 			files = append(files, in.MockFile)
 		}
-		res := textResult(result)
+		if in.Preview && len(writtenFiles) > 0 {
+			files = writtenFiles
+		}
+		msg := result
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW (update_interface): %s", result)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "update_interface", Identifier: in.Identifier, File: in.File}},
 			AddedImports:  addedImports,
+			Preview:       in.Preview,
+			Diff:          diff,
 		}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_interface",
-		Description: "Delete an interface. Pass delete_mock=true with mock_file + mock_name to also remove the mock struct, its methods, and the var assertion. The mock file is kept even if empty.",
+		Description: "Delete an interface. Pass delete_mock=true with mock_file + mock_name to also remove the mock struct, its methods, and the var assertion. The mock file is kept even if empty. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in interfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
@@ -491,13 +588,27 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 				return err, nil, nil
 			}
 		}
-		result, addedImports, err := commands.DeleteInterface(ctx, domain.InterfaceActionRequest{
+		reqDomain := domain.InterfaceActionRequest{
 			FilePath:   in.File,
 			Identifier: in.Identifier,
 			MockFile:   in.MockFile,
 			MockName:   in.MockName,
 			DeleteMock: in.DeleteMock,
-		})
+		}
+		var result string
+		var addedImports []string
+		var diff string
+		var writtenFiles []string
+		var err error
+		if in.Preview {
+			diff, writtenFiles, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				result, addedImports, innerErr = sc.DeleteInterface(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			result, addedImports, err = commands.DeleteInterface(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (delete_interface): %v", err)), nil, nil
 		}
@@ -505,11 +616,23 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 		if in.DeleteMock && in.MockFile != "" {
 			files = append(files, in.MockFile)
 		}
-		res := textResult(result)
+		if in.Preview && len(writtenFiles) > 0 {
+			files = writtenFiles
+		}
+		msg := result
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW (delete_interface): %s", result)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = editOutput{
 			FilesModified: files,
 			Symbols:       []symbolEdit{{Action: "delete_interface", Identifier: in.Identifier, File: in.File}},
 			AddedImports:  addedImports,
+			Preview:       in.Preview,
+			Diff:          diff,
 		}
 		return res, nil, nil
 	})
@@ -522,6 +645,7 @@ type insertCallInput struct {
 	Function string `json:"function" jsonschema:"function identifier: FuncName or Receiver.Method"`
 	Call     string `json:"call" jsonschema:"statement to insert, e.g. setupPayOrderRoute(mux, app)"`
 	Position string `json:"position,omitempty" jsonschema:"where to insert: before-return (default), end-of-body, or after:<marker>"`
+	Preview  bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
@@ -536,13 +660,16 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 		if pos == "" {
 			pos = domain.InsertBeforeReturn
 		}
-		result, err := commands.ExecutePlan(ctx, domain.Plan{Actions: []domain.Action{{
-			Action:     domain.ActionTypeInsertCall,
-			FilePath:   in.File,
-			Identifier: in.Function,
-			Content:    in.Call,
-			Position:   pos,
-		}}})
+		result, err := commands.ExecutePlan(ctx, domain.Plan{
+			Preview: in.Preview,
+			Actions: []domain.Action{{
+				Action:     domain.ActionTypeInsertCall,
+				FilePath:   in.File,
+				Identifier: in.Function,
+				Content:    in.Call,
+				Position:   pos,
+			}},
+		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("ERROR (insert_call): %v", err)), nil, nil
 		}
@@ -550,13 +677,23 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
-		fmt.Fprintf(&sb, "SUCCESS (insert_call): %d files modified", result.FilesModified)
+		verb := "SUCCESS"
+		if result.Preview {
+			verb = "PREVIEW"
+		}
+		fmt.Fprintf(&sb, "%s (insert_call): %d files modified", verb, result.FilesModified)
+		if result.Diff != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(result.Diff)
+		}
 		res := textResult(sb.String())
 		res.StructuredContent = editOutput{
 			FilesModified: result.Files,
 			Symbols:       []symbolEdit{{Action: "insert_call", Identifier: in.Function, File: in.File}},
 			Warnings:      result.Warnings,
 			AddedImports:  result.AddedImports,
+			Preview:       result.Preview,
+			Diff:          result.Diff,
 		}
 		return res, nil, nil
 	})
@@ -566,23 +703,27 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 
 type executePlanInput struct {
 	Actions []executePlanActionInput `json:"actions" jsonschema:"ordered list of AST actions to execute atomically (up to 15)"`
+	Preview bool                     `json:"preview,omitempty" jsonschema:"if true, return diff without writing any files"`
 }
 
 type implementInput struct {
 	Interface string `json:"interface" jsonschema:"fully qualified interface name, e.g. io.ReadCloser or github.com/org/repo/pkg.Interface"`
 	Receiver  string `json:"receiver" jsonschema:"receiver type, e.g. *MyStruct"`
 	File      string `json:"file" jsonschema:"target file to append stubs to"`
+	Preview   bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 type mockInput struct {
 	Interface string `json:"interface" jsonschema:"fully qualified interface name"`
 	MockName  string `json:"mock_name" jsonschema:"name of the mock struct, e.g. MockBookRepository"`
 	File      string `json:"file" jsonschema:"target file to write the mock to"`
+	Preview   bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 type testInput struct {
 	File       string `json:"file" jsonschema:"target Go file containing the function"`
 	Identifier string `json:"identifier" jsonschema:"function or method identifier, e.g. NewApp or Book.Validate"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the test file"`
 }
 
 type tagInput struct {
@@ -591,6 +732,7 @@ type tagInput struct {
 	Field      string `json:"field,omitempty" jsonschema:"specific field name to update"`
 	Set        string `json:"set,omitempty" jsonschema:"exact tag string to set or append"`
 	Auto       string `json:"auto,omitempty" jsonschema:"auto-generate tags for exported fields, e.g. json or bson"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
 type extractInterfaceInput struct {
@@ -600,6 +742,7 @@ type extractInterfaceInput struct {
 	Out        string `json:"out,omitempty" jsonschema:"output file path for the interface"`
 	MockFile   string `json:"mock_file,omitempty" jsonschema:"generate mock file path"`
 	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
+	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing any file"`
 }
 
 // --- Patch tools ---
@@ -928,22 +1071,28 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "execute_plan",
 		Description: "Apply up to 15 related AST edits atomically — any failure rolls everything back. " +
-			"Actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call.",
+			"Actions: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call, patch_function, patch_struct, patch_interface, patch_file, patch_decl. " +
+			"In-place patch actions (patch_function, patch_struct, patch_interface, patch_file, patch_decl) carry their operations in dedicated fields: patch_function_ops, patch_struct_ops, patch_interface_ops, patch_file_ops, patch_decl_ops.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in executePlanInput) (*mcp.CallToolResult, any, error) {
 		actions := make([]domain.Action, len(in.Actions))
 		for i, a := range in.Actions {
 			actions[i] = domain.Action{
-				Action:      domain.ActionType(a.Action),
-				FilePath:    a.File,
-				PackagePath: a.Package,
-				Identifier:  a.Identifier,
-				Content:     a.Content,
-				MockFile:    a.MockFile,
-				MockName:    a.MockName,
-				Doc:         a.Doc,
-				StripDoc:    a.StripDoc,
-				Position:    domain.InsertPosition(a.Position),
-				WithTest:    a.WithTest,
+				Action:            domain.ActionType(a.Action),
+				FilePath:          a.File,
+				PackagePath:       a.Package,
+				Identifier:        a.Identifier,
+				Content:           a.Content,
+				MockFile:          a.MockFile,
+				MockName:          a.MockName,
+				Doc:               a.Doc,
+				StripDoc:          a.StripDoc,
+				Position:          domain.InsertPosition(a.Position),
+				WithTest:          a.WithTest,
+				PatchFunctionOps:  toFunctionPatches(a.PatchFunctionOps),
+				PatchStructOps:    toStructPatches(a.PatchStructOps),
+				PatchInterfaceOps: toInterfacePatches(a.PatchInterfaceOps),
+				PatchFileOps:      toFilePatches(a.PatchFileOps),
+				PatchDeclOps:      toFunctionPatches(a.PatchDeclOps),
 			}
 			if actions[i].FilePath != "" {
 				if err := validateGoFile(actions[i].FilePath); err != nil {
@@ -951,7 +1100,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 				}
 			}
 		}
-		plan := domain.Plan{Actions: actions}
+		plan := domain.Plan{Preview: in.Preview, Actions: actions}
 
 		result, err := commands.ExecutePlan(ctx, plan)
 		if err != nil {
@@ -962,7 +1111,15 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			fmt.Fprintf(&sb, "WARNING: %s\n", w)
 		}
-		fmt.Fprintf(&sb, "SUCCESS: %d files modified", result.FilesModified)
+		verb := "SUCCESS"
+		if result.Preview {
+			verb = "PREVIEW"
+		}
+		fmt.Fprintf(&sb, "%s: %d files modified", verb, result.FilesModified)
+		if result.Diff != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(result.Diff)
+		}
 		symbols := make([]symbolEdit, len(in.Actions))
 		for i, a := range in.Actions {
 			symbols[i] = symbolEdit{Action: a.Action, Identifier: a.Identifier, File: a.File}
@@ -973,37 +1130,58 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			Symbols:       symbols,
 			Warnings:      result.Warnings,
 			AddedImports:  result.AddedImports,
+			Preview:       result.Preview,
+			Diff:          result.Diff,
 		}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "implement",
-		Description: "Generate method stubs for a struct to satisfy an interface. Already-implemented methods are skipped. Stubs are marked '// TODO(go-surgeon): implement'. Interface must be fully qualified (e.g. io.ReadCloser, github.com/org/repo/pkg.Interface).",
+		Description: "Generate method stubs for a struct to satisfy an interface. Already-implemented methods are skipped. Stubs are marked '// TODO(go-surgeon): implement'. Interface must be fully qualified (e.g. io.ReadCloser, github.com/org/repo/pkg.Interface). preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in implementInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		results, err := commands.Implement(ctx, domain.ImplementRequest{
+		reqDomain := domain.ImplementRequest{
 			Interface: in.Interface,
 			Receiver:  in.Receiver,
 			FilePath:  in.File,
-		})
+		}
+		var results []domain.SymbolResult
+		var diff string
+		var err error
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				results, innerErr = sc.Implement(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			results, err = commands.Implement(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to implement interface: %v", err)), nil, nil
 		}
 
-		if len(results) == 0 {
+		if len(results) == 0 && diff == "" {
 			res := textResult("All methods are already implemented.")
 			res.StructuredContent = implementOutput{File: in.File, Interface: in.Interface, Receiver: in.Receiver, Stubs: []string{}}
 			return res, nil, nil
 		}
 
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Generated %d missing methods for %s:\n\n", len(results), in.Interface)
-		for _, res := range results {
+		verb := "Generated"
+		if in.Preview {
+			verb = "PREVIEW — would generate"
+		}
+		fmt.Fprintf(&sb, "%s %d missing methods for %s:\n\n", verb, len(results), in.Interface)
+		for _, rr := range results {
 			fmt.Fprintf(&sb, "Symbol: %s\nReceiver: %s\nFile: %s:%d-%d\nCode:\n%s\n\n",
-				res.Name, res.Receiver, res.File, res.LineStart, res.LineEnd, res.Code)
+				rr.Name, rr.Receiver, rr.File, rr.LineStart, rr.LineEnd, rr.Code)
+		}
+		if diff != "" {
+			sb.WriteString(diff)
 		}
 		stubs := make([]string, len(results))
 		for i, r := range results {
@@ -1016,98 +1194,172 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "mock",
-		Description: "Generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, use add_interface with mock_file instead. Interface must be fully qualified.",
+		Description: "Generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, use add_interface with mock_file instead. Interface must be fully qualified. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mockInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		result, err := commands.Mock(ctx, domain.MockRequest{
+		reqDomain := domain.MockRequest{
 			Interface: in.Interface,
 			Receiver:  in.MockName,
 			FilePath:  in.File,
-		})
+		}
+		var result, diff string
+		var err error
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				result, innerErr = sc.Mock(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			result, err = commands.Mock(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to generate mock: %v", err)), nil, nil
 		}
-		res := textResult(result)
+		msg := result
+		if in.Preview {
+			msg = "PREVIEW (mock): " + result
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = mockOutput{File: in.File, Interface: in.Interface, MockName: in.MockName}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "test",
-		Description: "Scaffold a table-driven _test.go for a function or method. Handles boilerplate (t.Run loop, tt struct, receiver setup). identifier: 'FuncName' or 'Type.Method'.",
+		Description: "Scaffold a table-driven _test.go for a function or method. Handles boilerplate (t.Run loop, tt struct, receiver setup). identifier: 'FuncName' or 'Type.Method'. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		testFile, err := commands.GenerateTest(ctx, in.File, in.Identifier)
+		var testFile, diff string
+		var err error
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				testFile, innerErr = sc.GenerateTest(ctx, in.File, in.Identifier)
+				return innerErr
+			})
+		} else {
+			testFile, err = commands.GenerateTest(ctx, in.File, in.Identifier)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to generate test: %v", err)), nil, nil
 		}
-		res := textResult(fmt.Sprintf("SUCCESS: Generated test skeleton in %s", testFile))
+		msg := fmt.Sprintf("SUCCESS: Generated test skeleton in %s", testFile)
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW: would generate test skeleton in %s", testFile)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = testOutput{TestFile: testFile, Identifier: in.Identifier}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tag",
-		Description: "Manage struct field tags. Bulk: auto='json'/'bson' generates snake_case tags on all exported fields. Targeted: field + set updates one field's tag. patch_struct set_tag is an alternative for single fields.",
+		Description: "Manage struct field tags. Bulk: auto='json'/'bson' generates snake_case tags on all exported fields. Targeted: field + set updates one field's tag. patch_struct set_tag is an alternative for single fields. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in tagInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		err := commands.TagStruct(ctx, domain.TagRequest{
+		reqDomain := domain.TagRequest{
 			FilePath:   in.File,
 			StructName: in.Identifier,
 			FieldName:  in.Field,
 			SetTag:     in.Set,
 			AutoFormat: in.Auto,
-		})
+		}
+		var diff string
+		var err error
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				return sc.TagStruct(ctx, reqDomain)
+			})
+		} else {
+			err = commands.TagStruct(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to update tags: %v", err)), nil, nil
 		}
-		res := textResult(fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File))
+		msg := fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File)
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW (tag): %s in %s", in.Identifier, in.File)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = tagOutput{File: in.File, Identifier: in.Identifier, Field: in.Field}
 		return res, nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "extract_interface",
-		Description: "Derive an interface from a struct's exported methods. Use out to place it in a specific file. Set mock_file + mock_name to generate the mock in the same step.",
+		Description: "Derive an interface from a struct's exported methods. Use out to place it in a specific file. Set mock_file + mock_name to generate the mock in the same step. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in extractInterfaceInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		interfaceFile, err := commands.ExtractInterface(ctx, domain.ExtractInterfaceRequest{
+		reqDomain := domain.ExtractInterfaceRequest{
 			FilePath:      in.File,
 			StructName:    in.Identifier,
 			InterfaceName: in.Name,
 			OutPath:       in.Out,
 			MockFile:      in.MockFile,
 			MockName:      in.MockName,
-		})
+		}
+		var interfaceFile, diff string
+		var err error
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
+				var innerErr error
+				interfaceFile, innerErr = sc.ExtractInterface(ctx, reqDomain)
+				return innerErr
+			})
+		} else {
+			interfaceFile, err = commands.ExtractInterface(ctx, reqDomain)
+		}
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to extract interface: %v", err)), nil, nil
 		}
-		res := textResult(fmt.Sprintf("SUCCESS: Extracted interface %s into %s", in.Name, interfaceFile))
+		msg := fmt.Sprintf("SUCCESS: Extracted interface %s into %s", in.Name, interfaceFile)
+		if in.Preview {
+			msg = fmt.Sprintf("PREVIEW: would extract interface %s into %s", in.Name, interfaceFile)
+			if diff != "" {
+				msg += "\n\n" + diff
+			}
+		}
+		res := textResult(msg)
 		res.StructuredContent = extractInterfaceOutput{InterfaceName: in.Name, InterfaceFile: interfaceFile, MockFile: in.MockFile, MockName: in.MockName}
 		return res, nil, nil
 	})
 }
 
 type executePlanActionInput struct {
-	Action     string `json:"action" jsonschema:"action type: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call"`
-	File       string `json:"file" jsonschema:"target file path"`
-	Package    string `json:"package,omitempty" jsonschema:"package import path (for cross-package operations)"`
-	Identifier string `json:"identifier,omitempty" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method"`
-	Content    string `json:"content,omitempty" jsonschema:"raw Go source code, no package declaration or imports"`
-	MockFile   string `json:"mock_file,omitempty" jsonschema:"target file for the generated mock"`
-	MockName   string `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
-	Doc        string `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
-	StripDoc   bool   `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
-	Position   string `json:"position,omitempty" jsonschema:"insert position: before-return, end-of-body, or after:<marker>"`
-	WithTest   bool   `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function"`
+	Action            string                  `json:"action" jsonschema:"action type: create_file, replace_file, add_func, update_func, delete_func, add_struct, update_struct, delete_struct, add_interface, update_interface, delete_interface, insert_call, patch_function, patch_struct, patch_interface, patch_file, patch_decl"`
+	File              string                  `json:"file" jsonschema:"target file path"`
+	Package           string                  `json:"package,omitempty" jsonschema:"package import path (for cross-package operations)"`
+	Identifier        string                  `json:"identifier,omitempty" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method"`
+	Content           string                  `json:"content,omitempty" jsonschema:"raw Go source code, no package declaration or imports"`
+	MockFile          string                  `json:"mock_file,omitempty" jsonschema:"target file for the generated mock"`
+	MockName          string                  `json:"mock_name,omitempty" jsonschema:"name of the mock struct"`
+	Doc               string                  `json:"doc,omitempty" jsonschema:"set or replace the doc comment (raw text without // prefix)"`
+	StripDoc          bool                    `json:"strip_doc,omitempty" jsonschema:"remove the existing doc comment"`
+	Position          string                  `json:"position,omitempty" jsonschema:"insert position: before-return, end-of-body, or after:<marker>"`
+	WithTest          bool                    `json:"with_test,omitempty" jsonschema:"generate a test skeleton alongside the function"`
+	PatchFunctionOps  []patchOpInput          `json:"patch_function_ops,omitempty" jsonschema:"patch operations for patch_function actions (same shape as patch_function tool's patches)"`
+	PatchStructOps    []structPatchOpInput    `json:"patch_struct_ops,omitempty" jsonschema:"patch operations for patch_struct actions"`
+	PatchInterfaceOps []interfacePatchOpInput `json:"patch_interface_ops,omitempty" jsonschema:"patch operations for patch_interface actions"`
+	PatchFileOps      []filePatchOpInput      `json:"patch_file_ops,omitempty" jsonschema:"patch operations for patch_file actions"`
+	PatchDeclOps      []patchOpInput          `json:"patch_decl_ops,omitempty" jsonschema:"patch operations for patch_decl actions (same shape as patch_function ops)"`
 }
 
 type testRunInput struct {

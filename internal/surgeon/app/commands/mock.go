@@ -18,6 +18,12 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 	if req.Interface == "" || req.Receiver == "" || req.FilePath == "" {
 		return "", fmt.Errorf("interface, receiver, and file path are required")
 	}
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.Mock(ctx, child)
+	}
 
 	// Resolve the interface (cached for MCP sessions)
 	resolved, err := h.resolveInterfaceCached(req.Interface)

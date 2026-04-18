@@ -19,6 +19,29 @@ func textResult(text string) *mcp.CallToolResult {
 	}
 }
 
+// previewExecutor is implemented by app/commands.ExecutePlanHandler. It lets
+// the MCP layer run a command closure against a dry-run filesystem and
+// harvest a unified diff, without exposing the concrete handler type. Tools
+// whose domain request already has a Preview field (plan-based tools, patch
+// tools) don't need this — they set req.Preview=true and read result.Diff.
+// This escape hatch covers the tools whose legacy return types don't carry
+// a Diff field: Implement, Mock, Add/Update/DeleteInterface, TagStruct,
+// ExtractInterface, and GenerateTest.
+type previewExecutor interface {
+	PreviewWith(ctx context.Context, fn func(service.SurgeonCommands) error) (string, []string, error)
+}
+
+// runPreview invokes fn against a preview-scoped commands (if the commands
+// implementation supports it) and returns the harvested diff. When the
+// concrete commands value does not implement previewExecutor, preview is
+// treated as a no-op and fn runs directly — this keeps test doubles simple.
+func runPreview(ctx context.Context, commands service.SurgeonCommands, fn func(service.SurgeonCommands) error) (diff string, files []string, err error) {
+	if pe, ok := commands.(previewExecutor); ok {
+		return pe.PreviewWith(ctx, fn)
+	}
+	return "", nil, fn(commands)
+}
+
 func errorResult(msg string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -319,6 +342,8 @@ type editOutput struct {
 	Symbols       []symbolEdit `json:"symbols,omitempty"`
 	Warnings      []string     `json:"warnings,omitempty"`
 	AddedImports  []string     `json:"added_imports,omitempty"`
+	Preview       bool         `json:"preview,omitempty"`
+	Diff          string       `json:"diff,omitempty"`
 }
 
 // patchFileOutput is the structured result for patch_file.

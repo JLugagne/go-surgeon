@@ -14,6 +14,12 @@ import (
 )
 
 func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagRequest) error {
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.TagStruct(ctx, child)
+	}
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
 	if err != nil {
 		return &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}

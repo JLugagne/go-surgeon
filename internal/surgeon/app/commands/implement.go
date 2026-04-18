@@ -22,6 +22,15 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 	if req.Interface == "" || req.Receiver == "" || req.FilePath == "" {
 		return nil, fmt.Errorf("interface, receiver, and file path are required")
 	}
+	// Preview: run the real path against an in-memory filesystem and
+	// return the stubs the real call would have appended, but without
+	// writing them to disk. The diff is harvested by PreviewWith.
+	if req.Preview {
+		child := req
+		child.Preview = false
+		previewH, _ := h.previewHandler()
+		return previewH.Implement(ctx, child)
+	}
 
 	// 1. Resolve the interface (cached for MCP sessions)
 	resolved, err := h.resolveInterfaceCached(req.Interface)
