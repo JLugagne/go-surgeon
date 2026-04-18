@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -194,6 +195,7 @@ func TestToolsList(t *testing.T) {
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
 		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
 		"find_definition", "find_references", "rename_symbol",
+		"batch_query",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -1192,4 +1194,87 @@ func (m *mockQueries) FindDefinition(ctx context.Context, query domain.Reference
 		return m.findDefinitionFn(ctx, query)
 	}
 	return domain.ReferencesResult{}, nil
+}
+
+// structuredErrorCode extracts the "code" field from a CallToolResult's
+// StructuredContent regardless of whether it arrived as a map (post-JSON
+// round-trip on the client side) or as the original errorOutput struct.
+func structuredErrorCode(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	require.NotNil(t, result.StructuredContent, "expected StructuredContent on error result")
+	// After JSON wire transport the any type is decoded into map[string]any.
+	if m, ok := result.StructuredContent.(map[string]any); ok {
+		code, _ := m["code"].(string)
+		return code
+	}
+	// Fallback: marshal + unmarshal in case the SDK ever surfaces the raw
+	// concrete type (e.g. json.RawMessage or the original struct).
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var decoded struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	return decoded.Code
+}
+
+// TestErrorResultWithCode_DomainErrorSurfacesCode verifies that when a
+// handler returns a *domain.Error, the tool result exposes the code in
+// StructuredContent so agents can branch on it without string-matching.
+func TestErrorResultWithCode_DomainErrorSurfacesCode(t *testing.T) {
+	commands := &mockCommands{
+		renameFn: func(_ context.Context, _ domain.RenameRequest) (domain.RenameResult, error) {
+			return domain.RenameResult{}, &domain.Error{
+				Code:    "CONFLICT",
+				Message: "target name already exists",
+			}
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "rename_symbol", map[string]any{
+		"name":     "Foo",
+		"new_name": "Bar",
+	})
+	require.True(t, result.IsError)
+	// Text content must still mirror the legacy errorResult format so existing
+	// agent UIs continue to render it.
+	assert.Contains(t, resultText(t, result), "rename_symbol:")
+	assert.Contains(t, resultText(t, result), "CONFLICT")
+	assert.Equal(t, "CONFLICT", structuredErrorCode(t, result))
+}
+
+// TestErrorResultWithCode_PlainErrorSurfacesUnknown verifies that errors
+// which are NOT *domain.Error fall back to code="UNKNOWN" so agents have
+// a stable discriminator even for unexpected failures.
+func TestErrorResultWithCode_PlainErrorSurfacesUnknown(t *testing.T) {
+	queries := &mockQueries{
+		findDefinitionFn: func(_ context.Context, _ domain.ReferencesQuery) (domain.ReferencesResult, error) {
+			return domain.ReferencesResult{}, errors.New("boom")
+		},
+	}
+	cs := setupTest(t, &mockCommands{}, queries)
+
+	result := callTool(t, cs, "find_definition", map[string]any{"name": "Foo"})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "find_definition:")
+	assert.Contains(t, resultText(t, result), "boom")
+	assert.Equal(t, "UNKNOWN", structuredErrorCode(t, result))
+}
+
+// TestErrorResult_PlainStringUsesGenericCode verifies that argument-validation
+// errors (which go through errorResult, not errorResultWithCode) expose a
+// generic "ERROR" code so every error path still produces structured data.
+func TestErrorResult_PlainStringUsesGenericCode(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	// symbol with both query and pattern triggers the plain errorResult
+	// branch (no underlying error, just a validation string).
+	result := callTool(t, cs, "symbol", map[string]any{
+		"query":   "Foo",
+		"pattern": "Bar",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mutually exclusive")
+	assert.Equal(t, "ERROR", structuredErrorCode(t, result))
 }

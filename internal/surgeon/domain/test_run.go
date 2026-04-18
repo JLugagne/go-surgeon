@@ -17,6 +17,8 @@ type TestRunRequest struct {
 	// TimeoutSeconds caps the overall wall-clock budget. Defaults to 120
 	// and is clamped to 600.
 	TimeoutSeconds int
+	// AffectedBy narrows the test run to the package that owns this file plus its reverse-dependency closure within the module. Mutually exclusive with Dir. The path is relative to the project root.
+	AffectedBy string
 }
 
 // TestCaseResult summarizes a single `go test -json` test action.
@@ -40,4 +42,6 @@ type TestRunResult struct {
 	RawOutput  string           `json:"raw_output,omitempty"`
 	DurationMS int              `json:"duration_ms"`
 	TimedOut   bool             `json:"timed_out,omitempty"`
+	// Packages lists the package import paths actually passed to `go test` (only populated when AffectedBy is used; empty means the whole-module default).
+	Packages []string `json:"packages,omitempty"`
 }

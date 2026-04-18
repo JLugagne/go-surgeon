@@ -61,6 +61,8 @@ CODE GENERATION
 VALIDATE (after editing, before declaring the task done)
 - test_run: run 'go test' scoped to a package/directory and get a compact pass/fail report with per-test timing and failure file:line references. Prefer this over shelling out to go test yourself. Pair with build_check for compile-time validation.
 
+ERROR HINTS
+- The patch_* tools ('patches' field) are guarded by a pre-validation hint. If a client accidentally sends 'patches' as a JSON-encoded string instead of an array, you'll get an explicit ERROR message naming the cause ('JSON-encoded string instead of an array', and 'serialized twice' when the inner string itself parses as an array) before the SDK's opaque schema error fires. When you see that message: resend 'patches' as a raw JSON array (not a stringified one), or fall back to update / update_interface / update_struct with the full replacement declaration.
 UNIVERSAL RULES
 - content is raw Go code: never include 'package ...' or 'import ...' blocks — goimports runs after every edit and manages imports.
 - Always read with symbol body=true before update/delete — it's cheap and it prevents the "I replaced the wrong thing" class of bug.
@@ -85,6 +87,7 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerOtherTools(s, commands)
 	registerPatchTools(s, commands)
 	registerReferencesTools(s, queries)
+	registerBatchQueryTool(s, queries)
 	registerRenameTool(s, commands)
 
 	s.AddReceivingMiddleware(schemaHintMiddleware())
@@ -158,7 +161,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 		packages, err := queries.Graph(ctx, opts)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to build graph: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to build graph: %v", err), err), nil, nil
 		}
 
 		text := formatGraph(packages, opts)
@@ -184,7 +187,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 		if in.Pattern != "" {
 			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: in.Pattern, Tests: in.Tests, Module: in.Module, Context: in.Context}, dir)
 			if err != nil {
-				return errorResult(err.Error()), nil, nil
+				return errorResultWithCode(err.Error(), err), nil, nil
 			}
 			if len(results) == 0 {
 				return textResult(fmt.Sprintf("No declarations match pattern %q.", in.Pattern)), nil, nil
@@ -216,7 +219,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			AffectedBy:     in.AffectedBy,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("build_check failed: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("build_check failed: %v", err), err), nil, nil
 		}
 
 		text := formatBuildCheckResult(result)
@@ -235,7 +238,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "test_run",
-		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600).",
+		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600). Pass affected_by=path/to/file.go to run only the owning package plus its reverse-dependency closure (mutually exclusive with dir).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testRunInput) (*mcp.CallToolResult, any, error) {
 		result, err := queries.TestRun(ctx, domain.TestRunRequest{
 			Dir:            in.Dir,
@@ -244,9 +247,10 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			Race:           in.Race,
 			Tags:           in.Tags,
 			TimeoutSeconds: in.TimeoutSeconds,
+			AffectedBy:     in.AffectedBy,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (test_run): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (test_run): %v", err), err), nil, nil
 		}
 		res := textResult(formatTestRunResult(result))
 		res.StructuredContent = result
@@ -323,7 +327,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			}},
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (create %s): %v", in.Object, err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (create %s): %v", in.Object, err), err), nil, nil
 		}
 
 		var sb strings.Builder
@@ -376,7 +380,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			}},
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (update %s): %v", in.Object, err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (update %s): %v", in.Object, err), err), nil, nil
 		}
 
 		var sb strings.Builder
@@ -425,7 +429,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 			}},
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (delete %s): %v", in.Object, err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (delete %s): %v", in.Object, err), err), nil, nil
 		}
 
 		var sb strings.Builder
@@ -495,7 +499,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 			result, addedImports, err = commands.AddInterface(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (add_interface): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (add_interface): %v", err), err), nil, nil
 		}
 		files := []string{in.File}
 		if in.MockFile != "" {
@@ -549,7 +553,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 			result, addedImports, err = commands.UpdateInterface(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (update_interface): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (update_interface): %v", err), err), nil, nil
 		}
 		files := []string{in.File}
 		if in.MockFile != "" {
@@ -610,7 +614,7 @@ func registerInterfaceTools(s *mcp.Server, commands service.SurgeonCommands) {
 			result, addedImports, err = commands.DeleteInterface(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (delete_interface): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (delete_interface): %v", err), err), nil, nil
 		}
 		files := []string{in.File}
 		if in.DeleteMock && in.MockFile != "" {
@@ -671,7 +675,7 @@ func registerInsertCallTool(s *mcp.Server, commands service.SurgeonCommands) {
 			}},
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (insert_call): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (insert_call): %v", err), err), nil, nil
 		}
 		var sb strings.Builder
 		for _, w := range result.Warnings {
@@ -806,7 +810,7 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 			Preview:    in.Preview,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (patch_function): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch_function): %v", err), err), nil, nil
 		}
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
@@ -883,7 +887,7 @@ func registerPatchFileTool(s *mcp.Server, commands service.SurgeonCommands) {
 			Preview:  in.Preview,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (patch_file): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch_file): %v", err), err), nil, nil
 		}
 
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
@@ -964,7 +968,7 @@ func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 			Preview:    in.Preview,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (patch_struct): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch_struct): %v", err), err), nil, nil
 		}
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
@@ -1041,7 +1045,7 @@ func registerPatchInterfaceTool(s *mcp.Server, commands service.SurgeonCommands)
 			MockName:   in.MockName,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (patch_interface): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch_interface): %v", err), err), nil, nil
 		}
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
@@ -1104,7 +1108,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 		result, err := commands.ExecutePlan(ctx, plan)
 		if err != nil {
-			return errorResult(fmt.Sprintf("plan execution failed: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("plan execution failed: %v", err), err), nil, nil
 		}
 
 		var sb strings.Builder
@@ -1161,7 +1165,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			results, err = commands.Implement(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to implement interface: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to implement interface: %v", err), err), nil, nil
 		}
 
 		if len(results) == 0 && diff == "" {
@@ -1216,7 +1220,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			result, err = commands.Mock(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to generate mock: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to generate mock: %v", err), err), nil, nil
 		}
 		msg := result
 		if in.Preview {
@@ -1249,7 +1253,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			testFile, err = commands.GenerateTest(ctx, in.File, in.Identifier)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to generate test: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to generate test: %v", err), err), nil, nil
 		}
 		msg := fmt.Sprintf("SUCCESS: Generated test skeleton in %s", testFile)
 		if in.Preview {
@@ -1287,7 +1291,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			err = commands.TagStruct(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to update tags: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to update tags: %v", err), err), nil, nil
 		}
 		msg := fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File)
 		if in.Preview {
@@ -1328,7 +1332,7 @@ func registerOtherTools(s *mcp.Server, commands service.SurgeonCommands) {
 			interfaceFile, err = commands.ExtractInterface(ctx, reqDomain)
 		}
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to extract interface: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("failed to extract interface: %v", err), err), nil, nil
 		}
 		msg := fmt.Sprintf("SUCCESS: Extracted interface %s into %s", in.Name, interfaceFile)
 		if in.Preview {
@@ -1369,6 +1373,7 @@ type testRunInput struct {
 	Race           bool   `json:"race,omitempty" jsonschema:"enable the race detector"`
 	Tags           string `json:"tags,omitempty" jsonschema:"build tags (whitelist [a-z_][a-z0-9_,.]*)"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"overall timeout in seconds (default 120, max 600)"`
+	AffectedBy     string `json:"affected_by,omitempty" jsonschema:"path to a .go file — narrow the test run to the package that owns this file plus every package in the module that (transitively) imports it. Mutually exclusive with dir. Great after editing one file in a large monorepo — skips running tests in unrelated packages."`
 }
 
 type patchDeclInput struct {
@@ -1416,7 +1421,7 @@ func registerPatchDeclTool(s *mcp.Server, commands service.SurgeonCommands) {
 			Preview:    in.Preview,
 		})
 		if err != nil {
-			return errorResult(fmt.Sprintf("ERROR (patch_decl): %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch_decl): %v", err), err), nil, nil
 		}
 		prefix := fmt.Sprintf("OK: %d patch(es) applied", result.Applied)
 		if result.Preview {
