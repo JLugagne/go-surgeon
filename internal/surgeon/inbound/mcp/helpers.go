@@ -286,6 +286,14 @@ func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Found %d declaration(s) matching /%s/\n\n", len(results), pattern)
 
+	// Token-budget-aware rendering: when showBody is true and
+	// tokenBudget > 0, we emit full Code blocks until the running size
+	// (~4 chars/token) would exceed the budget, then degrade remaining
+	// matches to signature-only. tokenBudget == 0 means unlimited.
+	budgetBytes := tokenBudget * 4
+	bodiesEmitted := 0
+	signaturesOnly := 0
+
 	writeGroup := func(title string, rs []domain.SymbolResult) {
 		if len(rs) == 0 {
 			return
@@ -297,8 +305,21 @@ func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern 
 			} else {
 				fmt.Fprintf(&sb, "- %s — %s:%d\n", r.Name, r.File, r.LineStart)
 			}
-			if showBody {
+			if !showBody {
+				continue
+			}
+			// Degrade to signature-only once we're over budget.
+			if budgetBytes > 0 && sb.Len() > budgetBytes {
 				fmt.Fprintf(&sb, "  %s\n", r.Signature)
+				signaturesOnly++
+				continue
+			}
+			if r.Code != "" {
+				fmt.Fprintf(&sb, "%s\n", r.Code)
+				bodiesEmitted++
+			} else {
+				fmt.Fprintf(&sb, "  %s\n", r.Signature)
+				signaturesOnly++
 			}
 		}
 		sb.WriteByte('\n')
@@ -308,12 +329,10 @@ func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern 
 	writeGroup("Functions", funcs)
 	writeGroup("Types", types)
 
-	if tokenBudget > 0 {
-		approx := len(sb.String()) / 4
-		if approx > tokenBudget {
-			return truncateToBudget(sb.String(), tokenBudget, len(results))
-		}
+	if showBody && signaturesOnly > 0 && budgetBytes > 0 {
+		fmt.Fprintf(&sb, "... (budget reached after %d bodies; %d more results shown as signatures only; raise token_budget to see all bodies)\n", bodiesEmitted, signaturesOnly)
 	}
+
 	return sb.String()
 }
 

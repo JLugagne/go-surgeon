@@ -162,9 +162,6 @@ func dispatchBatchSymbol(ctx context.Context, queries service.SurgeonQueries, it
 		if len(results) == 0 {
 			return fmt.Sprintf("No declarations match pattern %q.", item.Pattern), results, nil
 		}
-		if item.Body && len(results) > 3 {
-			return "", nil, fmt.Errorf("symbol: body=true refused: pattern matched %d declarations (max 3)", len(results))
-		}
 		text := formatPatternResults(results, item.Body, item.Pattern, 0)
 		return text, results, nil
 	}
