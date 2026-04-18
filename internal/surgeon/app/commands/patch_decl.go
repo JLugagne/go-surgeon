@@ -130,17 +130,19 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 			if len(shown) > maxCandidatesShown {
 				shown = shown[:maxCandidatesShown]
 			}
+			firstLine := bodyStartLine + strings.Count(origBody[:shown[0][0]], "\n")
 			for _, h := range shown {
 				line := extractLine(origBody, h[0])
-				candidates = append(candidates, fmt.Sprintf("  %s", strings.TrimSpace(line)))
+				lineNum := bodyStartLine + strings.Count(origBody[:h[0]], "\n")
+				candidates = append(candidates, fmt.Sprintf("  L%d: %s", lineNum, strings.TrimSpace(line)))
 			}
 			trailer := ""
 			if len(hits) > maxCandidatesShown {
 				trailer = fmt.Sprintf("\n  ... (%d more)", len(hits)-maxCandidatesShown)
 			}
 			errs = append(errs, fmt.Sprintf(
-				"patch #%d (%s %q): matched %d times in value of %s. Disambiguate with occurrence: 1..%d. Candidates:\n%s%s",
-				i+1, p.Op, p.Match+p.MatchRegex, len(hits), req.Identifier, len(hits), strings.Join(candidates, "\n"), trailer,
+				"patch #%d (%s %q): matched %d times in value of %s. Disambiguate with occurrence: 1..%d. Candidates:\n%s%s\nHint: retry with at_line: %d (or use occurrence: 1..%d)",
+				i+1, p.Op, p.Match+p.MatchRegex, len(hits), req.Identifier, len(hits), strings.Join(candidates, "\n"), trailer, firstLine, len(hits),
 			))
 			continue
 		}
