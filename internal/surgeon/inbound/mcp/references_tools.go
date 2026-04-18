@@ -91,7 +91,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 		}
 		result, err := queries.FindDefinition(ctx, q)
 		if err != nil {
-			return errorResult(fmt.Sprintf("find_definition: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("find_definition: %v", err), err), nil, nil
 		}
 		out := &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: formatDefinition(result)}},
@@ -121,7 +121,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 		}
 		result, err := queries.FindReferences(ctx, q)
 		if err != nil {
-			return errorResult(fmt.Sprintf("find_references: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("find_references: %v", err), err), nil, nil
 		}
 		out := &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: formatReferences(result, in.IncludeDefinition)}},
@@ -158,7 +158,7 @@ func registerRenameTool(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		result, err := commands.Rename(ctx, r)
 		if err != nil {
-			return errorResult(fmt.Sprintf("rename_symbol: %v", err)), nil, nil
+			return errorResultWithCode(fmt.Sprintf("rename_symbol: %v", err), err), nil, nil
 		}
 		out := &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: formatRename(result)}},

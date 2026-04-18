@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,8 @@ func errorResult(msg string) *mcp.CallToolResult {
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: msg},
 		},
-		IsError: true,
+		StructuredContent: errorOutput{Code: "ERROR", Message: msg},
+		IsError:           true,
 	}
 }
 
@@ -544,4 +546,37 @@ func formatTestRunResult(r domain.TestRunResult) string {
 	}
 
 	return sb.String()
+}
+
+// errorOutput is the JSON shape of StructuredContent on any error result.
+// Agents can branch on Code (stable machine identifier) instead of
+// string-matching Message. Code values come from domain.Error constants
+// (e.g. CONFLICT, PATCH_FAILED, NOT_FOUND, INVALID_ARGUMENT,
+// PATCH_PRODUCES_INVALID_GO, NODE_NOT_FOUND, FILE_NOT_FOUND). When the
+// underlying error is not a *domain.Error, Code is "UNKNOWN"; when the
+// error did not originate from a handler path (plain errorResult calls),
+// Code is the generic "ERROR".
+type errorOutput struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// errorResultWithCode produces a tool-level error result whose
+// StructuredContent carries a machine-readable code. If err is a
+// *domain.Error, Code is lifted from err.Code; otherwise Code is
+// "UNKNOWN". The text content mirrors errorResult's format so the
+// human-readable view is unchanged.
+func errorResultWithCode(msg string, err error) *mcp.CallToolResult {
+	out := errorOutput{Code: "UNKNOWN", Message: msg}
+	var de *domain.Error
+	if errors.As(err, &de) {
+		out.Code = de.Code
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: msg},
+		},
+		StructuredContent: out,
+		IsError:           true,
+	}
 }

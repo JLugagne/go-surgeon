@@ -192,3 +192,141 @@ func TestTestRun_SummaryPluralPackages(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.Contains(result.Summary, "passed"))
 }
+
+// writeTestModule scaffolds a tiny Go module rooted at dir with the given
+// files map (relative path -> content). A go.mod is written unconditionally.
+// Mirrors the helper in build_check_test.go but uses a distinct module name
+// so cache keys don't collide across tests.
+func writeTestModule(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/testrun\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	for rel, content := range files {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+}
+
+// runInTestDir chdirs into dir for the duration of the test so `go test ./...`
+// resolves relative to the temp module.
+func runInTestDir(t *testing.T, dir string, fn func()) {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+	fn()
+}
+
+func TestTestRun_AffectedByLeafPackageRunsOnlyOwner(t *testing.T) {
+	dir := t.TempDir()
+	// "leaf" is imported by nothing, so its rev-dep closure is just itself.
+	// "other" has its own tests that must NOT run when affected_by targets
+	// leaf.
+	writeTestModule(t, dir, map[string]string{
+		"leaf/leaf.go": "package leaf\n\nfunc Zero() int { return 0 }\n",
+		"leaf/leaf_test.go": "package leaf\n\nimport \"testing\"\n\n" +
+			"func TestLeafZero(t *testing.T) { if Zero() != 0 { t.Fatal(\"bad\") } }\n",
+		"other/other.go": "package other\n\nfunc One() int { return 1 }\n",
+		"other/other_test.go": "package other\n\nimport \"testing\"\n\n" +
+			"func TestOtherOne(t *testing.T) { if One() != 1 { t.Fatal(\"bad\") } }\n",
+	})
+
+	runInTestDir(t, dir, func() {
+		h := newHandler(t)
+		target := filepath.Join(dir, "leaf", "leaf.go")
+		result, err := h.TestRun(context.Background(), domain.TestRunRequest{AffectedBy: target})
+		require.NoError(t, err)
+		assert.True(t, result.Success, "raw=%s", result.RawOutput)
+
+		// Only leaf's package should appear in Packages.
+		require.Len(t, result.Packages, 1, "expected only owner package: got %v", result.Packages)
+		assert.Contains(t, result.Packages[0], "leaf")
+
+		// TestLeafZero must have run; TestOtherOne must NOT have run.
+		var ranLeaf, ranOther bool
+		for _, tc := range result.Tests {
+			if tc.Name == "TestLeafZero" {
+				ranLeaf = true
+			}
+			if tc.Name == "TestOtherOne" {
+				ranOther = true
+			}
+		}
+		assert.True(t, ranLeaf, "TestLeafZero should have run; tests=%+v", result.Tests)
+		assert.False(t, ranOther, "TestOtherOne must not run when affected_by targets leaf; tests=%+v", result.Tests)
+	})
+}
+
+func TestTestRun_AffectedByIncludesReverseDeps(t *testing.T) {
+	dir := t.TempDir()
+	// shared <- midA, midB; midA <- top. Editing shared must retest all four.
+	// "unrelated" has its own tests that must NOT run.
+	writeTestModule(t, dir, map[string]string{
+		"shared/s.go": "package shared\n\nfunc V() int { return 42 }\n",
+		"shared/s_test.go": "package shared\n\nimport \"testing\"\n\n" +
+			"func TestSharedV(t *testing.T) { if V() != 42 { t.Fatal(\"bad\") } }\n",
+		"midA/a.go": "package midA\n\nimport \"example.com/testrun/shared\"\n\n" +
+			"func A() int { return shared.V() }\n",
+		"midA/a_test.go": "package midA\n\nimport \"testing\"\n\n" +
+			"func TestMidA(t *testing.T) { if A() != 42 { t.Fatal(\"bad\") } }\n",
+		"midB/b.go": "package midB\n\nimport \"example.com/testrun/shared\"\n\n" +
+			"func B() int { return shared.V() }\n",
+		"midB/b_test.go": "package midB\n\nimport \"testing\"\n\n" +
+			"func TestMidB(t *testing.T) { if B() != 42 { t.Fatal(\"bad\") } }\n",
+		"top/t.go": "package top\n\nimport \"example.com/testrun/midA\"\n\n" +
+			"func T() int { return midA.A() }\n",
+		"top/t_test.go": "package top\n\nimport \"testing\"\n\n" +
+			"func TestTop(t *testing.T) { if T() != 42 { t.Fatal(\"bad\") } }\n",
+		"unrelated/u.go": "package unrelated\n\nfunc U() int { return 7 }\n",
+		"unrelated/u_test.go": "package unrelated\n\nimport \"testing\"\n\n" +
+			"func TestUnrelated(t *testing.T) { if U() != 7 { t.Fatal(\"bad\") } }\n",
+	})
+
+	runInTestDir(t, dir, func() {
+		h := newHandler(t)
+		target := filepath.Join(dir, "shared", "s.go")
+		result, err := h.TestRun(context.Background(), domain.TestRunRequest{AffectedBy: target})
+		require.NoError(t, err)
+		assert.True(t, result.Success, "raw=%s", result.RawOutput)
+
+		joined := strings.Join(result.Packages, " ")
+		assert.Contains(t, joined, "shared", "owner missing from %v", result.Packages)
+		assert.Contains(t, joined, "midA", "direct rdep missing from %v", result.Packages)
+		assert.Contains(t, joined, "midB", "direct rdep missing from %v", result.Packages)
+		assert.Contains(t, joined, "top", "transitive rdep missing from %v", result.Packages)
+		assert.NotContains(t, joined, "unrelated", "unrelated pkg should not be tested: %v", result.Packages)
+
+		var ranUnrelated bool
+		for _, tc := range result.Tests {
+			if tc.Name == "TestUnrelated" {
+				ranUnrelated = true
+			}
+		}
+		assert.False(t, ranUnrelated, "TestUnrelated must not run; tests=%+v", result.Tests)
+	})
+}
+
+func TestTestRun_AffectedByRejectsDirCombo(t *testing.T) {
+	dir := t.TempDir()
+	writeTestModule(t, dir, map[string]string{
+		"pkg/ok.go": "package pkg\n\nfunc F() int { return 1 }\n",
+	})
+	runInTestDir(t, dir, func() {
+		h := newHandler(t)
+		target := filepath.Join(dir, "pkg", "ok.go")
+		_, err := h.TestRun(context.Background(), domain.TestRunRequest{Dir: "./pkg", AffectedBy: target})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+}

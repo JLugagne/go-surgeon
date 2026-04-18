@@ -55,9 +55,33 @@ type testEvent struct {
 
 // TestRun implements service.SurgeonQueries.TestRun.
 func (h *SurgeonQueriesHandler) TestRun(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error) {
-	target, err := resolveTestTarget(req.Dir)
-	if err != nil {
-		return domain.TestRunResult{}, err
+	dir := strings.TrimSpace(req.Dir)
+	affectedBy := strings.TrimSpace(req.AffectedBy)
+	if dir != "" && affectedBy != "" {
+		return domain.TestRunResult{}, fmt.Errorf("dir and affected_by are mutually exclusive")
+	}
+
+	var targets []string
+	var affectedPkgs []string
+	if affectedBy != "" {
+		// Use tests=false for the closure: _test.go files can only be
+		// imported from inside the same package, so they never create
+		// new reverse-dep edges. Passing tests=true here just drags in
+		// synthetic testmain pseudo-packages that pollute the Packages
+		// result. `go test` on each affected package will still compile
+		// and run that package's own tests.
+		pkgs, err := h.ComputeAffectedPackages(ctx, affectedBy, false)
+		if err != nil {
+			return domain.TestRunResult{}, err
+		}
+		targets = pkgs
+		affectedPkgs = pkgs
+	} else {
+		target, err := resolveTestTarget(dir)
+		if err != nil {
+			return domain.TestRunResult{}, err
+		}
+		targets = []string{target}
 	}
 
 	if req.Tags != "" && !testRunTagsRegex.MatchString(req.Tags) {
@@ -94,7 +118,7 @@ func (h *SurgeonQueriesHandler) TestRun(ctx context.Context, req domain.TestRunR
 		goTestTimeout = timeout
 	}
 	args = append(args, fmt.Sprintf("-timeout=%ds", goTestTimeout))
-	args = append(args, target)
+	args = append(args, targets...)
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
@@ -112,6 +136,7 @@ func (h *SurgeonQueriesHandler) TestRun(ctx context.Context, req domain.TestRunR
 	result := parseTestRunOutput(stdout.Bytes())
 	result.DurationMS = int(duration.Milliseconds())
 	result.TimedOut = timedOut
+	result.Packages = affectedPkgs
 
 	// Surface go-test stderr (vet errors, build failures) appended to the
 	// raw output so the agent sees why a run failed without tests executing.

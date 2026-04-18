@@ -43,7 +43,7 @@ func (h *SurgeonQueriesHandler) BuildCheck(ctx context.Context, req domain.Build
 	var targets []string
 	var affectedPkgs []string
 	if affectedBy != "" {
-		pkgs, err := h.computeAffectedPackages(ctx, affectedBy, req.Tests)
+		pkgs, err := h.ComputeAffectedPackages(ctx, affectedBy, req.Tests)
 		if err != nil {
 			return domain.BuildCheckResult{}, err
 		}
@@ -241,16 +241,16 @@ func (b *limitedBuffer) String() string {
 	return string(b.buf)
 }
 
-// computeAffectedPackages resolves the owning package of filePath and walks
+// ComputeAffectedPackages resolves the owning package of filePath and walks
 // the module's reverse-dependency graph to find every package whose (transitive)
 // imports include the owner. The returned slice is the owner plus its rdeps,
-// suitable for passing as positional args to `go build`.
+// suitable for passing as positional args to `go build` or `go test`.
 //
 // The function loads the whole module once via the shared loader cache (keyed
 // on absolute module root + tests), builds a forward-import map, then inverts
 // it into a reverse-dep map and does a BFS from the owning package. Only
 // packages that belong to the same module as the owner are considered.
-func (h *SurgeonQueriesHandler) computeAffectedPackages(ctx context.Context, filePath string, tests bool) ([]string, error) {
+func (h *SurgeonQueriesHandler) ComputeAffectedPackages(ctx context.Context, filePath string, tests bool) ([]string, error) {
 	if filePath == "" {
 		return nil, fmt.Errorf("affected_by is empty")
 	}
