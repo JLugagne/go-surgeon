@@ -27,6 +27,9 @@ func (f *FileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) 
 
 // WriteFile writes content to the file at path.
 func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
+	if err := guardWriteInWorktree(path); err != nil {
+		return nil, err
+	}
 	content, addedImports := applyGoImports(path, content)
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		return nil, err
@@ -60,6 +63,9 @@ func (f *FileSystem) IsDir(ctx context.Context, path string) (bool, error) {
 
 // MkdirAll creates a directory and all necessary parents.
 func (f *FileSystem) MkdirAll(ctx context.Context, path string) error {
+	if err := guardWriteInWorktree(path); err != nil {
+		return err
+	}
 	return os.MkdirAll(path, 0755)
 }
 
