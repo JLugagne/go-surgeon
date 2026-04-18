@@ -89,6 +89,7 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerReferencesTools(s, queries)
 	registerBatchQueryTool(s, queries)
 	registerRenameTool(s, commands)
+	registerDescribeTool(s)
 
 	s.AddReceivingMiddleware(schemaHintMiddleware())
 

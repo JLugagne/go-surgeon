@@ -196,6 +196,7 @@ func TestToolsList(t *testing.T) {
 		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
+		"describe_tool",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
