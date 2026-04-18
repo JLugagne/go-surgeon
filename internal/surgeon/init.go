@@ -4,6 +4,7 @@ import (
 	"context"
 
 	appcommands "github.com/JLugagne/go-surgeon/internal/surgeon/app/commands"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/loader"
 	appqueries "github.com/JLugagne/go-surgeon/internal/surgeon/app/queries"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	clicommands "github.com/JLugagne/go-surgeon/internal/surgeon/inbound/cli/commands"
@@ -21,8 +22,12 @@ func Setup() Runner {
 		realFS := filesystem.NewFileSystem()
 		proxyFS := &filesystem.ProxyFileSystem{Active: realFS}
 
-		executePlanHandler := appcommands.NewExecutePlanHandler(proxyFS)
-		queriesHandler := appqueries.NewSurgeonQueriesHandler(proxyFS)
+		// Share a single loader cache between the queries and commands
+		// handlers so a find_references followed by a rename_symbol
+		// reuses the same packages.Load result instead of re-running it.
+		sharedLoader := loader.New()
+		executePlanHandler := appcommands.NewExecutePlanHandler(proxyFS).WithLoader(sharedLoader)
+		queriesHandler := appqueries.NewSurgeonQueriesHandler(proxyFS).WithLoader(sharedLoader)
 
 		rootCmd := &cobra.Command{
 			Use:           "go-surgeon",

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/loader"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
 )
@@ -20,6 +21,7 @@ import (
 type ExecutePlanHandler struct {
 	fs         filesystem.FileSystem
 	ifaceCache *ifaceLRU
+	loader     *loader.Loader
 }
 
 // NewExecutePlanHandler creates a new ExecutePlanHandler.
@@ -27,7 +29,24 @@ func NewExecutePlanHandler(fs filesystem.FileSystem) *ExecutePlanHandler {
 	return &ExecutePlanHandler{
 		fs:         fs,
 		ifaceCache: newIfaceLRU(50),
+		loader:     loader.New(),
 	}
+}
+
+// WithLoader lets callers share a package loader cache across handlers
+// (e.g. wire the same *loader.Loader into both queries and commands so
+// a find_references followed by a rename_symbol hits the cache on the
+// second call). Returns h for chaining.
+func (h *ExecutePlanHandler) WithLoader(l *loader.Loader) *ExecutePlanHandler {
+	if l != nil {
+		h.loader = l
+	}
+	return h
+}
+
+// Loader exposes the cached packages loader so other handlers can share it.
+func (h *ExecutePlanHandler) Loader() *loader.Loader {
+	return h.loader
 }
 
 func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -742,6 +761,21 @@ func insertCallIntoFunc(fset *token.FileSet, f *ast.File, src []byte, identifier
 				Code:    "MARKER_NOT_FOUND",
 				Message: fmt.Sprintf("marker %q not found in body of %s", marker, identifier),
 			}
+		}
+		// Auto-lift: if the marker landed inside a nested scope (closure,
+		// for-loop, if-branch, switch case), move the insertion to the
+		// end of the outermost statement in targetFn.Body that contains
+		// the marker. This mirrors patch_function's insert_before/after
+		// behavior and prevents silently landing inside a test closure
+		// or other nested block.
+		fileOff := bodyStart + 1 + idx
+		if lt := findLiftTarget(fset, targetFn, fileOff); lt.ShouldLift && lt.TopStmt != nil {
+			insertAt = fset.Position(lt.TopStmt.End()).Offset
+			// Skip trailing newline so the next line begins after the block.
+			if insertAt < len(src) && src[insertAt] == '\n' {
+				insertAt++
+			}
+			break
 		}
 		// Find end of the line containing the marker.
 		lineEnd := strings.Index(bodyContent[idx:], "\n")

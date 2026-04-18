@@ -95,6 +95,15 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	origBody := string(src[lbraceOff+1 : rbraceOff])
 
 	var warnings []string
+	var autoLifts []domain.AutoLiftInfo
+	// Pending insert-context entries filled in after edits are applied.
+	type pendingInsertCtx struct {
+		liftIndex     int // index into autoLifts
+		bodyRelStart  int // body-relative offset where insertion begins
+		insertedBytes int // length of the inserted text (lines + newline)
+		insertedLines int // number of lines inserted
+	}
+	var pendingCtx []pendingInsertCtx
 	// Phase 1: resolve all patches against the original body.
 	type resolvedEdit struct {
 		start, end  int    // byte offsets relative to origBody start
@@ -144,13 +153,22 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d out of %s body (body lines %d-%d)", i+1, p.Op, fromL, toL, req.Identifier, bodyStartLine, bodyStartLine+strings.Count(origBody, "\n")))
 				continue
 			}
+			if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
+				plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, start)
+				edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line}
+				if plan.Lift != nil {
+					autoLifts = append(autoLifts, *plan.Lift)
+					pendingCtx = append(pendingCtx, pendingInsertCtx{
+						liftIndex:     len(autoLifts) - 1,
+						bodyRelStart:  plan.Start,
+						insertedBytes: len(plan.Line),
+						insertedLines: plan.LineCount,
+					})
+				}
+				continue
+			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
-			if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
-				if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+start), fromL); w != "" {
-					warnings = append(warnings, w)
-				}
-			}
 			continue
 		}
 		var hits [][2]int // [start, end] byte ranges in origBody
@@ -179,24 +197,41 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			continue
 		}
 		if len(hits) > 1 && p.Occurrence == 0 {
-			var candidates []string
-			shown := hits
-			if len(shown) > maxCandidatesShown {
-				shown = shown[:maxCandidatesShown]
+			// For insert_before/insert_after: if every hit would auto-lift to
+			// the SAME top-level statement, the lifted position is
+			// unambiguous even though the raw anchor matched multiple times.
+			// Fall through with a synthetic idx=0 in that case.
+			if (p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter) && liftsAgree(fset, targetFn, lbraceOff+1, hits) {
+				// proceed with the first hit; the lift logic will anchor
+				// at the shared top-level statement.
+			} else {
+				var candidates []string
+				shown := hits
+				if len(shown) > maxCandidatesShown {
+					shown = shown[:maxCandidatesShown]
+				}
+				firstLine := bodyStartLine + strings.Count(origBody[:shown[0][0]], "\n")
+				for _, h := range shown {
+					line := extractLine(origBody, h[0])
+					lineNum := bodyStartLine + strings.Count(origBody[:h[0]], "\n")
+					candidates = append(candidates, fmt.Sprintf("  L%d: %s", lineNum, strings.TrimSpace(line)))
+				}
+				trailer := ""
+				if len(hits) > maxCandidatesShown {
+					trailer = fmt.Sprintf("\n  ... (%d more)", len(hits)-maxCandidatesShown)
+				}
+				msg := fmt.Sprintf(
+					"patch #%d (%s %q): matched %d times in body of %s. Disambiguate with occurrence: 1..%d. Candidates:\n%s%s\nHint: retry with at_line: %d (or use occurrence: 1..%d)",
+					i+1, p.Op, p.Match+p.MatchRegex, len(hits), req.Identifier, len(hits), strings.Join(candidates, "\n"), trailer, firstLine, len(hits),
+				)
+				if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
+					if liftCands := ambiguousLiftCandidates(fset, targetFn, src, lbraceOff+1, hits); len(liftCands) > 1 {
+						msg += "\nAuto-lift candidates (different top-level statements):\n  " + strings.Join(liftCands, "\n  ")
+					}
+				}
+				errs = append(errs, msg)
+				continue
 			}
-			for _, h := range shown {
-				line := extractLine(origBody, h[0])
-				candidates = append(candidates, fmt.Sprintf("  %s", strings.TrimSpace(line)))
-			}
-			trailer := ""
-			if len(hits) > maxCandidatesShown {
-				trailer = fmt.Sprintf("\n  ... (%d more)", len(hits)-maxCandidatesShown)
-			}
-			errs = append(errs, fmt.Sprintf(
-				"patch #%d (%s %q): matched %d times in body of %s. Disambiguate with occurrence: 1..%d. Candidates:\n%s%s",
-				i+1, p.Op, p.Match+p.MatchRegex, len(hits), req.Identifier, len(hits), strings.Join(candidates, "\n"), trailer,
-			))
-			continue
 		}
 
 		idx := 0
@@ -242,22 +277,17 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			}
 			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
 
-		case domain.PatchOpInsertBefore:
-			indent := lineIndent(origBody, hit[0])
-			line := indent + strings.TrimSpace(p.Code) + "\n"
-			lineStart := lineStartOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineStart, end: lineStart, replacement: line}
-			if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+hit[0]), bodyStartLine+strings.Count(origBody[:hit[0]], "\n")); w != "" {
-				warnings = append(warnings, w)
-			}
-
-		case domain.PatchOpInsertAfter:
-			indent := lineIndent(origBody, hit[0])
-			line := indent + strings.TrimSpace(p.Code) + "\n"
-			lineEnd := lineEndOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineEnd, end: lineEnd, replacement: line}
-			if w := innerScopeWarning(i+1, describeInnerScope(fset, targetFn, lbraceOff+1+hit[0]), bodyStartLine+strings.Count(origBody[:hit[0]], "\n")); w != "" {
-				warnings = append(warnings, w)
+		case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
+			plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
+			edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line}
+			if plan.Lift != nil {
+				autoLifts = append(autoLifts, *plan.Lift)
+				pendingCtx = append(pendingCtx, pendingInsertCtx{
+					liftIndex:     len(autoLifts) - 1,
+					bodyRelStart:  plan.Start,
+					insertedBytes: len(plan.Line),
+					insertedLines: plan.LineCount,
+				})
 			}
 
 		case domain.PatchOpDelete:
@@ -341,8 +371,38 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
 
+	// Fill in Context for each AutoLift using the assembled newSrc. The edits
+	// were applied high-to-low on origBody, so each pending entry's
+	// body-relative offset is still valid on newBody; translate to a file
+	// line by counting newlines up to that point.
+	if len(pendingCtx) > 0 {
+		// Sort ascending by start so earlier inserts get counted first for line math.
+		sort.Slice(pendingCtx, func(a, b int) bool { return pendingCtx[a].bodyRelStart < pendingCtx[b].bodyRelStart })
+		// Use newBody directly; compute the line where each insert landed.
+		for _, pc := range pendingCtx {
+			// The inserted text ends at bodyRelStart+insertedBytes-1 in newBody.
+			// bodyRelStart is the offset BEFORE the insertion in the edited body.
+			// Convert to a file-absolute line: lines in file up to lbraceOff+1+bodyRelStart+1.
+			fileOff := lbraceOff + 1 + pc.bodyRelStart
+			if fileOff > len(newSrc) {
+				fileOff = len(newSrc)
+			}
+			insertLine := 1 + strings.Count(string(newSrc[:fileOff]), "\n")
+			// If the insert happened at a line-end offset, the inserted
+			// line is on the NEXT line number.
+			if fileOff > 0 && fileOff-1 < len(newSrc) && newSrc[fileOff-1] == '\n' {
+				// already correct
+			} else if fileOff < len(newSrc) && newSrc[fileOff] != '\n' {
+				// insertion was mid-line; treat as next line
+				insertLine++
+			}
+			ctxLines := contextAroundInsertion(newSrc, insertLine, pc.insertedLines, 10)
+			autoLifts[pc.liftIndex].Context = ctxLines
+		}
+	}
+
 	if req.Preview {
-		return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), Preview: true, Warnings: warnings}, nil
+		return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), Preview: true, Warnings: warnings, AutoLifts: autoLifts}, nil
 	}
 
 	addedImports, err := h.fs.WriteFile(ctx, req.FilePath, newSrc)
@@ -350,7 +410,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "WRITE_ERROR", Message: "failed to write file", Err: err}
 	}
 
-	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports, Warnings: warnings}, nil
+	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports, Warnings: warnings, AutoLifts: autoLifts}, nil
 }
 
 // safeRegexMatches compiles pattern and returns all non-empty match byte ranges

@@ -145,6 +145,11 @@ func Dup() {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "matched 2 times")
 		assert.Contains(t, err.Error(), "Disambiguate")
+		// Candidates now include absolute line numbers and the error carries
+		// a retry hint pointing at at_line (faster than occurrence rescanning).
+		assert.Regexp(t, `L\d+: x := 1`, err.Error())
+		assert.Contains(t, err.Error(), "Hint: retry with at_line:")
+		assert.Contains(t, err.Error(), "or use occurrence: 1..2")
 		assert.Equal(t, src, getFile(fs, "f.go"))
 	})
 
@@ -1424,9 +1429,9 @@ func TestFindTokenMatches(t *testing.T) {
 	})
 }
 
-func TestPatchFunction_InnerScopeWarning_InsertInForLoop(t *testing.T) {
-	// insert_after lands at a line inside a for-loop body. Expect the
-	// warning wording to mention "for-loop body" and the line number.
+func TestPatchFunction_AutoLift_InsertInForLoop(t *testing.T) {
+	// insert_after whose anchor is inside a for-loop body should auto-lift
+	// the insertion to the top-level for-statement in the function body.
 	h, fs := newPatchHandler()
 	setFile(fs, "p.go", `package p
 
@@ -1450,14 +1455,21 @@ func Walk(items []int) int {
 		}},
 	})
 	require.NoError(t, err)
-	require.Len(t, res.Warnings, 1, "expected a single inner-scope warning")
-	assert.Contains(t, res.Warnings[0], "for-loop body")
-	assert.Regexp(t, `L\d+`, res.Warnings[0])
+	require.Len(t, res.AutoLifts, 1, "expected a single auto-lift record")
+	assert.Equal(t, 1, res.AutoLifts[0].PatchIndex)
+	assert.Contains(t, res.AutoLifts[0].LiftedFrom, "for-loop body")
+	assert.Contains(t, res.AutoLifts[0].LiftedTo, "function body")
+	assert.NotEmpty(t, res.AutoLifts[0].Context, "auto-lift should carry context lines")
+	// The inserted statement must land at the function's top level, not
+	// inside the loop body: its line should not be indented with the
+	// two-tab indent used inside the for body.
+	out := getFile(fs, "p.go")
+	assert.Regexp(t, `(?m)^\ttotal\+\+$`, out, "total++ must be inserted at top-level indentation")
 }
 
-func TestPatchFunction_InnerScopeWarning_InsertAtTopLevelIsSilent(t *testing.T) {
+func TestPatchFunction_AutoLift_InsertAtTopLevelIsSilent(t *testing.T) {
 	// insert_after at the function's top level (not inside any inner block)
-	// must not emit an inner-scope warning.
+	// must not record an auto-lift.
 	h, fs := newPatchHandler()
 	setFile(fs, "p.go", `package p
 
@@ -1480,10 +1492,10 @@ func Walk(items []int) int {
 		}},
 	})
 	require.NoError(t, err)
-	assert.Empty(t, res.Warnings, "top-level insert should not warn")
+	assert.Empty(t, res.AutoLifts, "top-level insert should not auto-lift")
 }
 
-func TestPatchFunction_InnerScopeWarning_IfBranch(t *testing.T) {
+func TestPatchFunction_AutoLift_IfBranch(t *testing.T) {
 	h, fs := newPatchHandler()
 	setFile(fs, "p.go", `package p
 
@@ -1505,13 +1517,99 @@ func Pick(x int) int {
 		}},
 	})
 	require.NoError(t, err)
-	require.Len(t, res.Warnings, 1)
-	assert.Contains(t, res.Warnings[0], "if/else branch")
+	require.Len(t, res.AutoLifts, 1)
+	assert.Contains(t, res.AutoLifts[0].LiftedFrom, "if/else branch")
+	// insert_before on the if-stmt should place x++ BEFORE the if.
+	out := getFile(fs, "p.go")
+	ixStmt := strings.Index(out, "x++")
+	ixIf := strings.Index(out, "if x > 0")
+	require.GreaterOrEqual(t, ixStmt, 0)
+	require.GreaterOrEqual(t, ixIf, 0)
+	assert.Less(t, ixStmt, ixIf, "x++ should appear before the if statement")
 }
 
-func TestPatchFunction_InnerScopeWarning_LineMode(t *testing.T) {
-	// Same detection must apply when the insert is triggered via line-mode
-	// targeting (from_line/to_line) rather than match text.
+func TestPatchFunction_AutoLift_Closure(t *testing.T) {
+	// Anchor matches inside a func-literal closure — must lift to the
+	// top-level statement that owns the closure, not stay inside it.
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Runner() {
+	doStart()
+	once(func() {
+		registerTools()
+	})
+	doEnd()
+}
+
+func doStart()      {}
+func doEnd()        {}
+func registerTools() {}
+func once(fn func()) { fn() }
+`)
+
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Runner",
+		Patches: []domain.FunctionPatch{{
+			Op:    domain.PatchOpInsertAfter,
+			Match: "registerTools()",
+			Code:  "registerMore()",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.AutoLifts, 1)
+	assert.Contains(t, res.AutoLifts[0].LiftedFrom, "closure body")
+	out := getFile(fs, "p.go")
+	// registerMore() must land AFTER the once(...) call (top-level), BEFORE doEnd(),
+	// and at single-tab indentation (top level of Runner).
+	ixOnce := strings.Index(out, "once(")
+	ixMore := strings.Index(out, "registerMore()")
+	ixEnd := strings.Index(out, "doEnd()")
+	require.GreaterOrEqual(t, ixOnce, 0)
+	require.GreaterOrEqual(t, ixMore, 0)
+	require.GreaterOrEqual(t, ixEnd, 0)
+	assert.Greater(t, ixMore, ixOnce, "inserted call should appear after the once(...) block")
+	assert.Less(t, ixMore, ixEnd, "inserted call should appear before doEnd()")
+	assert.Regexp(t, `(?m)^\tregisterMore\(\)$`, out, "registerMore() should sit at top-level indentation")
+}
+
+func TestPatchFunction_AutoLift_AmbiguousAfterLift(t *testing.T) {
+	// Anchor matches in two different nested scopes belonging to DIFFERENT
+	// top-level statements. Auto-lift cannot pick one — refuse and list
+	// the lift candidates.
+	h, fs := newPatchHandler()
+	setFile(fs, "p.go", `package p
+
+func Run() {
+	if flag() {
+		doThing()
+	}
+	for i := 0; i < 3; i++ {
+		doThing()
+	}
+}
+
+func flag() bool { return true }
+func doThing()   {}
+`)
+
+	_, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "p.go",
+		Identifier: "Run",
+		Patches: []domain.FunctionPatch{{
+			Op:    domain.PatchOpInsertAfter,
+			Match: "doThing()",
+			Code:  "cleanup()",
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "matched 2 times")
+	assert.Contains(t, err.Error(), "Auto-lift candidates")
+}
+
+func TestPatchFunction_AutoLift_LineMode(t *testing.T) {
+	// Same auto-lift when the insert is targeted via at_line rather than match.
 	h, fs := newPatchHandler()
 	setFile(fs, "p.go", `package p
 
@@ -1534,8 +1632,10 @@ func Walk(items []int) int {
 		}},
 	})
 	require.NoError(t, err)
-	require.Len(t, res.Warnings, 1)
-	assert.Contains(t, res.Warnings[0], "for-loop body")
+	require.Len(t, res.AutoLifts, 1)
+	assert.Contains(t, res.AutoLifts[0].LiftedFrom, "for-loop body")
+	out := getFile(fs, "p.go")
+	assert.Regexp(t, `(?m)^\ttotal\+\+$`, out, "total++ should be inserted at top-level indentation")
 }
 
 func TestPatchFunction_SetSignature_FreeFunction_ParamsOnly(t *testing.T) {

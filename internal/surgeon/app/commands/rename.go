@@ -76,20 +76,12 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 		return domain.RenameResult{}, &domain.Error{Code: "INVALID_ARGUMENT", Message: fmt.Sprintf("resolve dir: %v", err)}
 	}
 
-	fset := token.NewFileSet()
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax |
-			packages.NeedTypesInfo | packages.NeedModule | packages.NeedDeps,
-		Context: ctx,
-		Dir:     absDir,
-		Fset:    fset,
-		Tests:   req.Tests,
-	}
-	pkgs, err := packages.Load(cfg, "./...")
+	loaded, err := h.loader.Load(ctx, absDir, req.Tests)
 	if err != nil {
 		return domain.RenameResult{}, &domain.Error{Code: "LOAD_ERROR", Message: fmt.Sprintf("load packages: %v", err)}
 	}
+	fset := loaded.Fset
+	pkgs := loaded.Pkgs
 	if len(pkgs) == 0 {
 		return domain.RenameResult{}, &domain.Error{Code: "NOT_FOUND", Message: fmt.Sprintf("no Go packages under %q", absDir)}
 	}

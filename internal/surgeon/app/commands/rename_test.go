@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/commands"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/loader"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/queries"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/outbound/filesystem"
 	"github.com/stretchr/testify/assert"
@@ -199,4 +201,40 @@ func TestRename_EmptyNewNameRejected(t *testing.T) {
 		NewName: "",
 	})
 	require.Error(t, err)
+}
+
+// TestRename_SharesLoaderCacheWithQueries proves the cache is shared
+// across handlers when the same *loader.Loader is wired into both.
+// This is the hot-path payoff: a typical workflow primes the cache in
+// FindReferences (via the queries handler) and then Rename (via the
+// commands handler) reuses it — saving a full packages.Load.
+func TestRename_SharesLoaderCacheWithQueries(t *testing.T) {
+	dir := t.TempDir()
+	writeRenameModule(t, dir)
+
+	shared := loader.New()
+	renamer := commands.NewExecutePlanHandler(filesystem.NewFileSystem()).WithLoader(shared)
+	querier := queries.NewSurgeonQueriesHandler(nil).WithLoader(shared)
+
+	runInDir(t, dir, func() {
+		// Prime via the queries handler.
+		_, err := querier.FindReferences(context.Background(), domain.ReferencesQuery{
+			Symbol: domain.SymbolRef{Name: "Greeter"},
+			Dir:    ".",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), shared.Misses())
+		assert.Equal(t, int64(0), shared.Hits())
+
+		// The commands handler should now hit the shared cache.
+		_, err = renamer.Rename(context.Background(), domain.RenameRequest{
+			Symbol:  domain.SymbolRef{Name: "Greeter"},
+			NewName: "Welcomer",
+			Dir:     ".",
+			DryRun:  true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), shared.Hits(), "Rename should reuse the cache primed by FindReferences")
+		assert.Equal(t, int64(1), shared.Misses())
+	})
 }
