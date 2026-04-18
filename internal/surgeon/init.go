@@ -58,6 +58,9 @@ func Setup() Runner {
 		rootCmd.AddCommand(
 			clicommands.NewGraphCommand(queriesHandler),
 			clicommands.NewSymbolCommand(queriesHandler),
+			clicommands.NewFindDefinitionCommand(queriesHandler),
+			clicommands.NewFindReferencesCommand(queriesHandler),
+			clicommands.NewRenameSymbolCommand(executePlanHandler),
 		)
 
 		// Per-action subcommands (stdin = raw Go source, flags = metadata)

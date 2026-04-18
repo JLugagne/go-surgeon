@@ -22,6 +22,7 @@ type SurgeonCommands interface {
 	PatchInterface(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 	PatchFile(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
 	PatchDecl(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
+	Rename(ctx context.Context, req domain.RenameRequest) (domain.RenameResult, error)
 }
 
 // SurgeonQueries defines the interface for querying the codebase AST.
@@ -30,4 +31,6 @@ type SurgeonQueries interface {
 	Graph(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
 	BuildCheck(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
 	TestRun(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
+	FindReferences(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
+	FindDefinition(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
 }

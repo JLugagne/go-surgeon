@@ -30,6 +30,7 @@ type mockCommands struct {
 	patchInterfaceFn   func(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error)
 	patchFileFn        func(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error)
 	patchDeclFn        func(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error)
+	renameFn           func(ctx context.Context, req domain.RenameRequest) (domain.RenameResult, error)
 }
 
 func (m *mockCommands) ExecutePlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
@@ -96,10 +97,12 @@ func (m *mockCommands) ExtractInterface(ctx context.Context, req domain.ExtractI
 }
 
 type mockQueries struct {
-	findSymbolsFn func(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
-	graphFn       func(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
-	buildCheckFn  func(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
-	testRunFn     func(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
+	findSymbolsFn    func(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error)
+	graphFn          func(ctx context.Context, opts domain.GraphOptions) ([]domain.GraphPackage, error)
+	buildCheckFn     func(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error)
+	testRunFn        func(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
+	findReferencesFn func(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
+	findDefinitionFn func(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
 }
 
 func (m *mockQueries) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {
@@ -190,6 +193,7 @@ func TestToolsList(t *testing.T) {
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
 		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
+		"find_definition", "find_references", "rename_symbol",
 	}
 	for _, name := range expected {
 		assert.True(t, names[name], "missing tool: %s", name)
@@ -1167,4 +1171,25 @@ func TestPatchDecl_ToolRoutesToHandler(t *testing.T) {
 	assert.Equal(t, domain.PatchOpReplace, received.Patches[0].Op)
 	assert.Equal(t, "hello", received.Patches[0].Match)
 	assert.Equal(t, "hi", received.Patches[0].Replace)
+}
+
+func (m *mockCommands) Rename(ctx context.Context, req domain.RenameRequest) (domain.RenameResult, error) {
+	if m.renameFn != nil {
+		return m.renameFn(ctx, req)
+	}
+	return domain.RenameResult{}, nil
+}
+
+func (m *mockQueries) FindReferences(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error) {
+	if m.findReferencesFn != nil {
+		return m.findReferencesFn(ctx, query)
+	}
+	return domain.ReferencesResult{}, nil
+}
+
+func (m *mockQueries) FindDefinition(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error) {
+	if m.findDefinitionFn != nil {
+		return m.findDefinitionFn(ctx, query)
+	}
+	return domain.ReferencesResult{}, nil
 }

@@ -78,6 +78,8 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	registerInsertCallTool(s, commands)
 	registerOtherTools(s, commands)
 	registerPatchTools(s, commands)
+	registerReferencesTools(s, queries)
+	registerRenameTool(s, commands)
 
 	s.AddReceivingMiddleware(schemaHintMiddleware())
 
@@ -699,7 +701,7 @@ type patchFileInput struct {
 
 func registerPatchFileTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "patch_file",
+		Name:        "patch_file",
 		Description: "Whole-file text substitution with AST safety — for cross-function batch edits (e.g. renaming a literal across many test functions). Each patch uses match (literal, all occurrences) or match_regex (RE2 with $1/$2 backrefs in replace). Patches apply sequentially; each sees the result of the previous one. After substitution the file is re-parsed and gofmt'd; if the result is invalid Go the patch is rejected and nothing is written. Zero-match patches are allowed and recorded as warnings. Complements patch_function (per-function) — prefer patch_function when edits are scoped to one body.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFileInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
