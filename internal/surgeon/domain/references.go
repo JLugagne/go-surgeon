@@ -88,6 +88,13 @@ type RenameRequest struct {
 	// DryRun, when true, computes the rename without writing files;
 	// Result.Locations still lists what would have been changed.
 	DryRun bool
+	// AllowExportChange, when true, permits renames that flip the
+	// identifier's export status (e.g. foo → Foo or Foo → foo). By
+	// default such renames are rejected because they almost always
+	// break callers; enabling this escape hatch asks the rename to
+	// proceed anyway. The result will carry a warning describing the
+	// flip so agents can notice.
+	AllowExportChange bool
 }
 
 // RenameResult reports the outcome of a rename.
@@ -106,4 +113,8 @@ type RenameResult struct {
 	Locations []Location
 	// DryRun echoes whether the caller asked for a preview.
 	DryRun bool
+	// Warnings carries non-fatal notices about the rename (for example
+	// a message when the rename flipped export status under
+	// AllowExportChange). Empty when nothing unusual happened.
+	Warnings []string
 }

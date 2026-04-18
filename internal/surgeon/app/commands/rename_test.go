@@ -166,6 +166,74 @@ func TestRename_ExportStatusChangeRejected(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.True(t, strings.Contains(err.Error(), "export status"))
+		// The hint should point users at the escape hatch.
+		assert.Contains(t, err.Error(), "allow_export_change")
+	})
+}
+
+// TestRename_ExportStatusChange_AllowedWithFlag proves the escape hatch:
+// when AllowExportChange=true, a case-flip rename (Exported -> unexported)
+// proceeds and the result carries a warning naming both the old and new
+// export status so agents notice what they just did.
+func TestRename_ExportStatusChange_AllowedWithFlag(t *testing.T) {
+	dir := t.TempDir()
+	writeRenameModule(t, dir)
+
+	handler := commands.NewExecutePlanHandler(filesystem.NewFileSystem())
+
+	runInDir(t, dir, func() {
+		result, err := handler.Rename(context.Background(), domain.RenameRequest{
+			Symbol:            domain.SymbolRef{Name: "Greeter"},
+			NewName:           "greeter",
+			Dir:               ".",
+			AllowExportChange: true,
+			DryRun:            true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "type", result.Kind)
+		require.NotEmpty(t, result.Warnings, "expected a warning about the export flip")
+		assert.Contains(t, result.Warnings[0], "export status changed")
+		assert.Contains(t, result.Warnings[0], "\"Greeter\"")
+		assert.Contains(t, result.Warnings[0], "exported")
+		assert.Contains(t, result.Warnings[0], "\"greeter\"")
+		assert.Contains(t, result.Warnings[0], "unexported")
+	})
+}
+
+// TestRename_ExportStatusChange_UnexportedToExported_Allowed covers the
+// other direction (foo -> Foo) under the same flag, confirming the
+// warning describes the flip the other way around.
+func TestRename_ExportStatusChange_UnexportedToExported_Allowed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/lowercase\n\ngo 1.25\n"), 0644))
+	src := `package main
+
+func greet() string {
+	return "hi"
+}
+
+func main() {
+	_ = greet()
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0644))
+
+	handler := commands.NewExecutePlanHandler(filesystem.NewFileSystem())
+
+	runInDir(t, dir, func() {
+		result, err := handler.Rename(context.Background(), domain.RenameRequest{
+			Symbol:            domain.SymbolRef{Name: "greet"},
+			NewName:           "Greet",
+			Dir:               ".",
+			AllowExportChange: true,
+			DryRun:            true,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, result.Warnings)
+		assert.Contains(t, result.Warnings[0], "\"greet\"")
+		assert.Contains(t, result.Warnings[0], "unexported")
+		assert.Contains(t, result.Warnings[0], "\"Greet\"")
+		assert.Contains(t, result.Warnings[0], "exported")
 	})
 }
 

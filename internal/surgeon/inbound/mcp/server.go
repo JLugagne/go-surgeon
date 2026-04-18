@@ -128,6 +128,7 @@ type symbolInput struct {
 	Module      string `json:"module,omitempty" jsonschema:"import path of a dependency to search in instead of the current project, e.g. 'github.com/spf13/cobra'"`
 	Context     string `json:"context,omitempty" jsonschema:"optional 'file' to additionally return an outline of sibling declarations in the same file (signatures only, with line ranges) — set this when you might edit nearby code and want to see the file's shape in one call"`
 	TokenBudget int    `json:"token_budget,omitempty" jsonschema:"approximate max tokens in output (pattern mode), 0 means unlimited"`
+	Outline     bool   `json:"outline,omitempty" jsonschema:"pattern mode only: include first-sentence doc summary per match (middle ground between signature-only and body=true)"`
 }
 
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
@@ -171,7 +172,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). Indexes funcs, methods, types, vars, and consts. body=true shows the implementation plus the file's package line and import block. When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query and pattern are mutually exclusive.",
+		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). Indexes funcs, methods, types, vars, and consts. body=true shows the implementation plus the file's package line and import block. In pattern mode, outline=true returns signature + first-sentence doc summary per match (middle ground between signature-only and body=true). When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query and pattern are mutually exclusive.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -193,7 +194,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			if len(results) == 0 {
 				return textResult(fmt.Sprintf("No declarations match pattern %q.", in.Pattern)), nil, nil
 			}
-			text := formatPatternResults(results, in.Body, in.Pattern, in.TokenBudget)
+			text := formatPatternResults(results, in.Body, in.Pattern, in.TokenBudget, in.Outline)
 			return textResult(text), nil, nil
 		}
 
@@ -765,10 +766,11 @@ type patchOpInput struct {
 }
 
 type patchFunctionInput struct {
-	File       string         `json:"file" jsonschema:"target Go file path"`
-	Identifier string         `json:"identifier" jsonschema:"function or method identifier, e.g. FuncName or Receiver.Method"`
-	Patches    []patchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
-	Preview    bool           `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+	File          string         `json:"file" jsonschema:"target Go file path"`
+	Identifier    string         `json:"identifier" jsonschema:"function or method identifier, e.g. FuncName or Receiver.Method"`
+	Patches       []patchOpInput `json:"patches" jsonschema:"ordered list of patch operations to apply atomically"`
+	Preview       bool           `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
+	IncludeNested bool           `json:"include_nested,omitempty" jsonschema:"when true, allow matches inside nested closures (*ast.FuncLit) within the target function. Default: match only the top-level body, excluding closure bodies."`
 }
 
 func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
@@ -779,6 +781,8 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 			"SIGNATURE EDITS: set_signature rewrites only the params list and/or the results list of the function or method, leaving the body, name, receiver, and any generic type parameters intact. Supply params (with parens) and/or returns; at least one is required. " +
 			"LINE TARGETING: use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) instead of text matching — faster and unambiguous. Mutually exclusive with match/match_regex. " +
 			"match_regex: RE2 alternative to match (no backrefs/lookarounds). " +
+			"SCOPE: by default, text matches are restricted to the target function's own body and SKIP any nested closure (*ast.FuncLit); pass include_nested=true to search inside closures too. " +
+			"NESTED CLOSURES: use identifier 'Parent>closure[N]' (0-based, ordered by AST appearance) to target the Nth *ast.FuncLit inside Parent — subsequent '>closure[M]' segments drill deeper. " +
 			"preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFunctionInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
@@ -802,10 +806,11 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 			}
 		}
 		result, err := commands.PatchFunction(ctx, domain.PatchFunctionRequest{
-			FilePath:   in.File,
-			Identifier: in.Identifier,
-			Patches:    patches,
-			Preview:    in.Preview,
+			FilePath:      in.File,
+			Identifier:    in.Identifier,
+			Patches:       patches,
+			Preview:       in.Preview,
+			IncludeNested: in.IncludeNested,
 		})
 		if err != nil {
 			return errorResultWithCode(fmt.Sprintf("ERROR (patch_function): %v", err), err), nil, nil
@@ -832,6 +837,9 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 			if al.Context != "" {
 				prefix += "\n" + al.Context
 			}
+		}
+		if len(result.AutoLifts) > 0 {
+			prefix = fmt.Sprintf("\u26a0 AUTO-LIFTED: %d patch(es) moved to the enclosing top-level statement\n\n", len(result.AutoLifts)) + prefix
 		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)

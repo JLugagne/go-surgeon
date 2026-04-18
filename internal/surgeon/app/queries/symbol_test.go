@@ -255,3 +255,46 @@ var (
 		require.Len(t, res, 2)
 	})
 }
+
+// TestFindSymbols_Pattern_DocComment verifies that pattern-mode results
+// carry the full doc comment so that downstream renderers (e.g. MCP
+// outline mode) can derive a first-sentence summary. Also covers the
+// negative case: a declaration without a doc comment yields an empty
+// Doc string rather than failing.
+func TestFindSymbols_Pattern_DocComment(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "registry.go")
+	code := `package registry
+
+// registerFoo wires Foo into the registry. Y is separate.
+func registerFoo() {}
+
+func registerBare() {}
+
+// registerMulti describes the first sentence.
+// The second line continues the first paragraph.
+//
+// A second paragraph should be ignored entirely.
+func registerMulti() {}
+`
+	require.NoError(t, os.WriteFile(filePath, []byte(code), 0644))
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(code)}}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "^register"}, tmpDir)
+	require.NoError(t, err)
+	byName := map[string]domain.SymbolResult{}
+	for _, r := range res {
+		byName[r.Name] = r
+	}
+
+	require.Contains(t, byName, "registerFoo")
+	assert.Equal(t, "registerFoo wires Foo into the registry. Y is separate.", byName["registerFoo"].Doc)
+
+	require.Contains(t, byName, "registerBare")
+	assert.Empty(t, byName["registerBare"].Doc, "declaration without a doc comment should have empty Doc")
+
+	require.Contains(t, byName, "registerMulti")
+	assert.Contains(t, byName["registerMulti"].Doc, "registerMulti describes the first sentence.")
+	assert.Contains(t, byName["registerMulti"].Doc, "A second paragraph should be ignored entirely.")
+}

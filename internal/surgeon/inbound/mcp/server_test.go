@@ -1279,3 +1279,139 @@ func TestErrorResult_PlainStringUsesGenericCode(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "mutually exclusive")
 	assert.Equal(t, "ERROR", structuredErrorCode(t, result))
 }
+
+// TestRenameSymbol_ExportChange_RejectedByDefault verifies that a case-flip
+// rename (foo -> Foo) is rejected by default and the error message points
+// the caller at the allow_export_change escape hatch.
+func TestRenameSymbol_ExportChange_RejectedByDefault(t *testing.T) {
+	var captured domain.RenameRequest
+	commands := &mockCommands{
+		renameFn: func(_ context.Context, req domain.RenameRequest) (domain.RenameResult, error) {
+			captured = req
+			return domain.RenameResult{}, &domain.Error{
+				Code:    "INVALID_ARGUMENT",
+				Message: "rename: changing export status (\"Foo\" \u2192 \"foo\") is not allowed; rename in two steps if intentional, or pass allow_export_change=true",
+			}
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "rename_symbol", map[string]any{
+		"name":     "Foo",
+		"new_name": "foo",
+	})
+	require.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, "INVALID_ARGUMENT")
+	assert.Contains(t, text, "allow_export_change")
+	assert.Equal(t, "INVALID_ARGUMENT", structuredErrorCode(t, result))
+	// The flag defaults to false when the caller omits it.
+	assert.False(t, captured.AllowExportChange)
+}
+
+// TestRenameSymbol_ExportChange_AllowedWithFlag verifies that
+// allow_export_change=true is forwarded to the domain request, that the
+// warning returned by the handler surfaces in both the structured output
+// and (prominently prefixed) in the text output, so agents can notice.
+func TestRenameSymbol_ExportChange_AllowedWithFlag(t *testing.T) {
+	var captured domain.RenameRequest
+	commands := &mockCommands{
+		renameFn: func(_ context.Context, req domain.RenameRequest) (domain.RenameResult, error) {
+			captured = req
+			return domain.RenameResult{
+				OldName:       "Foo",
+				NewName:       "foo",
+				Kind:          "type",
+				FilesModified: []string{"a.go"},
+				Warnings:      []string{"export status changed: \"Foo\" (exported) \u2192 \"foo\" (unexported)"},
+			}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "rename_symbol", map[string]any{
+		"name":                "Foo",
+		"new_name":            "foo",
+		"allow_export_change": true,
+	})
+	require.False(t, result.IsError, resultText(t, result))
+	assert.True(t, captured.AllowExportChange, "flag should be forwarded to domain")
+
+	text := resultText(t, result)
+	// The banner must LEAD the text output so agents notice even when they
+	// only read the first line.
+	assert.True(t, strings.HasPrefix(text, "\u26a0 EXPORT CHANGED:"), "text must start with export-changed banner; got: %q", text)
+	assert.Contains(t, text, "export status changed")
+	assert.Contains(t, text, "exported")
+	assert.Contains(t, text, "unexported")
+
+	// And the structured content must carry the warning too so machine
+	// callers can branch without parsing the text.
+	require.NotNil(t, result.StructuredContent)
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var decoded struct {
+		Warnings []string `json:"warnings"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.Warnings, 1)
+	assert.Contains(t, decoded.Warnings[0], "export status changed")
+}
+
+// TestPatchFunction_AutoLiftBannerLeadsText verifies that when the handler's
+// mocked result carries a non-empty AutoLifts slice, the TEXT content of the
+// tool result LEADS with a loud banner (not the usual "OK: ..." prefix). This
+// is what agents see when they only inspect text and never parse
+// StructuredContent — they must notice the lift.
+//
+// The banner is prepended BEFORE the OK/PREVIEW line; the per-patch
+// "AUTO_LIFTED patch #K: from X -> Y" lines are still kept afterward.
+func TestPatchFunction_AutoLiftBannerLeadsText(t *testing.T) {
+	commands := &mockCommands{
+		patchFunctionFn: func(_ context.Context, _ domain.PatchFunctionRequest) (domain.PatchFunctionResult, error) {
+			// Mirror what patch_function returns when an insert_before anchor
+			// lands inside an `if { ... }` block inside a func body: the patch
+			// is applied but auto-lifted to the enclosing top-level statement.
+			return domain.PatchFunctionResult{
+				Applied: 1,
+				AutoLifts: []domain.AutoLiftInfo{{
+					PatchIndex: 1,
+					LiftedFrom: "if/else branch at L12",
+					LiftedTo:   "function body at L10",
+					Context:    "  line with +marker",
+				}},
+			}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "patch_function", map[string]any{
+		"file":       "foo.go",
+		"identifier": "Foo",
+		"patches": []map[string]any{
+			{"op": "insert_before", "match": "anchor", "code": "log.Println(\"hi\")"},
+		},
+	})
+
+	require.False(t, result.IsError, resultText(t, result))
+	text := resultText(t, result)
+
+	// 1) The TEXT must LEAD with the warning banner — agents that only read
+	//    text and never inspect StructuredContent must see it immediately.
+	require.True(t, strings.HasPrefix(text, "\u26a0 AUTO-LIFTED:"),
+		"text must lead with the auto-lift banner, got: %q", text)
+	assert.Contains(t, text, "1 patch(es) moved to the enclosing top-level statement")
+
+	// 2) The legacy "OK: ..." line is still present, just no longer first.
+	assert.Contains(t, text, "OK: 1 patch(es) applied")
+
+	// 3) The per-patch AUTO_LIFTED detail line is still kept.
+	assert.Contains(t, text, "AUTO_LIFTED patch #1: from if/else branch at L12 -> function body at L10")
+
+	// 4) The banner must come before the OK line in the text.
+	bannerIdx := strings.Index(text, "\u26a0 AUTO-LIFTED")
+	okIdx := strings.Index(text, "OK: 1 patch(es) applied")
+	require.GreaterOrEqual(t, bannerIdx, 0)
+	require.GreaterOrEqual(t, okIdx, 0)
+	assert.Less(t, bannerIdx, okIdx, "banner must lead the text output")
+}

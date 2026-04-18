@@ -26,15 +26,16 @@ type referencesInput struct {
 
 // renameInput drives the rename_symbol MCP tool.
 type renameInput struct {
-	Name     string `json:"name" jsonschema:"current symbol name"`
-	NewName  string `json:"new_name" jsonschema:"replacement identifier; must be a valid Go identifier, different from name, same export status"`
-	Receiver string `json:"receiver,omitempty" jsonschema:"receiver type name for methods (bare name, no pointer star)"`
-	Package  string `json:"package,omitempty" jsonschema:"package import path or name for disambiguation"`
-	File     string `json:"file,omitempty" jsonschema:"file path to pin an exact declaration"`
-	Line     int    `json:"line,omitempty" jsonschema:"1-based declaration line; pair with file for exact pinning"`
-	Dir      string `json:"dir,omitempty" jsonschema:"directory to load packages from (defaults to '.')"`
-	Tests    bool   `json:"tests,omitempty" jsonschema:"include _test.go files; rewrites them too"`
-	Preview  bool   `json:"preview,omitempty" jsonschema:"if true, return the list of sites that would change without writing any file"`
+	Name              string `json:"name" jsonschema:"current symbol name"`
+	NewName           string `json:"new_name" jsonschema:"replacement identifier; must be a valid Go identifier and different from name. Must preserve export status unless allow_export_change=true."`
+	Receiver          string `json:"receiver,omitempty" jsonschema:"receiver type name for methods (bare name, no pointer star)"`
+	Package           string `json:"package,omitempty" jsonschema:"package import path or name for disambiguation"`
+	File              string `json:"file,omitempty" jsonschema:"file path to pin an exact declaration"`
+	Line              int    `json:"line,omitempty" jsonschema:"1-based declaration line; pair with file for exact pinning"`
+	Dir               string `json:"dir,omitempty" jsonschema:"directory to load packages from (defaults to '.')"`
+	Tests             bool   `json:"tests,omitempty" jsonschema:"include _test.go files; rewrites them too"`
+	Preview           bool   `json:"preview,omitempty" jsonschema:"if true, return the list of sites that would change without writing any file"`
+	AllowExportChange bool   `json:"allow_export_change,omitempty" jsonschema:"escape hatch: if true, permit case-flip renames (foo → Foo or Foo → foo). Rejected by default because the change almost always breaks callers. When enabled, the result carries a warning describing the flip."`
 }
 
 // referencesOutput is the structured result for find_references and
@@ -67,6 +68,7 @@ type renameOutput struct {
 	Sites         []locationOutput `json:"sites,omitempty"`
 	Total         int              `json:"total"`
 	Preview       bool             `json:"preview,omitempty"`
+	Warnings      []string         `json:"warnings,omitempty"`
 }
 
 // registerReferencesTools wires find_definition and find_references.
@@ -135,7 +137,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 func registerRenameTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rename_symbol",
-		Description: "Rename a Go symbol and every reference to it across the module. Type-aware: walks go/packages type information so only identifiers that resolve to the same declaration are rewritten (no false positives on same-named but unrelated identifiers). Rejects renames that would change export status or collide with an existing name in the same scope. Set preview=true to list every site without writing.",
+		Description: "Rename a Go symbol and every reference to it across the module. Type-aware: walks go/packages type information so only identifiers that resolve to the same declaration are rewritten (no false positives on same-named but unrelated identifiers). Rejects renames that would change export status or collide with an existing name in the same scope. Pass allow_export_change=true to opt in to a case-flip rename (foo → Foo or Foo → foo); the result will include a warning and the text output is prefixed with an export-changed notice. Set preview=true to list every site without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in renameInput) (*mcp.CallToolResult, any, error) {
 		if in.Name == "" {
 			return errorResult("rename_symbol: name is required"), nil, nil
@@ -151,10 +153,11 @@ func registerRenameTool(s *mcp.Server, commands service.SurgeonCommands) {
 				File:     in.File,
 				Line:     in.Line,
 			},
-			NewName: in.NewName,
-			Dir:     in.Dir,
-			Tests:   in.Tests,
-			DryRun:  in.Preview,
+			NewName:           in.NewName,
+			Dir:               in.Dir,
+			Tests:             in.Tests,
+			DryRun:            in.Preview,
+			AllowExportChange: in.AllowExportChange,
 		}
 		result, err := commands.Rename(ctx, r)
 		if err != nil {
@@ -216,6 +219,11 @@ func formatRename(r domain.RenameResult) string {
 		verb = "Would rename"
 	}
 	var sb strings.Builder
+	// Surface warnings prominently so agents notice unusual renames
+	// (e.g. case-flip under allow_export_change).
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&sb, "⚠ EXPORT CHANGED: %s\n", w)
+	}
 	fmt.Fprintf(&sb, "%s %s %q → %q: %d site(s) across %d file(s)\n", verb, r.Kind, r.OldName, r.NewName, len(r.Locations), len(r.FilesModified))
 	byFile := map[string]int{}
 	var order []string
@@ -283,6 +291,7 @@ func renameStructured(r domain.RenameResult) renameOutput {
 		FilesModified: r.FilesModified,
 		Total:         len(r.Locations),
 		Preview:       r.DryRun,
+		Warnings:      r.Warnings,
 	}
 	for _, l := range r.Locations {
 		out.Sites = append(out.Sites, locationFromDomain(l))
