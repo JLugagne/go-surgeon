@@ -3,8 +3,12 @@ package commands
 import (
 	"context"
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -41,6 +45,18 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		return domain.PatchFileResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",
 			Message: "patch_file requires at least one patch",
+		}
+	}
+	scope := req.Scope
+	if scope == "" {
+		scope = "all"
+	}
+	switch scope {
+	case "all", "code_only", "identifiers_only":
+	default:
+		return domain.PatchFileResult{}, &domain.Error{
+			Code:    "INVALID_ARGUMENT",
+			Message: "patch_file: scope must be all, code_only, or identifiers_only",
 		}
 	}
 
@@ -86,27 +102,78 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 	var warnings []string
 
 	for i, p := range req.Patches {
-		count := 0
-		if p.MatchRegex != "" {
-			re := compiled[i]
-			matches := re.FindAllStringIndex(working, -1)
-			count = len(matches)
-			if count > 0 {
-				working = re.ReplaceAllString(working, p.Replace)
-			}
-		} else {
-			count = strings.Count(working, p.Match)
-			if count > 0 {
-				working = strings.ReplaceAll(working, p.Match, p.Replace)
+		needle := p.Match
+		if needle == "" {
+			needle = p.MatchRegex
+		}
+		// Re-parse the CURRENT working source before every patch so exclusion
+		// and identifier ranges reflect the result of prior substitutions.
+		var (
+			excluded []rangePair
+			idents   []rangePair
+		)
+		if scope != "all" {
+			var perr error
+			excluded, idents, perr = collectScopeRanges(req.FilePath, working)
+			if perr != nil {
+				// If the intermediate source is unparseable, fall back to scope=all
+				// for this patch — the final re-parse/gofmt guard still catches
+				// invalid output. We record a warning so callers know.
+				warnings = append(warnings, fmt.Sprintf("patch #%d: scope=%s filter skipped — intermediate source is not parseable (%v)", i+1, scope, perr))
+				scope = "all"
 			}
 		}
-		hits[i] = count
-		if count == 0 {
-			needle := p.Match
-			if needle == "" {
-				needle = p.MatchRegex
+
+		var (
+			accepted [][2]int
+			filtered [][2]int
+			replaces []string
+		)
+		if p.MatchRegex != "" {
+			re := compiled[i]
+			for _, m := range re.FindAllStringSubmatchIndex(working, -1) {
+				start, end := m[0], m[1]
+				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+					filtered = append(filtered, [2]int{start, end})
+					continue
+				}
+				accepted = append(accepted, [2]int{start, end})
+				// Expand backrefs using the captured groups for THIS match.
+				replaces = append(replaces, string(re.ExpandString(nil, p.Replace, working, m)))
 			}
+		} else {
+			for from := 0; from < len(working); {
+				idx := strings.Index(working[from:], p.Match)
+				if idx < 0 {
+					break
+				}
+				start := from + idx
+				end := start + len(p.Match)
+				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+					filtered = append(filtered, [2]int{start, end})
+				} else {
+					accepted = append(accepted, [2]int{start, end})
+					replaces = append(replaces, p.Replace)
+				}
+				from = end
+			}
+		}
+
+		total := len(accepted) + len(filtered)
+		hits[i] = len(accepted)
+		// Capture filtered line numbers BEFORE replacements mutate offsets.
+		filteredLines := formatFilteredLines(working, filtered)
+		if len(accepted) > 0 {
+			working = applyRangeReplacements(working, accepted, replaces)
+		}
+
+		switch {
+		case total == 0:
 			warnings = append(warnings, fmt.Sprintf("patch #%d: zero matches for %q — no changes from this patch", i+1, needle))
+		case len(accepted) == 0 && len(filtered) > 0:
+			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences matched but all filtered out by scope=%s; no changes from this patch", i+1, len(filtered), scope))
+		case len(filtered) > 0:
+			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences filtered out by scope=%s (lines: %s)", i+1, len(filtered), scope, filteredLines))
 		}
 	}
 
@@ -153,4 +220,129 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		AddedImports: addedImports,
 		Warnings:     warnings,
 	}, nil
+}
+
+// rangePair is a [start, end) byte range into the working source.
+type rangePair struct {
+	start int
+	end   int
+}
+
+// collectScopeRanges parses src and returns:
+//   - excluded: ranges of comments + STRING basic literals (for scope=code_only)
+//   - idents: ranges of every *ast.Ident (for scope=identifiers_only)
+//
+// Both slices are sorted by start offset.
+func collectScopeRanges(filePath, src string) (excluded, idents []rangePair, err error) {
+	fset := token.NewFileSet()
+	f, perr := parser.ParseFile(fset, filePath, src, parser.ParseComments)
+	if perr != nil {
+		return nil, nil, perr
+	}
+	// Comments (both free-standing groups and attached doc comments end up
+	// inside f.Comments, so iterating that covers everything).
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			start := fset.Position(c.Pos()).Offset
+			end := fset.Position(c.End()).Offset
+			excluded = append(excluded, rangePair{start: start, end: end})
+		}
+	}
+	// String literals + identifiers. Visit every node.
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BasicLit:
+			if x.Kind == token.STRING {
+				start := fset.Position(x.Pos()).Offset
+				end := fset.Position(x.End()).Offset
+				excluded = append(excluded, rangePair{start: start, end: end})
+			}
+		case *ast.Ident:
+			start := fset.Position(x.Pos()).Offset
+			end := start + len(x.Name)
+			idents = append(idents, rangePair{start: start, end: end})
+		}
+		return true
+	})
+	sort.Slice(excluded, func(i, j int) bool { return excluded[i].start < excluded[j].start })
+	sort.Slice(idents, func(i, j int) bool { return idents[i].start < idents[j].start })
+	return excluded, idents, nil
+}
+
+// rangeAllowed reports whether a match spanning [start,end) is permitted
+// under the given scope.
+//   - scope=code_only: reject the match if ANY byte of [start,end) falls inside
+//     one of the excluded ranges (comment or string literal).
+//   - scope=identifiers_only: accept only when [start,end) matches an identifier
+//     range exactly (same start, same length).
+//
+// _ = src is unused today but kept in the signature for future diagnostics.
+func rangeAllowed(start, end int, _ string, scope string, excluded, idents []rangePair) bool {
+	switch scope {
+	case "code_only":
+		for _, r := range excluded {
+			if r.start >= end {
+				break
+			}
+			if r.end <= start {
+				continue
+			}
+			// Any overlap disqualifies the match.
+			return false
+		}
+		return true
+	case "identifiers_only":
+		// Binary search would be faster, but N is tiny. Linear is clearer.
+		for _, r := range idents {
+			if r.start == start && r.end == end {
+				return true
+			}
+			if r.start > start {
+				break
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+// applyRangeReplacements rewrites src by replacing each range in ranges with
+// the corresponding string in replaces. Ranges are assumed non-overlapping and
+// already in ascending start order (which our caller produces).
+func applyRangeReplacements(src string, ranges [][2]int, replaces []string) string {
+	if len(ranges) == 0 {
+		return src
+	}
+	var b strings.Builder
+	// Rough capacity hint.
+	b.Grow(len(src))
+	prev := 0
+	for i, r := range ranges {
+		b.WriteString(src[prev:r[0]])
+		b.WriteString(replaces[i])
+		prev = r[1]
+	}
+	b.WriteString(src[prev:])
+	return b.String()
+}
+
+// formatFilteredLines turns a list of filtered byte ranges into a short
+// "L12, L34, L56" string for warnings. Line numbers are 1-based, computed from
+// the given (pre-replacement) source.
+func formatFilteredLines(src string, ranges [][2]int) string {
+	if len(ranges) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(ranges))
+	seen := make(map[int]struct{}, len(ranges))
+	for _, r := range ranges {
+		line := 1 + strings.Count(src[:r[0]], "\n")
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		parts = append(parts, fmt.Sprintf("L%d", line))
+	}
+	return strings.Join(parts, ", ")
 }

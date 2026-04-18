@@ -2,10 +2,13 @@ package commands_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/commands"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/outbound/filesystem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,4 +103,70 @@ type User struct {
 	// Content on disk (well, in the mockFS) is unchanged.
 	assert.Equal(t, initial, string(fs.files[path]),
 		"TagStruct with Preview=true must not write to the file")
+}
+
+// TestCreateFile_PreviewDoesNotWrite pins the roadmap task #29 claim.
+//
+// The roadmap asserted that `create object=file preview=true` still wrote
+// to disk. When this test was added, verification showed the claim was
+// already STALE — ExecutePlanHandler.Handle routes plan.Preview through
+// previewHandler() → previewFS, whose WriteFile never touches disk. The
+// test therefore passed on first run (outcome A). It is kept so any
+// future regression in the preview plumbing immediately trips here,
+// backed by a real OS-filesystem + os.Stat rather than an in-memory mock.
+func TestCreateFile_PreviewDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new_preview_file.go")
+
+	handler := commands.NewExecutePlanHandler(filesystem.NewFileSystem())
+
+	plan := domain.Plan{
+		Preview: true,
+		Actions: []domain.Action{{
+			Action:   domain.ActionTypeCreateFile,
+			FilePath: path,
+			Content:  "package preview\n\nfunc Hello() string { return \"hi\" }\n",
+		}},
+	}
+
+	result, err := handler.ExecutePlan(context.Background(), plan)
+	require.NoError(t, err)
+
+	assert.True(t, result.Preview, "PlanResult.Preview must reflect plan.Preview")
+	assert.NotEmpty(t, result.Diff, "preview must return a unified diff")
+	assert.Contains(t, result.Diff, "Hello", "diff should mention the new symbol")
+	assert.Contains(t, result.Files, path, "file must be listed as would-be modified")
+
+	// Real disk assertion — the file must NOT exist.
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr),
+		"preview=true must not create the file on disk, got stat err: %v", statErr)
+}
+
+// TestCreateFile_PreviewFalseWrites is the positive control for
+// TestCreateFile_PreviewDoesNotWrite: with Preview=false the same plan
+// must land the file on disk.
+func TestCreateFile_PreviewFalseWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new_real_file.go")
+
+	handler := commands.NewExecutePlanHandler(filesystem.NewFileSystem())
+
+	plan := domain.Plan{
+		Preview: false,
+		Actions: []domain.Action{{
+			Action:   domain.ActionTypeCreateFile,
+			FilePath: path,
+			Content:  "package real\n\nfunc Hello() string { return \"hi\" }\n",
+		}},
+	}
+
+	result, err := handler.ExecutePlan(context.Background(), plan)
+	require.NoError(t, err)
+	assert.False(t, result.Preview, "Preview=false must not flip the flag")
+
+	data, statErr := os.ReadFile(path)
+	require.NoError(t, statErr, "preview=false must create the file on disk")
+	assert.Contains(t, string(data), "package real")
+	assert.Contains(t, string(data), "Hello")
 }

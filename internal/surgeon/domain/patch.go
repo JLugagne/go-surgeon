@@ -179,6 +179,11 @@ type PatchFileRequest struct {
 	FilePath string
 	Patches  []FilePatch
 	Preview  bool // if true, return diff without writing
+	// Scope restricts where substitutions may apply.
+	// Valid values: ""/"all" (default — every occurrence, current behavior),
+	// "code_only" (skip matches that fall inside comments or string literals),
+	// "identifiers_only" (only match at *ast.Ident boundaries, exact length).
+	Scope string
 }
 
 // PatchFileResult is the output of PatchFile.
@@ -211,4 +216,56 @@ type PatchDeclResult struct {
 	// Warnings are non-fatal notes about this patch operation — e.g.,
 	// "occurrence: N replaced, but the value still contains M more matches at lines X, Y."
 	Warnings []string
+}
+
+// PatchStructBulkItem is one (file, identifier, patches) target in a bulk struct patch call.
+type PatchStructBulkItem struct {
+	FilePath   string
+	Identifier string
+	Patches    []StructPatch
+}
+
+// PatchStructBulkRequest is the input to PatchStructBulk. It groups multiple
+// (file, identifier, patches) items into one atomic call: if any item fails,
+// no file is modified.
+type PatchStructBulkRequest struct {
+	Items   []PatchStructBulkItem
+	Preview bool
+}
+
+// PatchStructBulkResult is the output of PatchStructBulk. Items is parallel to
+// the input Items slice; Diff is the combined unified diff of all writes with
+// per-item headers.
+type PatchStructBulkResult struct {
+	Items   []PatchStructResult
+	Applied int
+	Preview bool
+	Diff    string
+}
+
+// PatchFunctionBulkItem is one (file, identifier, patches) target in a bulk
+// function patch call.
+type PatchFunctionBulkItem struct {
+	FilePath      string
+	Identifier    string
+	Patches       []FunctionPatch
+	IncludeNested bool
+}
+
+// PatchFunctionBulkRequest is the input to PatchFunctionBulk. It groups
+// multiple (file, identifier, patches) items into one atomic call: if any item
+// fails, no file is modified.
+type PatchFunctionBulkRequest struct {
+	Items   []PatchFunctionBulkItem
+	Preview bool
+}
+
+// PatchFunctionBulkResult is the output of PatchFunctionBulk. Items is
+// parallel to the input Items slice; Diff is the combined unified diff of all
+// writes with per-item headers.
+type PatchFunctionBulkResult struct {
+	Items   []PatchFunctionResult
+	Applied int
+	Preview bool
+	Diff    string
 }
