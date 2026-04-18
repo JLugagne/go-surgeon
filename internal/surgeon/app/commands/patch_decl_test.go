@@ -202,6 +202,10 @@ func TestPatchDecl_OccurrenceDisambiguation(t *testing.T) {
 		assert.Equal(t, "PATCH_FAILED", de.Code)
 		assert.Contains(t, de.Message, "matched 3 times")
 		assert.Contains(t, de.Message, "Disambiguate with occurrence")
+		// Candidates now include absolute line numbers plus an at_line retry hint.
+		assert.Regexp(t, `L\d+: foo`, de.Message)
+		assert.Contains(t, de.Message, "Hint: retry with at_line:")
+		assert.Contains(t, de.Message, "or use occurrence: 1..3")
 	})
 
 	t.Run("occurrence=2 picks the second match and warns about leftovers", func(t *testing.T) {
