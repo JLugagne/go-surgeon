@@ -334,14 +334,25 @@ type patchFileOutput struct {
 
 // patchOutput is the structured result for patch_function, patch_struct and patch_interface.
 type patchOutput struct {
-	File         string   `json:"file"`
-	Identifier   string   `json:"identifier"`
-	Applied      int      `json:"applied"`
-	Preview      bool     `json:"preview,omitempty"`
-	Diff         string   `json:"diff,omitempty"`
-	MockUpdated  bool     `json:"mock_updated,omitempty"`
-	AddedImports []string `json:"added_imports,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
+	File         string         `json:"file"`
+	Identifier   string         `json:"identifier"`
+	Applied      int            `json:"applied"`
+	Preview      bool           `json:"preview,omitempty"`
+	Diff         string         `json:"diff,omitempty"`
+	MockUpdated  bool           `json:"mock_updated,omitempty"`
+	AddedImports []string       `json:"added_imports,omitempty"`
+	Warnings     []string       `json:"warnings,omitempty"`
+	AutoLifts    []autoLiftJSON `json:"auto_lifts,omitempty"`
+}
+
+// autoLiftJSON mirrors domain.AutoLiftInfo in the structured output so
+// callers see when an insert_before/insert_after was lifted out of a
+// nested scope to the enclosing top-level statement.
+type autoLiftJSON struct {
+	PatchIndex int    `json:"patch_index"`
+	LiftedFrom string `json:"lifted_from"`
+	LiftedTo   string `json:"lifted_to"`
+	Context    string `json:"context,omitempty"`
 }
 
 // implementOutput is the structured result for the implement tool.

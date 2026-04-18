@@ -35,6 +35,12 @@ EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewr
 - Updating or deleting an interface                  → update_interface / delete_interface (keep the mock in sync via mock_file/mock_name/delete_mock)
 - Several coordinated edits                          → execute_plan (atomic, up to 15 actions)
 
+WHEN TO BATCH WITH execute_plan
+Principle: if you're about to make 3+ related edits that must land together, use execute_plan — one atomic call with rollback on failure.
+- Example A (same change to two interfaces): bundle two update_interface actions in one execute_plan. Calling update_interface twice is two round-trips AND if the second fails the file is left in an intermediate state where only one interface carries the new method.
+- Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type.
+When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch_* tools already preserve everything you didn't touch.
+
 Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_decl/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
 
 VALIDATE (after you edit, to confirm the change is sound)
@@ -669,13 +675,26 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 		for _, w := range result.Warnings {
 			prefix += "\n  WARNING: " + w
 		}
+		var liftJSON []autoLiftJSON
+		for _, al := range result.AutoLifts {
+			liftJSON = append(liftJSON, autoLiftJSON{
+				PatchIndex: al.PatchIndex,
+				LiftedFrom: al.LiftedFrom,
+				LiftedTo:   al.LiftedTo,
+				Context:    al.Context,
+			})
+			prefix += fmt.Sprintf("\n  AUTO_LIFTED patch #%d: from %s -> %s", al.PatchIndex, al.LiftedFrom, al.LiftedTo)
+			if al.Context != "" {
+				prefix += "\n" + al.Context
+			}
+		}
 		if result.Diff != "" {
 			res := textResult(prefix + "\n\n" + result.Diff)
-			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
+			res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings, AutoLifts: liftJSON}
 			return res, nil, nil
 		}
 		res := textResult(prefix)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings, AutoLifts: liftJSON}
 		return res, nil, nil
 	})
 

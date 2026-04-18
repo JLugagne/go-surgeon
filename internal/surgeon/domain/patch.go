@@ -52,6 +52,21 @@ type PatchFunctionResult struct {
 	AddedImports []string
 	// Warnings are non-fatal notes about this patch operation — e.g., "occurrence: N replaced, but the body still contains M more matches at lines X, Y."
 	Warnings []string
+	// AutoLifts records any insert_before/insert_after patches whose anchor
+	// matched inside a nested scope (closure body, if-branch, for-loop,
+	// switch case) and was auto-lifted to the enclosing top-level statement.
+	AutoLifts []AutoLiftInfo
+}
+
+// AutoLiftInfo describes one insertion whose anchor landed in a nested scope
+// and was auto-lifted to the outermost enclosing statement in the target
+// function body. It is surfaced to the caller so the behaviour is observable
+// rather than silent.
+type AutoLiftInfo struct {
+	PatchIndex int    // 1-based index into PatchFunctionRequest.Patches
+	LiftedFrom string // description of the nested scope, e.g. "closure body at L241"
+	LiftedTo   string // description of the top-level anchor, e.g. "function body at L225"
+	Context    string // ±10 non-blank lines around the insertion with +markers on inserted lines
 }
 
 // StructPatchOp is the operation type for a struct declaration patch.

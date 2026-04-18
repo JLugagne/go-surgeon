@@ -85,20 +85,12 @@ func (h *SurgeonQueriesHandler) resolveSymbol(ctx context.Context, query domain.
 		return nil, nil, nil, fmt.Errorf("resolve dir %q: %w", dir, err)
 	}
 
-	fset := token.NewFileSet()
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax |
-			packages.NeedTypesInfo | packages.NeedModule | packages.NeedDeps,
-		Context: ctx,
-		Dir:     absDir,
-		Fset:    fset,
-		Tests:   query.Tests,
-	}
-	pkgs, err := packages.Load(cfg, "./...")
+	loadedPkgs, err := h.loader.Load(ctx, absDir, query.Tests)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load packages from %q: %w", absDir, err)
+		return nil, nil, nil, err
 	}
+	fset := loadedPkgs.Fset
+	pkgs := loadedPkgs.Pkgs
 	if len(pkgs) == 0 {
 		return nil, nil, nil, fmt.Errorf("no Go packages found under %q", absDir)
 	}

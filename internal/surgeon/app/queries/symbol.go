@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/app/loader"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
 )
@@ -19,10 +20,27 @@ import (
 type SurgeonQueriesHandler struct {
 	fs       filesystem.FileSystem
 	resolver *moduleResolver
+	loader   *loader.Loader
 }
 
 func NewSurgeonQueriesHandler(fs filesystem.FileSystem) *SurgeonQueriesHandler {
-	return &SurgeonQueriesHandler{fs: fs, resolver: newModuleResolver()}
+	return &SurgeonQueriesHandler{fs: fs, resolver: newModuleResolver(), loader: loader.New()}
+}
+
+// WithLoader lets callers share a package loader cache across handlers
+// (e.g. wire the same *loader.Loader into both queries and commands so
+// a find_references followed by a rename_symbol hits the cache on the
+// second call). Returns h for chaining.
+func (h *SurgeonQueriesHandler) WithLoader(l *loader.Loader) *SurgeonQueriesHandler {
+	if l != nil {
+		h.loader = l
+	}
+	return h
+}
+
+// Loader exposes the cached packages loader so other handlers can share it.
+func (h *SurgeonQueriesHandler) Loader() *loader.Loader {
+	return h.loader
 }
 
 func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {

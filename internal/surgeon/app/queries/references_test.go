@@ -158,3 +158,31 @@ func TestFindDefinition_EmptyNameRejected(t *testing.T) {
 	_, err := handler.FindDefinition(context.Background(), domain.ReferencesQuery{})
 	require.Error(t, err)
 }
+
+// TestFindReferences_CachesPackagesLoad proves the shared loader cache
+// is consulted by FindReferences: after one call primes the cache,
+// a second identical call hits it instead of re-running packages.Load.
+// This halves the wall-clock cost of the common agent workflow
+// "find_references X then rename_symbol X Y".
+func TestFindReferences_CachesPackagesLoad(t *testing.T) {
+	dir := t.TempDir()
+	writeRefModule(t, dir)
+
+	handler := queries.NewSurgeonQueriesHandler(nil)
+
+	runInDir(t, dir, func() {
+		q := domain.ReferencesQuery{
+			Symbol: domain.SymbolRef{Name: "Greet", Receiver: "Greeter"},
+			Dir:    ".",
+		}
+		_, err := handler.FindReferences(context.Background(), q)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), handler.Loader().Hits())
+		assert.Equal(t, int64(1), handler.Loader().Misses())
+
+		_, err = handler.FindReferences(context.Background(), q)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), handler.Loader().Hits(), "second call should hit the cache")
+		assert.Equal(t, int64(1), handler.Loader().Misses())
+	})
+}

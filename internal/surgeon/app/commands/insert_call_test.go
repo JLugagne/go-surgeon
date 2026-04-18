@@ -229,6 +229,47 @@ func (w *Wirer) Setup(mux *http.ServeMux, app *app.App) {
 	assert.Contains(t, out, "setupPayOrderRoute(mux, app)")
 }
 
+func TestInsertCall_AutoLift_MarkerInClosure(t *testing.T) {
+	// The marker text "registerTools()" lives inside a func-literal
+	// closure. insert_call with after:<marker> should NOT land inside
+	// the closure body — it should auto-lift to the top-level
+	// statement that owns the closure.
+	const src = `package wire
+
+func NewServer() {
+	setupStart()
+	once(func() {
+		registerTools()
+	})
+	setupEnd()
+}
+
+func setupStart()     {}
+func setupEnd()       {}
+func registerTools()  {}
+func once(fn func())  { fn() }
+`
+	fs := &mockFS{files: map[string][]byte{"wire.go": []byte(src)}}
+	h := commands.NewExecutePlanHandler(fs)
+
+	_, err := h.ExecutePlan(context.Background(), makeInsertCallPlan(
+		"wire.go", "NewServer", "registerMoreTools()", "after:registerTools()",
+	))
+	require.NoError(t, err)
+
+	out := string(fs.files["wire.go"])
+	// registerMoreTools must appear after the once(...) block (top-level)
+	// and before setupEnd() — not inside the closure.
+	ixOnce := indexOf(out, "once(")
+	ixMore := indexOf(out, "registerMoreTools()")
+	ixEnd := indexOf(out, "setupEnd()")
+	require.GreaterOrEqual(t, ixMore, 0, "inserted call not found")
+	assert.Greater(t, ixMore, ixOnce, "inserted call should appear after the once(...) block")
+	assert.Less(t, ixMore, ixEnd, "inserted call should appear before setupEnd()")
+	// Top-level single-tab indentation.
+	assert.Regexp(t, `(?m)^\tregisterMoreTools\(\)$`, out)
+}
+
 // indexOf returns the byte index of substr in s, or -1.
 func indexOf(s, substr string) int {
 	for i := 0; i <= len(s)-len(substr); i++ {
