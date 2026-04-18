@@ -192,9 +192,6 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			if len(results) == 0 {
 				return textResult(fmt.Sprintf("No declarations match pattern %q.", in.Pattern)), nil, nil
 			}
-			if in.Body && len(results) > 3 {
-				return errorResult(fmt.Sprintf("body=true refused: pattern matched %d declarations (max 3). Refine the pattern or re-run per-symbol with query.", len(results))), nil, nil
-			}
 			text := formatPatternResults(results, in.Body, in.Pattern, in.TokenBudget)
 			return textResult(text), nil, nil
 		}
