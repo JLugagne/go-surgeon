@@ -113,20 +113,24 @@ The server auto-advertises instructions telling the agent to use go-surgeon tool
 go-surgeon mcp
 ```
 
-18 tools over stdio, grouped by purpose:
+27 tools over stdio, grouped by purpose:
 
 | Tools | Purpose |
 |---|---|
-| `graph`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
+| `overview`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
+| `find_definition`, `find_references`, `rename_symbol` | Type-aware cross-package symbol lookup and rename — powered by `go/packages` |
 | `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write** |
-| `patch_function`, `patch_struct`, `patch_interface` | Surgical in-place edits: one line inside a body, one struct field, one interface method — **avoids re-emitting whole declarations** |
-| `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`) |
+| `patch_function`, `patch_struct`, `patch_interface`, `patch_file`, `patch_decl` | Surgical in-place edits: one line inside a body, one struct field, one interface method, cross-function batch rename, or a const/var value — **avoids re-emitting whole declarations** |
+| `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`); auto-lifts out of nested scopes |
 | `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated (and auto-deleted) mocks |
 | `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
-| `execute_plan` | Run up to 15 edits atomically from a YAML plan |
+| `build_check`, `test_run` | Compile-verify and run tests in-loop; `affected_by=<file>` narrows to the file's reverse-dep closure |
+| `execute_plan` | Run up to 15 edits atomically from a YAML plan — supports every action type including `patch_*` |
+| `batch_query` | Run up to 10 read-only queries (`symbol` / `overview` / `find_definition` / `find_references`) in one round-trip |
+| `describe_tool` | Queryable catalog of every tool — no args for the grouped list, `name=X` for detail |
 
-All `patch_*` tools support `preview=true` to return a diff without writing.
+Every write tool supports `preview=true` to return a unified diff without writing. Errors carry a structured `{code, message}` in StructuredContent so agents can retry on `CONFLICT`, `NOT_FOUND`, `PATCH_FAILED`, etc. without string-matching.
 
 See [`USAGE.md`](USAGE.md) for the full parameter reference.
 
@@ -206,6 +210,18 @@ patch_interface(
 
 `patch_function` does the same for function bodies, with `replace`, `insert_before`, `insert_after`, `delete`, and `wrap` operations — including RE2 regex matching when literal text isn't enough. The agent sends 3 lines of change, not 50 lines of function body.
 
+### `rename_symbol` — type-aware rename across the module
+
+Renaming a symbol with `sed` or generic Edit is how you rename the wrong thing: same-named identifiers in other packages, shadowing variables, method receivers that happen to share the name. `rename_symbol` resolves the target via `go/packages` and rewrites only the identifiers that bind to the same `types.Object`.
+
+```
+rename_symbol(name="BookRepo", new_name="BookRepository")
+rename_symbol(name="Handle", new_name="Serve", receiver="BookHandler")
+rename_symbol(name="Config", new_name="Settings", preview=true)
+```
+
+Refuses export-status flips and in-scope name collisions. `find_references` (same resolver) lets you preview impact without touching files; set `include_definition=true` to see the declaration alongside the uses.
+
 ### `module` — read third-party code the right way
 
 Instead of your agent shelling into `$GOMODCACHE` with `find` and `cat`:
@@ -229,6 +245,12 @@ go-surgeon graph --symbols --dir internal/catalog/domain
 
 # Read a symbol
 go-surgeon symbol BookHandler.Handle --body
+
+# Find every reference to a symbol, type-aware
+go-surgeon find-references BookRepository --include-definition
+
+# Rename a symbol and every reference across the module
+go-surgeon rename-symbol BookRepo BookRepository --preview
 
 # Edit a function (stdin = raw Go, no package/imports)
 cat <<'EOF' | go-surgeon update-func --file internal/catalog/domain/book.go --id NewBook
