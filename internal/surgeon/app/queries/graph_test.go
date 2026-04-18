@@ -790,3 +790,51 @@ func TestGraph_DepthAndExclude_Combined(t *testing.T) {
 	assert.Contains(t, paths, filepath.Join(tmpDir, "pkg", "domain", "repositories"))
 	assert.NotContains(t, paths, filepath.Join(tmpDir, "pkg", "app"))
 }
+
+// TestGraph_DotDir_ModuleRoot_NoTopLevelGoFiles reproduces the 'No Go packages found
+// in '.” bug: overview(dir='.', symbols=true) from a module root that has no
+// top-level .go files (only subpackages) used to return zero packages because the
+// non-recursive branch only scans the target directory. The handler should detect
+// the go.mod and fall back to a recursive walk.
+func TestGraph_DotDir_ModuleRoot_NoTopLevelGoFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// go.mod at the root marks this as a module root.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.com/myapp\n\ngo 1.21\n"), 0644))
+
+	// Two subpackages with Go files, but nothing at the root itself.
+	pkgA := filepath.Join(tmpDir, "internal", "a")
+	require.NoError(t, os.MkdirAll(pkgA, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgA, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0644))
+
+	pkgB := filepath.Join(tmpDir, "cmd", "b")
+	require.NoError(t, os.MkdirAll(pkgB, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgB, "b.go"), []byte("package b\n\nfunc B() {}\n"), 0644))
+
+	fs := &mockFS{files: loadFiles(t, tmpDir)}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	// Chdir so Dir:"." resolves to the tmpDir (the module root).
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	packages, err := handler.Graph(context.Background(), domain.GraphOptions{
+		Dir:     ".",
+		Symbols: true,
+	})
+	require.NoError(t, err)
+
+	// Before the fix: packages is empty -> MCP 'overview' reports
+	// "No Go packages found in '.'". After the fix: both subpackages are
+	// discovered via recursive fallback.
+	require.NotEmpty(t, packages, "overview at module root with symbols=true should discover subpackages, not return empty")
+
+	var paths []string
+	for _, p := range packages {
+		paths = append(paths, p.Path)
+	}
+	assert.Contains(t, paths, filepath.Join("internal", "a"))
+	assert.Contains(t, paths, filepath.Join("cmd", "b"))
+}
