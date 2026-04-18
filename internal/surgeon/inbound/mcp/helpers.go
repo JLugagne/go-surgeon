@@ -336,19 +336,6 @@ func formatPatternResults(results []domain.SymbolResult, showBody bool, pattern 
 	return sb.String()
 }
 
-// truncateToBudget clips output to roughly tokenBudget tokens (~4 chars/token).
-func truncateToBudget(s string, tokenBudget, total int) string {
-	limit := tokenBudget * 4
-	if limit >= len(s) {
-		return s
-	}
-	cut := strings.LastIndexByte(s[:limit], '\n')
-	if cut < 0 {
-		cut = limit
-	}
-	return s[:cut] + fmt.Sprintf("\n... (truncated to fit token_budget=%d; total %d results)\n", tokenBudget, total)
-}
-
 // symbolEdit describes one symbol operation within an edit result.
 type symbolEdit struct {
 	Action     string `json:"action"`

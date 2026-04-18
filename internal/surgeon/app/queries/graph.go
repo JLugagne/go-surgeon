@@ -105,7 +105,7 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 			}
 		}
 	}
-	if !(symbols && !recursive) {
+	if !symbols || recursive {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
