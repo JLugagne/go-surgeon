@@ -5,6 +5,8 @@ type ImplementRequest struct {
 	Interface string // e.g. "io.Reader" or "github.com/JLugagne/go-surgeon/internal/surgeon/domain/service.SurgeonCommands"
 	Receiver  string // e.g. "MyStruct" or "*MyStruct"
 	FilePath  string // Target file to append the methods to
+	// Preview, when true, returns the diff without writing.
+	Preview bool
 }
 
 // MockRequest contains the parameters for generating a function-field mock struct.
@@ -12,6 +14,8 @@ type MockRequest struct {
 	Interface string // e.g. "domain/repositories/book.BookRepository"
 	Receiver  string // e.g. "MockBookRepository"
 	FilePath  string // Target file to write the mock to
+	// Preview, when true, returns the diff without writing.
+	Preview bool
 }
 
 // InterfaceActionRequest contains the parameters for add/update/delete-interface commands.
@@ -25,4 +29,6 @@ type InterfaceActionRequest struct {
 	Doc        string // --doc: replacement doc comment (update only)
 	StripDoc   bool   // --strip-doc: remove existing doc comment (update only)
 	DeleteMock bool   // --delete-mock: also remove the mock struct + assertion from MockFile (delete only)
+	// Preview, when true, returns the diff without writing.
+	Preview bool
 }

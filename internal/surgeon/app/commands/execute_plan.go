@@ -14,6 +14,7 @@ import (
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/loader"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 )
 
 // ExecutePlanHandler handles the execution of a surgery plan.
@@ -54,13 +55,40 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 		return domain.PlanResult{}, domain.ErrEmptyPlan
 	}
 
+	// Preview=true funnels the exact same write path through an in-memory
+	// filesystem, so we get a unified diff but never touch disk. Using the
+	// real handler code guarantees the preview matches what a subsequent
+	// non-preview run would produce.
+	if plan.Preview {
+		previewH, dry := h.previewHandler()
+		childPlan := plan
+		childPlan.Preview = false
+		res, err := previewH.Handle(ctx, childPlan)
+		if err != nil {
+			return domain.PlanResult{}, err
+		}
+		diff, diffErr := dry.Diff(ctx)
+		if diffErr != nil {
+			return domain.PlanResult{}, diffErr
+		}
+		res.Files = dry.WrittenFiles()
+		res.FilesModified = len(res.Files)
+		res.Preview = true
+		res.Diff = diff
+		// Added imports are not exercised on the preview path (preview FS
+		// does not run goimports), so blank the field to avoid implying a
+		// guarantee we are not making.
+		res.AddedImports = nil
+		return res, nil
+	}
+
 	modifiedFiles := make(map[string]bool)
 	var warnings []string
 	var addedImports []string
 	seenImports := make(map[string]bool)
 
 	for _, action := range plan.Actions {
-		w, imps, err := h.executeAction(ctx, action)
+		w, imps, err := h.executeAction(ctx, action, plan.Preview)
 		if err != nil {
 			return domain.PlanResult{}, err
 		}
@@ -87,7 +115,7 @@ func (h *ExecutePlanHandler) ExecutePlan(ctx context.Context, plan domain.Plan) 
 	return h.Handle(ctx, plan)
 }
 
-func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Action) ([]string, []string, error) {
+func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Action, preview bool) ([]string, []string, error) {
 	switch action.Action {
 	case domain.ActionTypeCreateFile:
 		imps, err := h.handleCreateFile(ctx, action)
@@ -125,6 +153,62 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 		}
 		_, imps, err := h.DeleteInterface(ctx, req)
 		return nil, imps, err
+	case domain.ActionTypePatchFunction:
+		res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   action.FilePath,
+			Identifier: action.Identifier,
+			Patches:    action.PatchFunctionOps,
+			Preview:    preview,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Warnings, res.AddedImports, nil
+	case domain.ActionTypePatchStruct:
+		res, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   action.FilePath,
+			Identifier: action.Identifier,
+			Patches:    action.PatchStructOps,
+			Preview:    preview,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Warnings, res.AddedImports, nil
+	case domain.ActionTypePatchInterface:
+		res, err := h.PatchInterface(ctx, domain.PatchInterfaceRequest{
+			FilePath:   action.FilePath,
+			Identifier: action.Identifier,
+			Patches:    action.PatchInterfaceOps,
+			Preview:    preview,
+			MockFile:   action.MockFile,
+			MockName:   action.MockName,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Warnings, res.AddedImports, nil
+	case domain.ActionTypePatchFile:
+		res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+			FilePath: action.FilePath,
+			Patches:  action.PatchFileOps,
+			Preview:  preview,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Warnings, res.AddedImports, nil
+	case domain.ActionTypePatchDecl:
+		res, err := h.PatchDecl(ctx, domain.PatchDeclRequest{
+			FilePath:   action.FilePath,
+			Identifier: action.Identifier,
+			Patches:    action.PatchDeclOps,
+			Preview:    preview,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Warnings, res.AddedImports, nil
 	default:
 		return nil, nil, fmt.Errorf("invalid action type: %s", action.Action)
 	}
@@ -836,4 +920,61 @@ func detectBodyIndent(bodyContent string) string {
 		}
 	}
 	return "\t"
+}
+
+// withFS returns a shallow clone of the handler whose filesystem is swapped
+// for fs. It lets preview paths run the normal handler logic against a
+// DryRunFileSystem and then harvest the diff, without leaking the swap
+// across concurrent callers of the shared handler instance.
+func (h *ExecutePlanHandler) withFS(fs filesystem.FileSystem) *ExecutePlanHandler {
+	clone := *h
+	clone.fs = fs
+	return &clone
+}
+
+// previewHandler pairs a shallow handler clone whose filesystem is a
+// DryRunFileSystem wrapping h.fs with that same DryRunFileSystem, so
+// preview branches can run the normal write-path and then harvest a
+// unified diff without touching disk.
+// previewHandler pairs a shallow handler clone whose filesystem is a
+// previewFS wrapping h.fs with that same previewFS, so preview branches
+// can run the normal write-path and then harvest a unified diff without
+// touching disk. The previewFS is a tiny commands-local implementation so
+// that this package does not depend on the outbound layer.
+// previewHandler pairs a shallow handler clone whose filesystem is a
+// previewFS wrapping h.fs with that same previewFS, so preview branches
+// can run the normal write-path and then harvest a unified diff without
+// touching disk. The previewFS is a tiny commands-local implementation so
+// that this package does not depend on the outbound layer.
+//
+// Idempotent: if h.fs is already a previewFS (because the caller went
+// through PreviewWith), we keep the same FS instead of stacking another
+// layer, so writes continue to land in the outer preview buffer and the
+// diff stays complete.
+func (h *ExecutePlanHandler) previewHandler() (*ExecutePlanHandler, *previewFS) {
+	if existing, ok := h.fs.(*previewFS); ok {
+		return h, existing
+	}
+	dry := newPreviewFS(h.fs)
+	return h.withFS(dry), dry
+}
+
+// PreviewWith runs fn against a shallow clone of this handler whose file
+// system is swapped for an in-memory previewFS, then returns the unified
+// diff of every would-be write together with the list of target file
+// paths. It is the uniform escape hatch for commands whose legacy return
+// types do not carry a Diff field (Implement, Mock, TagStruct, Extract-
+// Interface, GenerateTest, AddInterface/UpdateInterface/DeleteInterface).
+// The caller keeps running against the original, disk-backed handler —
+// only the closure sees the preview FS.
+func (h *ExecutePlanHandler) PreviewWith(ctx context.Context, fn func(service.SurgeonCommands) error) (string, []string, error) {
+	previewH, dry := h.previewHandler()
+	if err := fn(previewH); err != nil {
+		return "", nil, err
+	}
+	diff, err := dry.Diff(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	return diff, dry.WrittenFiles(), nil
 }

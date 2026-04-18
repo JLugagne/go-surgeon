@@ -18,6 +18,11 @@ const (
 	ActionTypeUpdateInterface ActionType = "update_interface"
 	ActionTypeDeleteInterface ActionType = "delete_interface"
 	ActionTypeInsertCall      ActionType = "insert_call"
+	ActionTypePatchFunction   ActionType = "patch_function"
+	ActionTypePatchStruct     ActionType = "patch_struct"
+	ActionTypePatchInterface  ActionType = "patch_interface"
+	ActionTypePatchFile       ActionType = "patch_file"
+	ActionTypePatchDecl       ActionType = "patch_decl"
 )
 
 // InsertPosition controls where insert_call places the statement inside the function body.
@@ -45,6 +50,16 @@ type Action struct {
 	StripDoc    bool           `yaml:"strip_doc"`
 	Position    InsertPosition `yaml:"position"`
 	WithTest    bool           `yaml:"with_test"`
+	// PatchFunctionOps carries the scoped patch operations for ActionTypePatchFunction.
+	PatchFunctionOps []FunctionPatch `yaml:"patch_function_ops"`
+	// PatchStructOps carries the scoped patch operations for ActionTypePatchStruct.
+	PatchStructOps []StructPatch `yaml:"patch_struct_ops"`
+	// PatchInterfaceOps carries the scoped patch operations for ActionTypePatchInterface.
+	PatchInterfaceOps []InterfacePatch `yaml:"patch_interface_ops"`
+	// PatchFileOps carries the whole-file substitutions for ActionTypePatchFile.
+	PatchFileOps []FilePatch `yaml:"patch_file_ops"`
+	// PatchDeclOps carries the scoped patch operations for ActionTypePatchDecl (reuses FunctionPatch shape).
+	PatchDeclOps []FunctionPatch `yaml:"patch_decl_ops"`
 }
 
 // PlanResult contains the outcome of executing a plan.
@@ -55,11 +70,17 @@ type PlanResult struct {
 	Warnings []string
 	// AddedImports lists import paths that goimports added to any file written during plan execution (deduped across actions).
 	AddedImports []string
+	// Preview reports whether the plan executed in dry-run mode. When true, no files were written.
+	Preview bool
+	// Diff contains the unified diff of all would-be file changes when Preview is true.
+	Diff string
 }
 
 // Plan is a collection of actions to be executed.
 type Plan struct {
 	Actions []Action
+	// Preview, when true, requests a dry-run: the plan is applied to an in-memory filesystem and a unified diff is returned instead of writing to disk.
+	Preview bool
 }
 
 var (

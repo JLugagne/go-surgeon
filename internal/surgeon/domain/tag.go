@@ -7,4 +7,6 @@ type TagRequest struct {
 	FieldName  string // optional
 	SetTag     string // optional
 	AutoFormat string // optional (e.g. "json", "bson")
+	// Preview, when true, returns the diff without writing.
+	Preview bool
 }

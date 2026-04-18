@@ -8,11 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
+	"golang.org/x/tools/go/packages"
 )
 
 const (
@@ -33,13 +35,29 @@ var diagnosticRegex = regexp.MustCompile(`^(.+\.go):(\d+)(?::(\d+))?:\s*(.+)$`)
 // output is truncated at 64 KiB. Diagnostics are deduplicated per file.
 func (h *SurgeonQueriesHandler) BuildCheck(ctx context.Context, req domain.BuildCheckRequest) (domain.BuildCheckResult, error) {
 	dir := strings.TrimSpace(req.Dir)
-	if dir == "" {
-		dir = "./..."
+	affectedBy := strings.TrimSpace(req.AffectedBy)
+	if dir != "" && affectedBy != "" {
+		return domain.BuildCheckResult{}, fmt.Errorf("dir and affected_by are mutually exclusive")
 	}
 
-	target, err := resolveBuildTarget(dir)
-	if err != nil {
-		return domain.BuildCheckResult{}, err
+	var targets []string
+	var affectedPkgs []string
+	if affectedBy != "" {
+		pkgs, err := h.computeAffectedPackages(ctx, affectedBy, req.Tests)
+		if err != nil {
+			return domain.BuildCheckResult{}, err
+		}
+		targets = pkgs
+		affectedPkgs = pkgs
+	} else {
+		if dir == "" {
+			dir = "./..."
+		}
+		target, err := resolveBuildTarget(dir)
+		if err != nil {
+			return domain.BuildCheckResult{}, err
+		}
+		targets = []string{target}
 	}
 
 	timeout := req.TimeoutSeconds
@@ -58,7 +76,7 @@ func (h *SurgeonQueriesHandler) BuildCheck(ctx context.Context, req domain.Build
 		// `go test -count=0` compiles test binaries without running them.
 		args = []string{"test", "-count=0", "-run", "^$"}
 	}
-	args = append(args, target)
+	args = append(args, targets...)
 
 	cmd := exec.CommandContext(runCtx, "go", args...)
 	cmd.Env = os.Environ()
@@ -105,6 +123,7 @@ func (h *SurgeonQueriesHandler) BuildCheck(ctx context.Context, req domain.Build
 		DurationMs:  duration.Milliseconds(),
 		TimedOut:    timedOut,
 		Truncated:   buf.truncated,
+		Packages:    affectedPkgs,
 	}, nil
 }
 
@@ -220,4 +239,171 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) String() string {
 	return string(b.buf)
+}
+
+// computeAffectedPackages resolves the owning package of filePath and walks
+// the module's reverse-dependency graph to find every package whose (transitive)
+// imports include the owner. The returned slice is the owner plus its rdeps,
+// suitable for passing as positional args to `go build`.
+//
+// The function loads the whole module once via the shared loader cache (keyed
+// on absolute module root + tests), builds a forward-import map, then inverts
+// it into a reverse-dep map and does a BFS from the owning package. Only
+// packages that belong to the same module as the owner are considered.
+func (h *SurgeonQueriesHandler) computeAffectedPackages(ctx context.Context, filePath string, tests bool) ([]string, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("affected_by is empty")
+	}
+	absFile, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve affected_by %q: %w", filePath, err)
+	}
+	st, err := os.Stat(absFile)
+	if err != nil {
+		return nil, fmt.Errorf("affected_by %q: %w", filePath, err)
+	}
+	if st.IsDir() {
+		return nil, fmt.Errorf("affected_by %q must be a file, not a directory", filePath)
+	}
+
+	absFileDir := filepath.Dir(absFile)
+
+	// Load from the current working directory so cache keys align with the
+	// repo's module root (the typical case from MCP/CLI callers).
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("getwd: %w", err)
+	}
+	loaded, err := h.loader.Load(ctx, cwd, tests)
+	if err != nil {
+		return nil, fmt.Errorf("load packages: %w", err)
+	}
+	if len(loaded.Pkgs) == 0 {
+		return nil, fmt.Errorf("no Go packages found under %q", cwd)
+	}
+
+	// Identify the owning package by matching the file's directory against
+	// the package's GoFiles (Dir(file) equals the package dir for file-per-
+	// package layouts). CompiledGoFiles is authoritative because it survives
+	// build-tag filtering, but GoFiles is a useful fallback on older Go.
+	var owner *packages.Package
+	for _, p := range loaded.Pkgs {
+		if pkgContainsFile(p, absFile, absFileDir) {
+			owner = p
+			break
+		}
+	}
+	if owner == nil {
+		return nil, fmt.Errorf("affected_by %q is not inside any package of the current module", filePath)
+	}
+	if owner.Module == nil {
+		return nil, fmt.Errorf("affected_by %q has no module information", filePath)
+	}
+	moduleRoot := owner.Module.Dir
+	modulePath := owner.Module.Path
+
+	// Build the reverse-dependency closure over packages belonging to the
+	// same module as the owner. Packages outside the module (stdlib, deps)
+	// are ignored — we only rebuild in-repo code.
+	inModule := make(map[string]*packages.Package)
+	for _, p := range loaded.Pkgs {
+		if p.Module != nil && p.Module.Path == modulePath {
+			inModule[p.PkgPath] = p
+		}
+	}
+
+	// Forward edges: pkg -> its direct imports (within the module).
+	// BFS reverse: from owner, walk pkgs that import something already in the
+	// affected set. Keep iterating until no new pkg is added.
+	affected := map[string]struct{}{owner.PkgPath: {}}
+	for {
+		added := false
+		for path, p := range inModule {
+			if _, ok := affected[path]; ok {
+				continue
+			}
+			for imp := range p.Imports {
+				if _, hit := affected[imp]; hit {
+					affected[path] = struct{}{}
+					added = true
+					break
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+
+	// Translate pkg import paths into `./relative/path` form so `go build`
+	// resolves them without needing -C. Packages at the module root map to ".".
+	out := make([]string, 0, len(affected))
+	for pkgPath := range affected {
+		p := inModule[pkgPath]
+		if p == nil || p.Module == nil {
+			continue
+		}
+		rel, err := filepath.Rel(moduleRoot, pkgDir(p))
+		if err != nil || rel == "" || rel == "." {
+			out = append(out, ".")
+			continue
+		}
+		out = append(out, "./"+filepath.ToSlash(rel))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// pkgContainsFile reports whether absFile is one of the package's Go files,
+// falling back to a directory-equality check when the file lists are empty
+// (e.g. a newly-created file the loader hasn't seen yet).
+func pkgContainsFile(p *packages.Package, absFile, absFileDir string) bool {
+	for _, f := range p.CompiledGoFiles {
+		if sameFile(f, absFile) {
+			return true
+		}
+	}
+	for _, f := range p.GoFiles {
+		if sameFile(f, absFile) {
+			return true
+		}
+	}
+	// Directory fallback: every package file lives in the same directory, so
+	// matching the dir of any known file to absFileDir is sufficient.
+	if d := pkgDir(p); d != "" && sameDir(d, absFileDir) {
+		return true
+	}
+	return false
+}
+
+// pkgDir returns the directory holding the package's Go files, or "" if the
+// package has no files (rare; typically test-only synthetic packages).
+func pkgDir(p *packages.Package) string {
+	if len(p.GoFiles) > 0 {
+		return filepath.Dir(p.GoFiles[0])
+	}
+	if len(p.CompiledGoFiles) > 0 {
+		return filepath.Dir(p.CompiledGoFiles[0])
+	}
+	return ""
+}
+
+// sameFile compares two paths after EvalSymlinks + Clean so that symlinked
+// GOPATH/GOROOT entries still match. Falls back to plain Clean equality when
+// EvalSymlinks fails (e.g. a file that doesn't exist yet).
+func sameFile(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA == nil && errB == nil {
+		return filepath.Clean(ra) == filepath.Clean(rb)
+	}
+	return false
+}
+
+// sameDir is sameFile for directory paths.
+func sameDir(a, b string) bool {
+	return sameFile(a, b)
 }

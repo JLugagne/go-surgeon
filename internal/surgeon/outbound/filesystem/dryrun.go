@@ -3,6 +3,8 @@ package filesystem
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/repositories/filesystem"
 	"github.com/pmezard/go-difflib/difflib"
@@ -48,13 +50,35 @@ func (f *DryRunFileSystem) MkdirAll(ctx context.Context, path string) error {
 
 // PrintDiffs prints all accumulated diffs to stdout.
 func (f *DryRunFileSystem) PrintDiffs(ctx context.Context) error {
-	for path, content := range f.files {
+	text, err := f.CollectDiffs(ctx)
+	if err != nil {
+		return err
+	}
+	if text != "" {
+		fmt.Print(text)
+	}
+	return nil
+}
+
+// CollectDiffs returns a unified diff of every pending write accumulated on
+// this filesystem. Deterministic output: files are sorted by path so the
+// same sequence of edits always produces the same diff string (handy for
+// tests and MCP preview responses).
+func (f *DryRunFileSystem) CollectDiffs(ctx context.Context) (string, error) {
+	paths := make([]string, 0, len(f.files))
+	for p := range f.files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	var out strings.Builder
+	for _, path := range paths {
+		content := f.files[path]
 		var original string
 		origBytes, err := f.real.ReadFile(ctx, path)
 		if err == nil {
 			original = string(origBytes)
 		}
-
 		diff := difflib.UnifiedDiff{
 			A:        difflib.SplitLines(original),
 			B:        difflib.SplitLines(string(content)),
@@ -64,11 +88,20 @@ func (f *DryRunFileSystem) PrintDiffs(ctx context.Context) error {
 		}
 		text, err := difflib.GetUnifiedDiffString(diff)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if text != "" {
-			fmt.Print(text)
-		}
+		out.WriteString(text)
 	}
-	return nil
+	return out.String(), nil
+}
+
+// WrittenFiles returns the list of file paths that received a write on this
+// dry-run filesystem, sorted for deterministic ordering.
+func (f *DryRunFileSystem) WrittenFiles() []string {
+	paths := make([]string, 0, len(f.files))
+	for p := range f.files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
 }

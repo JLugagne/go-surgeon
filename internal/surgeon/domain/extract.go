@@ -8,4 +8,6 @@ type ExtractInterfaceRequest struct {
 	OutPath       string // optional
 	MockFile      string // optional
 	MockName      string // optional
+	// Preview, when true, returns the diff without writing.
+	Preview bool
 }

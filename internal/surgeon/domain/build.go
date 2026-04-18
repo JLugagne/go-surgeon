@@ -6,6 +6,8 @@ type BuildCheckRequest struct {
 	Dir            string
 	Tests          bool
 	TimeoutSeconds int
+	// AffectedBy narrows the build to the package that owns this file plus its reverse-dependency closure within the module. Mutually exclusive with Dir. The path is relative to the project root.
+	AffectedBy string
 }
 
 // BuildDiagnostic is a single compiler error/warning with file:line:col + message.
@@ -27,4 +29,6 @@ type BuildCheckResult struct {
 	DurationMs  int64
 	TimedOut    bool
 	Truncated   bool
+	// Packages lists the package import paths actually passed to `go build` (only populated when AffectedBy is used; empty means the whole-module default).
+	Packages []string
 }

@@ -156,6 +156,85 @@ func TestBuildCheck_TimeoutIsReported(t *testing.T) {
 	})
 }
 
+func TestBuildCheck_AffectedByLeafPackageBuildsOnlyOwner(t *testing.T) {
+	dir := t.TempDir()
+	// "leaf" imports nothing from the module and is imported by nothing.
+	// rev-dep closure is just leaf itself.
+	writeGoModule(t, dir, map[string]string{
+		"leaf/leaf.go":     "package leaf\n\nfunc Zero() int { return 0 }\n",
+		"other/other.go":   "package other\n\nfunc One() int { return 1 }\n",
+		"consumer/use.go":  "package consumer\n\nimport \"example.com/buildcheck/other\"\n\nfunc Use() int { return other.One() }\n",
+	})
+
+	runInDir(t, dir, func() {
+		h := newBuildCheckHandler()
+		target := filepath.Join(dir, "leaf", "leaf.go")
+		res, err := h.BuildCheck(context.Background(), domain.BuildCheckRequest{AffectedBy: target})
+		require.NoError(t, err)
+		assert.True(t, res.Success, "raw=%s", res.RawOutput)
+		require.Len(t, res.Packages, 1, "leaf has no reverse-deps; only owner should be built: %v", res.Packages)
+		assert.Contains(t, res.Packages[0], "leaf")
+	})
+}
+
+func TestBuildCheck_AffectedByIncludesReverseDeps(t *testing.T) {
+	dir := t.TempDir()
+	// shared <- midA, midB; midA <- top. Editing shared must rebuild all four.
+	writeGoModule(t, dir, map[string]string{
+		"shared/s.go": "package shared\n\nfunc V() int { return 42 }\n",
+		"midA/a.go":   "package midA\n\nimport \"example.com/buildcheck/shared\"\n\nfunc A() int { return shared.V() }\n",
+		"midB/b.go":   "package midB\n\nimport \"example.com/buildcheck/shared\"\n\nfunc B() int { return shared.V() }\n",
+		"top/t.go":    "package top\n\nimport \"example.com/buildcheck/midA\"\n\nfunc T() int { return midA.A() }\n",
+		"unrelated/u.go": "package unrelated\n\nfunc U() int { return 7 }\n",
+	})
+
+	runInDir(t, dir, func() {
+		h := newBuildCheckHandler()
+		target := filepath.Join(dir, "shared", "s.go")
+		res, err := h.BuildCheck(context.Background(), domain.BuildCheckRequest{AffectedBy: target})
+		require.NoError(t, err)
+		assert.True(t, res.Success, "raw=%s", res.RawOutput)
+
+		joined := strings.Join(res.Packages, " ")
+		assert.Contains(t, joined, "shared", "owner missing from %v", res.Packages)
+		assert.Contains(t, joined, "midA", "direct rdep missing from %v", res.Packages)
+		assert.Contains(t, joined, "midB", "direct rdep missing from %v", res.Packages)
+		assert.Contains(t, joined, "top", "transitive rdep missing from %v", res.Packages)
+		assert.NotContains(t, joined, "unrelated", "unrelated pkg should not be built: %v", res.Packages)
+	})
+}
+
+func TestBuildCheck_AffectedByRejectsDirCombo(t *testing.T) {
+	dir := t.TempDir()
+	writeGoModule(t, dir, map[string]string{
+		"pkg/ok.go": "package pkg\n\nfunc F() int { return 1 }\n",
+	})
+	runInDir(t, dir, func() {
+		h := newBuildCheckHandler()
+		target := filepath.Join(dir, "pkg", "ok.go")
+		_, err := h.BuildCheck(context.Background(), domain.BuildCheckRequest{Dir: "./pkg", AffectedBy: target})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+}
+
+func TestBuildCheck_AffectedByFileOutsideModule(t *testing.T) {
+	dir := t.TempDir()
+	writeGoModule(t, dir, map[string]string{
+		"pkg/ok.go": "package pkg\n\nfunc F() int { return 1 }\n",
+	})
+	// Write a file outside the module tree.
+	outside := filepath.Join(t.TempDir(), "stray.go")
+	require.NoError(t, os.WriteFile(outside, []byte("package stray\n"), 0644))
+
+	runInDir(t, dir, func() {
+		h := newBuildCheckHandler()
+		_, err := h.BuildCheck(context.Background(), domain.BuildCheckRequest{AffectedBy: outside})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not inside any package")
+	})
+}
+
 func TestBuildCheck_DeduplicatesDiagnostics(t *testing.T) {
 	dir := t.TempDir()
 	// Two files referring to the same missing symbol — go build emits one
