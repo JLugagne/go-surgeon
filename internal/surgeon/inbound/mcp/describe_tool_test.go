@@ -41,9 +41,9 @@ func TestDescribeTool_NoArgs_ListsAllCategories(t *testing.T) {
 // per-tool detail view: summary line + example + related-tools line.
 func TestDescribeTool_Name_SingleToolDetail(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	text := resultText(t, callDescribe(t, cs, map[string]any{"name": "patch_function"}))
+	text := resultText(t, callDescribe(t, cs, map[string]any{"name": "patch"}))
 
-	assert.Contains(t, text, "patch_function (edit)")
+	assert.Contains(t, text, "patch (edit)")
 	assert.Contains(t, text, "example:")
 	assert.Contains(t, text, "see also:")
 	// Unrelated tools should NOT appear in single-tool view.
@@ -57,7 +57,7 @@ func TestDescribeTool_Category_FiltersToGroup(t *testing.T) {
 	text := resultText(t, callDescribe(t, cs, map[string]any{"category": "edit"}))
 
 	assert.Contains(t, text, "EDIT")
-	assert.Contains(t, text, "patch_function")
+	assert.Contains(t, text, "patch ")
 	// Other categories should not appear.
 	assert.NotContains(t, text, "EXPLORE")
 	assert.NotContains(t, text, "VALIDATE")
@@ -150,7 +150,7 @@ func TestDescribeTool_Format_JSON_ListAll(t *testing.T) {
 // returns a {tool: {...}} payload with the catalog fields populated.
 func TestDescribeTool_Format_JSON_SingleTool(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callDescribe(t, cs, map[string]any{"name": "patch_function", "format": "json"})
+	result := callDescribe(t, cs, map[string]any{"name": "patch", "format": "json"})
 	require.False(t, result.IsError)
 	require.NotNil(t, result.StructuredContent)
 
@@ -166,7 +166,7 @@ func TestDescribeTool_Format_JSON_SingleTool(t *testing.T) {
 		} `json:"tool"`
 	}
 	require.NoError(t, json.Unmarshal(buf, &payload))
-	assert.Equal(t, "patch_function", payload.Tool.Name)
+	assert.Equal(t, "patch", payload.Tool.Name)
 	assert.Equal(t, "edit", payload.Tool.Category)
 	assert.NotEmpty(t, payload.Tool.Summary)
 	assert.NotEmpty(t, payload.Tool.Example)
@@ -186,13 +186,13 @@ func TestDescribeTool_Format_InvalidRejected(t *testing.T) {
 // description mentioning both 'params' and 'returns'.
 func TestDescribeTool_OpHelp_SetSignature(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callDescribe(t, cs, map[string]any{"name": "patch_function.set_signature"})
+	result := callDescribe(t, cs, map[string]any{"name": "patch.function"})
 	require.False(t, result.IsError)
 	text := resultText(t, result)
 	assert.NotEmpty(t, text)
-	assert.Contains(t, text, "patch_function.set_signature (edit)")
-	assert.Contains(t, text, "params")
-	assert.Contains(t, text, "returns")
+	assert.Contains(t, text, "patch.function (edit)")
+	assert.Contains(t, text, "function")
+	assert.Contains(t, text, "required:")
 	assert.Contains(t, text, "example:")
 }
 
@@ -201,13 +201,13 @@ func TestDescribeTool_OpHelp_SetSignature(t *testing.T) {
 // known ops for the agent to pick from.
 func TestDescribeTool_OpHelp_UnknownOpErrors(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callDescribe(t, cs, map[string]any{"name": "patch_function.nonsense"})
+	result := callDescribe(t, cs, map[string]any{"name": "patch.nonsense"})
 	require.True(t, result.IsError)
 	text := resultText(t, result)
 	assert.Contains(t, text, "unknown op")
-	assert.Contains(t, text, "patch_function")
+	assert.Contains(t, text, "patch")
 	// Known ops must be listed so the agent sees the menu.
-	assert.Contains(t, text, "set_signature")
+	assert.Contains(t, text, "function")
 }
 
 // TestDescribeTool_OpHelp_NoOpsOnTool asserts tools that don't expose

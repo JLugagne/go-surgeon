@@ -27,8 +27,9 @@ func TestSchemaHint_PatchFunctionStringPatches(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_function",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "function",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
@@ -48,8 +49,9 @@ func TestSchemaHint_PatchStructStringPatches(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_struct",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "struct",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches":    `[{"op":"add_field","name":"X","type":"int"}]`,
@@ -65,8 +67,9 @@ func TestSchemaHint_PatchInterfaceStringPatches(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_interface",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "interface",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches":    `[{"op":"add_method","signature":"Close() error"}]`,
@@ -82,8 +85,9 @@ func TestSchemaHint_PatchDeclStringPatches(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_decl",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "decl",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
@@ -109,8 +113,9 @@ func TestSchemaHint_ArrayPatchesPassThrough(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_function",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "function",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches": []map[string]any{
@@ -155,8 +160,9 @@ func TestSchemaHint_PatchesIsUnrelatedString(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "patch_function",
+		Name: "patch",
 		Arguments: map[string]any{
+			"target":     "function",
 			"file":       "foo.go",
 			"identifier": "Foo",
 			"patches":    "not-json",
