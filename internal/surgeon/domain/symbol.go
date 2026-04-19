@@ -18,6 +18,10 @@ type SymbolQuery struct {
 	// "" (default): just the symbol, its package, and imports.
 	// "file": additionally populate FileOutline with sibling declaration signatures, so the agent sees the whole file's structure in one call.
 	Context string
+	// AtLine, when > 0, resolves the outermost named declaration that spans
+	// that line in File. Mutually exclusive with Name/Pattern/Receiver.
+	File   string
+	AtLine int
 }
 
 // SymbolResult represents the extracted information for a symbol.

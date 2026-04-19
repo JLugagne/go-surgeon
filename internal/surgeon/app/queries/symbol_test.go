@@ -298,3 +298,80 @@ func registerMulti() {}
 	assert.Contains(t, byName["registerMulti"].Doc, "registerMulti describes the first sentence.")
 	assert.Contains(t, byName["registerMulti"].Doc, "A second paragraph should be ignored entirely.")
 }
+
+func TestFindSymbols_AtLine(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.go")
+	code := `package testpkg
+
+// MyStruct is a test struct.
+type MyStruct struct {
+	Field1 string
+}
+
+// DoWork does work.
+func (m *MyStruct) DoWork() error {
+
+	return nil
+}
+
+// FreeFunc is free.
+func FreeFunc() {
+}
+
+const MaxItems = 10
+`
+	err := os.WriteFile(filePath, []byte(code), 0644)
+	require.NoError(t, err)
+
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(code)}}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	t.Run("line inside struct body", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 5}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "MyStruct", res[0].Name)
+	})
+
+	t.Run("line on struct declaration", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 4}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "MyStruct", res[0].Name)
+	})
+
+	t.Run("line inside method body", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 11}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "DoWork", res[0].Name)
+		assert.Equal(t, "MyStruct", res[0].Receiver)
+	})
+
+	t.Run("line on free function signature", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 15}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "FreeFunc", res[0].Name)
+		assert.Empty(t, res[0].Receiver)
+	})
+
+	t.Run("line on const declaration", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 18}, tmpDir)
+		require.NoError(t, err)
+		require.Len(t, res, 1)
+		assert.Equal(t, "MaxItems", res[0].Name)
+	})
+
+	t.Run("line outside any declaration returns empty", func(t *testing.T) {
+		res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: filePath, AtLine: 2}, tmpDir)
+		require.NoError(t, err)
+		assert.Empty(t, res)
+	})
+
+	t.Run("missing file returns error", func(t *testing.T) {
+		_, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{File: "", AtLine: 5}, tmpDir)
+		require.Error(t, err)
+	})
+}

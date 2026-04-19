@@ -16,6 +16,8 @@ func NewSymbolCommand(queries service.SurgeonQueries) *cobra.Command {
 	var targetDir string
 	var moduleFlag string
 	var patternFlag string
+	var fileFlag string
+	var atLineFlag int
 
 	cmd := &cobra.Command{
 		Use:   "symbol [Receiver.]Name",
@@ -69,11 +71,43 @@ Run this before editing a function — read the current body first.`,
 			if len(args) > 0 {
 				queryStr = args[0]
 			}
+			atLineSet := atLineFlag > 0
+			if atLineSet && (patternFlag != "" || queryStr != "") {
+				return fmt.Errorf("--at-line is mutually exclusive with --pattern and positional query")
+			}
+			if atLineSet && fileFlag == "" {
+				return fmt.Errorf("--file is required when --at-line is set")
+			}
 			if patternFlag != "" && queryStr != "" {
 				return fmt.Errorf("--pattern and a positional query are mutually exclusive")
 			}
-			if patternFlag == "" && queryStr == "" {
-				return fmt.Errorf("a query argument or --pattern is required")
+			if !atLineSet && patternFlag == "" && queryStr == "" {
+				return fmt.Errorf("a query argument, --pattern, or --at-line (with --file) is required")
+			}
+			if atLineSet {
+				results, err := queries.FindSymbols(ctx, domain.SymbolQuery{File: fileFlag, AtLine: atLineFlag}, targetDir)
+				if err != nil {
+					return err
+				}
+				if len(results) == 0 {
+					fmt.Printf("No declaration found at %s:%d.\n", fileFlag, atLineFlag)
+					return nil
+				}
+				res := results[0]
+				fmt.Printf("Symbol: %s\n", res.Name)
+				if res.Receiver != "" {
+					fmt.Printf("Receiver: %s\n", res.Receiver)
+				}
+				fmt.Printf("File: %s:%d-%d\n", res.File, res.LineStart, res.LineEnd)
+				if res.Doc != "" {
+					fmt.Printf("Doc:\n%s\n", res.Doc)
+				}
+				if showBody {
+					fmt.Printf("Code (Empty lines stripped):\n%s\n", res.Code)
+				} else {
+					fmt.Printf("Signature:\n%s\n", res.Signature)
+				}
+				return nil
 			}
 			if patternFlag != "" {
 				results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: patternFlag, Tests: tests, Module: moduleFlag}, targetDir)
@@ -204,5 +238,7 @@ Run this before editing a function — read the current body first.`,
 	cmd.Flags().StringVarP(&targetDir, "dir", "d", ".", "Directory to search in")
 	cmd.Flags().StringVar(&moduleFlag, "module", "", "Import path of a dependency to search in (e.g. github.com/spf13/cobra)")
 	cmd.Flags().StringVarP(&patternFlag, "pattern", "p", "", "Regex on declaration names; lists all matches (mutually exclusive with positional query)")
+	cmd.Flags().StringVar(&fileFlag, "file", "", "Go file path; required with --at-line")
+	cmd.Flags().IntVar(&atLineFlag, "at-line", 0, "Resolve the outermost declaration that spans this line number (requires --file)")
 	return cmd
 }
