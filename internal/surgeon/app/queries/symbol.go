@@ -44,6 +44,16 @@ func (h *SurgeonQueriesHandler) Loader() *loader.Loader {
 }
 
 func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.SymbolQuery, targetDir string) ([]domain.SymbolResult, error) {
+	if query.AtLine > 0 {
+		result, err := h.findSymbolAtLine(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, nil
+		}
+		return []domain.SymbolResult{*result}, nil
+	}
 	var moduleDir string
 	if query.Module != "" {
 		info, err := h.resolver.Resolve(ctx, query.Module)
@@ -442,4 +452,64 @@ func (h *SurgeonQueriesHandler) extractValueResult(fset *token.FileSet, src []by
 		Doc:         doc,
 		Code:        strings.TrimSuffix(buf.String(), "\n"),
 	}
+}
+
+func (h *SurgeonQueriesHandler) findSymbolAtLine(ctx context.Context, query domain.SymbolQuery) (*domain.SymbolResult, error) {
+	if query.File == "" {
+		return nil, fmt.Errorf("file is required when at_line is set")
+	}
+	src, err := h.fs.ReadFile(ctx, query.File)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", query.File, err)
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, query.File, src, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse %s: %w", query.File, err)
+	}
+	var outline []domain.OutlineEntry
+	if query.Context == "file" {
+		outline = buildFileOutline(fset, src, f)
+	}
+	line := query.AtLine
+	for _, decl := range f.Decls {
+		start := fset.Position(decl.Pos()).Line
+		end := fset.Position(decl.End()).Line
+		if line < start || line > end {
+			continue
+		}
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			recv := ""
+			if fn.Recv != nil {
+				recv = getRecvType(fn.Recv)
+			}
+			r := h.extractFuncResult(fset, src, f, fn, query.File, recv, outline)
+			return &r, nil
+		}
+		if gen, ok := decl.(*ast.GenDecl); ok {
+			switch gen.Tok {
+			case token.TYPE:
+				for _, spec := range gen.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					r := h.extractStructResult(fset, src, f, gen, ts, query.File, outline)
+					return &r, nil
+				}
+			case token.VAR, token.CONST:
+				for _, spec := range gen.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					if len(vs.Names) > 0 {
+						r := h.extractValueResult(fset, src, f, gen, vs, vs.Names[0], query.File, outline)
+						return &r, nil
+					}
+				}
+			}
+		}
+	}
+	return nil, nil
 }
