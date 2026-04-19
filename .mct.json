@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "markets": null,
+  "entries": [
+    {
+      "profile": "dev/agile-team"
+    },
+    {
+      "profile": "tools/go-surgeon"
+    }
+  ]
+}
