@@ -195,7 +195,7 @@ func TestToolsList(t *testing.T) {
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
-		"patch_function", "patch_struct", "patch_interface", "patch_file", "patch_decl",
+		"patch",
 		"patch_struct_bulk", "patch_function_bulk",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
@@ -205,6 +205,11 @@ func TestToolsList(t *testing.T) {
 		assert.True(t, names[name], "missing tool: %s", name)
 	}
 	assert.Equal(t, len(expected), len(result.Tools), "unexpected number of tools")
+	// Verify every tool ships a non-nil InputSchema in ListTools so clients
+	// never need a second round-trip to fetch the schema.
+	for _, tool := range result.Tools {
+		assert.NotNil(t, tool.InputSchema, "tool %q has nil InputSchema in ListTools response", tool.Name)
+	}
 }
 
 // --- Graph tool tests ---
@@ -1163,7 +1168,8 @@ func TestPatchDecl_ToolRoutesToHandler(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "patch_decl", map[string]any{
+	result := callTool(t, cs, "patch", map[string]any{
+		"target":     "decl",
 		"file":       "foo.go",
 		"identifier": "serverInstructions",
 		"patches": []map[string]any{
@@ -1388,7 +1394,8 @@ func TestPatchFunction_AutoLiftBannerLeadsText(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "patch_function", map[string]any{
+	result := callTool(t, cs, "patch", map[string]any{
+		"target":     "function",
 		"file":       "foo.go",
 		"identifier": "Foo",
 		"patches": []map[string]any{

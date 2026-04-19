@@ -10,17 +10,16 @@ import (
 // patchToolNames lists the tools whose 'patches' field must be an array and
 // which are frequently serialized as a JSON-encoded string by buggy clients.
 var patchToolNames = map[string]struct{}{
-	"patch_function":  {},
-	"patch_struct":    {},
-	"patch_interface": {},
-	"patch_decl":      {},
+	"patch": {},
 }
 
 // schemaHintMiddleware intercepts tools/call before the SDK validates the
 // arguments against the tool input schema. When the 'patches' field arrives
 // as a JSON-encoded string instead of an array (a common client-side
 // serialization bug), the SDK returns the opaque error
-//   type: [...] has type "string", want one of "null, array"
+//
+//	type: [...] has type "string", want one of "null, array"
+//
 // which is hard for the agent to act on. This middleware replaces that with an
 // actionable message before the SDK validator ever sees the request.
 func schemaHintMiddleware() mcp.Middleware {

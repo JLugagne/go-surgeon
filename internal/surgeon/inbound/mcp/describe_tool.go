@@ -46,19 +46,15 @@ var toolCatalog = []toolEntry{
 	{Name: "rename_symbol", Category: "refs", Summary: "type-aware: rename a symbol and every reference; blocks export-status flips and in-scope collisions; preview=true for dry run", Example: `{"name": "OldName", "new_name": "NewName", "preview": true}`, Related: "find_references"},
 
 	// EDIT — narrowest first
-	{Name: "patch_function", Category: "edit", Summary: "edit lines inside one function body (literal/regex match, at_line, set_signature, insert_*)", Example: `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "patch_file, update", Ops: patchFunctionOps},
-	{Name: "patch_struct", Category: "edit", Summary: "edit a struct's field list (add/remove/rename/retype/set_tag/set_doc)", Example: `{"file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`, Related: "patch_interface, tag", Ops: patchStructOps},
-	{Name: "patch_interface", Category: "edit", Summary: "edit an interface's method set + regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed)", Example: `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`, Related: "patch_struct, update_interface", Ops: patchInterfaceOps},
-	{Name: "patch_file", Category: "edit", Summary: "whole-file text substitution with AST safety; cross-function batch edits only", Example: `{"file": "foo.go", "patches": [{"match": "oldName", "replace": "newName"}]}`, Related: "patch_function, rename_symbol"},
-	{Name: "patch_decl", Category: "edit", Summary: "edit the value of a top-level const or var (multi-line strings, error vars, …)", Example: `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`, Related: "patch_function", Ops: patchDeclOps},
-	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch_function"},
+	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Ops: patchOps},
+	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch"},
 	{Name: "create", Category: "edit", Summary: "add a new file, function, or struct (object=file|func|struct)", Example: `{"object": "func", "file": "foo.go", "content": "func Foo() {}"}`, Related: "update, execute_plan"},
-	{Name: "update", Category: "edit", Summary: "whole-declaration replacement (replace_file / update_func / update_struct); prefer patch_* when editing in place", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo", "content": "func Foo() {}"}`, Related: "patch_function, create"},
+	{Name: "update", Category: "edit", Summary: "whole-declaration replacement (replace_file / update_func / update_struct); prefer patch when editing in place", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo", "content": "func Foo() {}"}`, Related: "patch, create"},
 	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "delete_interface"},
 
 	// INTERFACE (composite ops: interface + mock in lockstep)
-	{Name: "add_interface", Category: "interface", Summary: "create an interface AND its mock atomically", Example: `{"file": "foo.go", "identifier": "Reader", "content": "Read(p []byte) (int, error)", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch_interface, mock"},
-	{Name: "update_interface", Category: "interface", Summary: "replace an interface's full declaration AND keep its mock in sync", Example: `{"file": "foo.go", "identifier": "Reader", "content": "...", "mock_file": "mock_reader.go"}`, Related: "patch_interface"},
+	{Name: "add_interface", Category: "interface", Summary: "create an interface AND its mock atomically", Example: `{"file": "foo.go", "identifier": "Reader", "content": "Read(p []byte) (int, error)", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch, mock"},
+	{Name: "update_interface", Category: "interface", Summary: "replace an interface's full declaration AND keep its mock in sync", Example: `{"file": "foo.go", "identifier": "Reader", "content": "...", "mock_file": "mock_reader.go"}`, Related: "patch"},
 	{Name: "delete_interface", Category: "interface", Summary: "remove an interface and (optionally) its mock", Example: `{"file": "foo.go", "identifier": "Reader", "delete_mock": true}`, Related: "delete"},
 
 	// CODEGEN
@@ -66,55 +62,87 @@ var toolCatalog = []toolEntry{
 	{Name: "mock", Category: "codegen", Summary: "generate a standalone mock for an interface you don't own (stdlib/third-party)", Example: `{"file": "mock.go", "identifier": "io.Reader"}`, Related: "add_interface"},
 	{Name: "extract_interface", Category: "codegen", Summary: "derive an interface from an existing struct's exported methods", Example: `{"file": "foo.go", "struct": "FooService", "interface": "FooAPI"}`, Related: "add_interface"},
 	{Name: "test", Category: "codegen", Summary: "generate a table-driven test skeleton for a function or method", Example: `{"file": "foo.go", "identifier": "Foo"}`, Related: "test_run"},
-	{Name: "tag", Category: "codegen", Summary: "bulk-generate or set struct field tags (json, bson, …)", Example: `{"file": "foo.go", "identifier": "User", "tag": "json"}`, Related: "patch_struct"},
+	{Name: "tag", Category: "codegen", Summary: "bulk-generate or set struct field tags (json, bson, …)", Example: `{"file": "foo.go", "identifier": "User", "tag": "json"}`, Related: "patch"},
 
 	// VALIDATE
 	{Name: "build_check", Category: "validate", Summary: "run go build and return structured compile diagnostics; affected_by=file narrows to that file's reverse-dep closure", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "test_run"},
 	{Name: "test_run", Category: "validate", Summary: "run go test and return a compact pass/fail report; affected_by=file narrows to owning package + reverse-deps", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "build_check, test"},
 
 	// BATCH
-	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch_function", "file": "a.go", "identifier": "Foo", "patch_function_ops": [...]}]}`, Related: "patch_function, create"},
+	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch", "file": "a.go", "identifier": "Foo", "target": "function", "patch_function_ops": [...]}]}`, Related: "patch, create"},
 	{Name: "batch_query", Category: "batch", Summary: "run up to 10 read-only queries (symbol/overview/find_references/find_definition) in one round-trip; fail-soft per item", Example: `{"queries": [{"op": "overview", "focus": "internal"}, {"op": "symbol", "query": "NewServer"}]}`, Related: "symbol, overview"},
-	{Name: "patch_struct_bulk", Category: "batch", Summary: "apply the same kind of struct patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "A", "patches": [{"op": "add_field", "name": "Preview", "type": "bool"}]}]}`, Related: "patch_struct, execute_plan"},
-	{Name: "patch_function_bulk", Category: "batch", Summary: "apply the same kind of function-body patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch_function, execute_plan"},
+	{Name: "patch_struct_bulk", Category: "batch", Summary: "apply the same kind of struct patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "A", "patches": [{"op": "add_field", "name": "Preview", "type": "bool"}]}]}`, Related: "patch, execute_plan"},
+	{Name: "patch_function_bulk", Category: "batch", Summary: "apply the same kind of function-body patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch, execute_plan"},
 
 	// META
-	{Name: "describe_tool", Category: "meta", Summary: "query this catalog: no args → grouped list; name=X → detail; category=X → filtered list", Example: `{"name": "patch_function"}`},
+	{Name: "describe_tool", Category: "meta", Summary: "query this catalog: no args → grouped list; name=X → detail; category=X → filtered list", Example: `{"name": "patch"}`},
 }
 
-// patchFunctionOps, patchStructOps, patchInterfaceOps, and patchDeclOps
-// describe the per-op help emitted by `describe_tool name=tool.op`.
-// Keep descriptions to 1-2 sentences and the example minimal.
+// patchOps, patchFunctionOps, patchStructOps, patchInterfaceOps, and
+// patchDeclOps describe the per-op help emitted by
+// `describe_tool name=tool.op`. Keep descriptions to 1-2 sentences
+// and the example minimal.
+
+// patchOps is the top-level ops map for the unified patch tool; it
+// documents the target discriminator values rather than individual ops.
+var patchOps = map[string]toolOpEntry{
+	"function": {
+		Description: "Edit lines inside one function body (literal/regex match, at_line, set_signature, insert_*). See patch.function.replace, .insert_before, etc. for per-op detail.",
+		Required:    []string{"target=function", "file", "identifier", "patches"},
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
+	},
+	"struct": {
+		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc).",
+		Required:    []string{"target=struct", "file", "identifier", "patches"},
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`,
+	},
+	"interface": {
+		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed).",
+		Required:    []string{"target=interface", "file", "identifier", "patches"},
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`,
+	},
+	"file": {
+		Description: "Whole-file text substitution with AST safety; use for cross-function batch edits.",
+		Required:    []string{"target=file", "file", "patches"},
+		Example:     `{"target": "file", "file": "foo.go", "patches": [{"match": "oldName", "replace": "newName"}]}`,
+	},
+	"decl": {
+		Description: "Edit the value of a top-level const or var (multi-line strings, error vars, …).",
+		Required:    []string{"target=decl", "file", "identifier", "patches"},
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`,
+	},
+}
+
 var patchFunctionOps = map[string]toolOpEntry{
 	"replace": {
 		Description: "Replace text inside the function body. Matches are whitespace-normalized; disambiguate with occurrence when ambiguous.",
 		Required:    []string{"file", "identifier", "patches[].op=replace", "patches[].match OR match_regex OR at_line/from_line+to_line", "patches[].replace"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
 	},
 	"insert_before": {
 		Description: "Insert a line before the matched location inside the function body.",
 		Required:    []string{"file", "identifier", "patches[].op=insert_before", "patches[].match OR at_line", "patches[].code"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "insert_before", "match": "return nil", "code": "log.Println(\"done\")"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "insert_before", "match": "return nil", "code": "log.Println(\"done\")"}]}`,
 	},
 	"insert_after": {
 		Description: "Insert a line after the matched location inside the function body.",
 		Required:    []string{"file", "identifier", "patches[].op=insert_after", "patches[].match OR at_line", "patches[].code"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "insert_after", "match": "x := 1", "code": "y := 2"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "insert_after", "match": "x := 1", "code": "y := 2"}]}`,
 	},
 	"delete": {
 		Description: "Delete the matched text (or line range) from the function body.",
 		Required:    []string{"file", "identifier", "patches[].op=delete", "patches[].match OR at_line/from_line+to_line"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "delete", "match": "debug := true"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "delete", "match": "debug := true"}]}`,
 	},
 	"wrap": {
 		Description: "Wrap the matched text with a template whose %s is substituted by the match (e.g. adding a guard).",
 		Required:    []string{"file", "identifier", "patches[].op=wrap", "patches[].match", "patches[].wrap"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "wrap", "match": "doStuff()", "wrap": "if ok {\n\t%s\n}"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "wrap", "match": "doStuff()", "wrap": "if ok {\n\t%s\n}"}]}`,
 	},
 	"set_signature": {
 		Description: "Rewrite only the params list and/or the returns of a function or method, leaving the body, name, receiver, and type parameters intact. Supply params (with parens) and/or returns.",
 		Required:    []string{"file", "identifier", "patches[].op=set_signature", "patches[].params AND/OR patches[].returns"},
-		Example:     `{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "set_signature", "params": "(ctx context.Context, x int)", "returns": "error"}]}`,
+		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "set_signature", "params": "(ctx context.Context, x int)", "returns": "error"}]}`,
 	},
 }
 
@@ -122,32 +150,32 @@ var patchStructOps = map[string]toolOpEntry{
 	"add_field": {
 		Description: "Append or insert a field on the struct. Use before/after to anchor or position=first/last.",
 		Required:    []string{"file", "identifier", "patches[].op=add_field", "patches[].name", "patches[].type"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`,
 	},
 	"remove_field": {
 		Description: "Remove a field from the struct by name (use the type literal like 'io.Reader' for embedded fields).",
 		Required:    []string{"file", "identifier", "patches[].op=remove_field", "patches[].name"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "remove_field", "name": "ID"}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "remove_field", "name": "ID"}]}`,
 	},
 	"rename_field": {
 		Description: "Rename a struct field in-place (does not rewrite usages — pair with rename_symbol for that).",
 		Required:    []string{"file", "identifier", "patches[].op=rename_field", "patches[].from", "patches[].to"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "rename_field", "from": "Id", "to": "ID"}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "rename_field", "from": "Id", "to": "ID"}]}`,
 	},
 	"retype_field": {
 		Description: "Change the type of an existing struct field.",
 		Required:    []string{"file", "identifier", "patches[].op=retype_field", "patches[].name", "patches[].type"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "retype_field", "name": "ID", "type": "int64"}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "retype_field", "name": "ID", "type": "int64"}]}`,
 	},
 	"set_tag": {
 		Description: "Set or clear the struct tag on a field (tag content without backticks; empty string clears).",
 		Required:    []string{"file", "identifier", "patches[].op=set_tag", "patches[].name", "patches[].tag"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "set_tag", "name": "Email", "tag": "json:\"email,omitempty\""}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "set_tag", "name": "Email", "tag": "json:\"email,omitempty\""}]}`,
 	},
 	"set_doc": {
 		Description: "Set or clear the doc comment on a field (empty string clears).",
 		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].name", "patches[].doc"},
-		Example:     `{"file": "foo.go", "identifier": "User", "patches": [{"op": "set_doc", "name": "Email", "doc": "Email is the primary contact address."}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "set_doc", "name": "Email", "doc": "Email is the primary contact address."}]}`,
 	},
 }
 
@@ -155,37 +183,37 @@ var patchInterfaceOps = map[string]toolOpEntry{
 	"add_method": {
 		Description: "Append a method to the interface (signature without 'func'). Mock is regenerated in lockstep.",
 		Required:    []string{"file", "identifier", "patches[].op=add_method", "patches[].signature"},
-		Example:     `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`,
 	},
 	"remove_method": {
 		Description: "Remove a method from the interface by name. Mock is regenerated in lockstep.",
 		Required:    []string{"file", "identifier", "patches[].op=remove_method", "patches[].name"},
-		Example:     `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "remove_method", "name": "Close"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "remove_method", "name": "Close"}]}`,
 	},
 	"rename_method": {
 		Description: "Rename an interface method in-place. Does not rewrite call sites — pair with rename_symbol for that.",
 		Required:    []string{"file", "identifier", "patches[].op=rename_method", "patches[].from", "patches[].to"},
-		Example:     `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "rename_method", "from": "Close", "to": "Shutdown"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "rename_method", "from": "Close", "to": "Shutdown"}]}`,
 	},
 	"retype_method": {
 		Description: "Replace a method's signature (params/returns) on the interface; mock is regenerated.",
 		Required:    []string{"file", "identifier", "patches[].op=retype_method", "patches[].name", "patches[].signature"},
-		Example:     `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "retype_method", "name": "Read", "signature": "Read(ctx context.Context, p []byte) (int, error)"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "retype_method", "name": "Read", "signature": "Read(ctx context.Context, p []byte) (int, error)"}]}`,
 	},
 	"set_doc": {
 		Description: "Set or clear the interface-level doc comment (empty string clears).",
 		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].doc"},
-		Example:     `{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "set_doc", "doc": "Reader reads bytes."}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "set_doc", "doc": "Reader reads bytes."}]}`,
 	},
 	"embed": {
 		Description: "Embed another interface type inside this one (e.g. 'io.Reader'). Mock is regenerated.",
 		Required:    []string{"file", "identifier", "patches[].op=embed", "patches[].name"},
-		Example:     `{"file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "embed", "name": "io.Reader"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "embed", "name": "io.Reader"}]}`,
 	},
 	"remove_embed": {
 		Description: "Remove an embedded interface by its type literal.",
 		Required:    []string{"file", "identifier", "patches[].op=remove_embed", "patches[].name"},
-		Example:     `{"file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "remove_embed", "name": "io.Reader"}]}`,
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "remove_embed", "name": "io.Reader"}]}`,
 	},
 }
 
@@ -193,27 +221,27 @@ var patchDeclOps = map[string]toolOpEntry{
 	"replace": {
 		Description: "Replace text inside the const/var's value expression. String literals match inside quotes; other expressions match the full value text.",
 		Required:    []string{"file", "identifier", "patches[].op=replace", "patches[].match OR match_regex OR at_line/from_line+to_line", "patches[].replace"},
-		Example:     `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`,
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`,
 	},
 	"insert_before": {
 		Description: "Insert a line before the matched location inside the value expression.",
 		Required:    []string{"file", "identifier", "patches[].op=insert_before", "patches[].match OR at_line", "patches[].code"},
-		Example:     `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "insert_before", "match": "hello", "code": "greeting: "}]}`,
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "insert_before", "match": "hello", "code": "greeting: "}]}`,
 	},
 	"insert_after": {
 		Description: "Insert a line after the matched location inside the value expression.",
 		Required:    []string{"file", "identifier", "patches[].op=insert_after", "patches[].match OR at_line", "patches[].code"},
-		Example:     `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "insert_after", "match": "hello", "code": " world"}]}`,
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "insert_after", "match": "hello", "code": " world"}]}`,
 	},
 	"delete": {
 		Description: "Delete the matched text (or line range) from the value expression.",
 		Required:    []string{"file", "identifier", "patches[].op=delete", "patches[].match OR at_line/from_line+to_line"},
-		Example:     `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "delete", "match": "deprecated: "}]}`,
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "delete", "match": "deprecated: "}]}`,
 	},
 	"wrap": {
 		Description: "Wrap the matched text with a template whose %s is substituted by the match.",
 		Required:    []string{"file", "identifier", "patches[].op=wrap", "patches[].match", "patches[].wrap"},
-		Example:     `{"file": "foo.go", "identifier": "banner", "patches": [{"op": "wrap", "match": "hello", "wrap": "[%s]"}]}`,
+		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "wrap", "match": "hello", "wrap": "[%s]"}]}`,
 	},
 }
 
@@ -426,6 +454,7 @@ func sortedOpKeys(ops map[string]toolOpEntry) []string {
 // known op catalogs, or nil if the map is not one of them.
 func canonicalOpOrder(ops map[string]toolOpEntry) []string {
 	orders := [][]string{
+		{"function", "struct", "interface", "file", "decl"},
 		{"replace", "insert_before", "insert_after", "delete", "wrap", "set_signature"},
 		{"add_field", "remove_field", "rename_field", "retype_field", "set_tag", "set_doc"},
 		{"add_method", "remove_method", "rename_method", "retype_method", "set_doc", "embed", "remove_embed"},
