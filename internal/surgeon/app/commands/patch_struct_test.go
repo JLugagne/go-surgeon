@@ -115,6 +115,31 @@ type User struct {
 		assert.True(t, idIdx < nameIdx)
 	})
 
+	t.Run("add_field with multiline doc renders comment block", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+
+type Config struct {
+	Host string
+}
+`)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "Config",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpAddField, Name: "File", Type: "string", Doc: "AtLine, when > 0, resolves the outermost declaration that spans\nthat line in File. Mutually exclusive with Name/Pattern."},
+				{Op: domain.StructPatchOpAddField, Name: "AtLine", Type: "int"},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "// AtLine, when > 0, resolves the outermost declaration that spans")
+		assert.Contains(t, content, "// that line in File. Mutually exclusive with Name/Pattern.")
+		// Verify field ordering by finding the field declarations (tab-indented lines)
+		fileFieldIdx := strings.Index(content, "\tFile ")
+		atLineFieldIdx := strings.Index(content, "\tAtLine ")
+		assert.True(t, fileFieldIdx < atLineFieldIdx, "File field should appear before AtLine field")
+	})
 	t.Run("duplicate field name errors without write", func(t *testing.T) {
 		h, fs := newPatchHandler()
 		src := `package p

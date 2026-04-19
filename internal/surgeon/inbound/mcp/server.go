@@ -129,6 +129,8 @@ type symbolInput struct {
 	Context     string `json:"context,omitempty" jsonschema:"optional 'file' to additionally return an outline of sibling declarations in the same file (signatures only, with line ranges) — set this when you might edit nearby code and want to see the file's shape in one call"`
 	TokenBudget int    `json:"token_budget,omitempty" jsonschema:"approximate max tokens in output (pattern mode), 0 means unlimited"`
 	Outline     bool   `json:"outline,omitempty" jsonschema:"pattern mode only: include first-sentence doc summary per match (middle ground between signature-only and body=true)"`
+	File        string `json:"file,omitempty" jsonschema:"absolute or relative path to the Go file; required when at_line is set"`
+	AtLine      int    `json:"at_line,omitempty" jsonschema:"resolve the outermost declaration that spans this 1-based line number in file; mutually exclusive with query and pattern"`
 }
 
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
@@ -172,18 +174,37 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). Indexes funcs, methods, types, vars, and consts. body=true shows the implementation plus the file's package line and import block. In pattern mode, outline=true returns signature + first-sentence doc summary per match (middle ground between signature-only and body=true). When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query and pattern are mutually exclusive.",
+		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). To resolve a file:line diagnostic directly, set file+at_line — returns the outermost named declaration that spans that line, no name lookup needed. body=true shows the implementation plus the file's package line and import block. In pattern mode, outline=true returns signature + first-sentence doc summary per match (middle ground between signature-only and body=true). When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query, pattern, and at_line are mutually exclusive.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
 			dir = "."
 		}
 
+		atLineSet := in.AtLine > 0
+		if atLineSet && (in.Query != "" || in.Pattern != "") {
+			return errorResult("at_line is mutually exclusive with query and pattern"), nil, nil
+		}
 		if in.Query != "" && in.Pattern != "" {
 			return errorResult("query and pattern are mutually exclusive — set one"), nil, nil
 		}
-		if in.Query == "" && in.Pattern == "" {
-			return errorResult("one of query or pattern is required"), nil, nil
+		if !atLineSet && in.Query == "" && in.Pattern == "" {
+			return errorResult("one of query, pattern, or at_line (with file) is required"), nil, nil
+		}
+		if atLineSet && in.File == "" {
+			return errorResult("file is required when at_line is set"), nil, nil
+		}
+
+		if atLineSet {
+			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{File: in.File, AtLine: in.AtLine, Context: in.Context, Tests: in.Tests}, dir)
+			if err != nil {
+				return errorResultWithCode(err.Error(), err), nil, nil
+			}
+			if len(results) == 0 {
+				return textResult(fmt.Sprintf("No declaration found at %s:%d.", in.File, in.AtLine)), nil, nil
+			}
+			text := formatSymbolResults(results, in.Body, fmt.Sprintf("%s:%d", in.File, in.AtLine))
+			return textResult(text), nil, nil
 		}
 
 		if in.Pattern != "" {
@@ -776,12 +797,12 @@ type patchFunctionInput struct {
 func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "patch_function",
-		Description: "Edit lines inside one function body by matching on text. Patches are scoped to the named function and applied atomically. " +
-			"ops: replace, insert_before, insert_after, delete, wrap, set_signature. match is whitespace-normalized. Disambiguate with occurrence (1-based). " +
-			"SIGNATURE EDITS: set_signature rewrites only the params list and/or the results list of the function or method, leaving the body, name, receiver, and any generic type parameters intact. Supply params (with parens) and/or returns; at least one is required. " +
-			"LINE TARGETING: use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) instead of text matching — faster and unambiguous. Mutually exclusive with match/match_regex. " +
-			"match_regex: RE2 alternative to match (no backrefs/lookarounds). " +
-			"SCOPE: by default, text matches are restricted to the target function's own body and SKIP any nested closure (*ast.FuncLit); pass include_nested=true to search inside closures too. " +
+		Description: "Edit lines inside one function body. Patches are scoped to the named function and applied atomically. " +
+			"LINE TARGETING (preferred): use at_line or from_line/to_line with file-absolute line numbers (from symbol body=true) — faster and unambiguous. Mutually exclusive with match/match_regex. " +
+			"TEXT MATCHING (fallback): match is whitespace-normalized; disambiguate with occurrence (1-based). match_regex: RE2 alternative (no backrefs/lookarounds). " +
+			"ops: replace, insert_before, insert_after, delete, wrap, set_signature. " +
+			"SIGNATURE EDITS: set_signature rewrites only the params list and/or the results list, leaving the body, name, receiver, and generic type parameters intact. Supply params (with parens) and/or returns; at least one is required. " +
+			"SCOPE: by default, text matches skip nested closures (*ast.FuncLit); pass include_nested=true to search inside them too. " +
 			"NESTED CLOSURES: use identifier 'Parent>closure[N]' (0-based, ordered by AST appearance) to target the Nth *ast.FuncLit inside Parent — subsequent '>closure[M]' segments drill deeper. " +
 			"preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchFunctionInput) (*mcp.CallToolResult, any, error) {
@@ -949,8 +970,11 @@ type patchStructInput struct {
 
 func registerPatchStructTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "patch_struct",
-		Description: "Edit a struct's field list: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. Patches apply atomically. Embedded fields use their type name (e.g. name='io.Reader'). preview=true returns diff without writing.",
+		Name: "patch_struct",
+		Description: "Edit a struct's field list: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. Patches apply atomically. Embedded fields use their type name (e.g. name='io.Reader'). " +
+			"DOCS: the doc field on add_field / set_doc accepts multi-line text using \\n — use this to add a comment block above a field instead of falling back to update. " +
+			"To add several fields sharing one comment block, put the comment on the first add_field op and leave doc empty on the rest. " +
+			"preview=true returns diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchStructInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

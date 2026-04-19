@@ -1231,8 +1231,7 @@ func directChildClosures(body *ast.BlockStmt) []*ast.FuncLit {
 		return nil
 	}
 	var out []*ast.FuncLit
-	var inspect func(n ast.Node)
-	inspect = func(n ast.Node) {
+	inspect := func(n ast.Node) {
 		ast.Inspect(n, func(nn ast.Node) bool {
 			if nn == n {
 				return true
