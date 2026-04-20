@@ -72,7 +72,7 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 ### 5. Edits can be as granular as a single field or line
 
-`patch_function` makes text-match edits inside a function body. `patch_struct` adds, renames, or retypes a single field. `patch_interface` adds or removes a single method and regenerates the mock. No more re-emitting a whole declaration to change one thing.
+The unified `patch` tool makes scoped edits with a `target` selector: edit inside a function body, add/rename/retype a single struct field, add or remove a single interface method and regenerate the mock — all without re-emitting the whole declaration.
 
 ---
 
@@ -131,20 +131,20 @@ The server auto-advertises instructions telling the agent to use go-surgeon tool
 go-surgeon mcp
 ```
 
-27 tools over stdio, grouped by purpose:
+Tools over stdio, grouped by purpose:
 
 | Tools | Purpose |
 |---|---|
 | `overview`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
 | `find_definition`, `find_references`, `rename_symbol` | Type-aware cross-package symbol lookup and rename — powered by `go/packages` |
 | `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write** |
-| `patch_function`, `patch_struct`, `patch_interface`, `patch_file`, `patch_decl` | Surgical in-place edits: one line inside a body, one struct field, one interface method, cross-function batch rename, or a const/var value — **avoids re-emitting whole declarations** |
+| `patch` | Unified surgical editor — one tool, five targets (`function`, `struct`, `interface`, `file`, `decl`). Scoped in-place edits without re-emitting whole declarations |
 | `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`); auto-lifts out of nested scopes |
 | `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated (and auto-deleted) mocks |
 | `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
 | `build_check`, `test_run` | Compile-verify and run tests in-loop; `affected_by=<file>` narrows to the file's reverse-dep closure |
-| `execute_plan` | Run up to 15 edits atomically from a YAML plan — supports every action type including `patch_*` |
+| `execute_plan` | Run up to 15 edits atomically from a YAML plan — supports every action type including every `patch` target |
 | `batch_query` | Run up to 10 read-only queries (`symbol` / `overview` / `find_definition` / `find_references`) in one round-trip |
 | `describe_tool` | Queryable catalog of every tool — no args for the grouped list, `name=X` for detail |
 
@@ -198,12 +198,30 @@ actions:
 
 One tool call. One success or one rollback. No drift between steps.
 
-### `patch_function` / `patch_struct` / `patch_interface` — edit without re-emitting
+### `patch` — one tool, five targets, surgical edits
 
-Classic AST edit tools make you resend the whole declaration to change one line. The `patch_*` tools apply surgical, text-match edits scoped to a single function body, struct, or interface — all atomic, all `goimports`-aware, all optionally previewable as a diff.
+Classic AST edit tools make you resend the whole declaration to change one line. The unified `patch` tool applies scoped, text-match-or-line-targeted edits to a single function body, struct, interface, whole file, or const/var — all atomic, all `goimports`-aware, all optionally previewable as a diff.
+
+**Target a function body:**
 
 ```
-patch_struct(
+patch(
+  target="function",
+  file="internal/catalog/app/commands/book_handler.go",
+  identifier="BookHandler.Create",
+  patches=[
+    {op: "replace", match: "return err", replace: "return fmt.Errorf(\"create book: %w\", err)"},
+  ],
+)
+```
+
+Line targeting (`at_line`, `from_line`/`to_line`) is preferred when you have line numbers from a build error or stack trace — faster and unambiguous. Text matching (`match`, `match_regex`) is the fallback.
+
+**Target a struct's field list:**
+
+```
+patch(
+  target="struct",
   file="internal/catalog/domain/user.go",
   identifier="User",
   patches=[
@@ -214,8 +232,11 @@ patch_struct(
 )
 ```
 
+**Target an interface's method list (with automatic mock regeneration):**
+
 ```
-patch_interface(
+patch(
+  target="interface",
   file="internal/catalog/domain/repositories/book/book.go",
   identifier="BookRepository",
   mock_file="internal/catalog/domain/repositories/book/booktest/mock.go",
@@ -226,7 +247,7 @@ patch_interface(
 )
 ```
 
-`patch_function` does the same for function bodies, with `replace`, `insert_before`, `insert_after`, `delete`, and `wrap` operations — including RE2 regex matching when literal text isn't enough. The agent sends 3 lines of change, not 50 lines of function body.
+Other targets: `file` for cross-function batch substitutions, `decl` for const/var values. See [`USAGE.md`](USAGE.md) for the full operation catalog per target.
 
 ### `rename_symbol` — type-aware rename across the module
 
@@ -289,11 +310,12 @@ See [`USAGE.md`](USAGE.md) for the full CLI reference.
 
 ## 🔒 Safety
 
-> ⚠️ **Edits modify your source code directly.** Use `--dry-run` (CLI) or `preview=true` (MCP `patch_*` tools) to see the unified diff before applying.
+> ⚠️ **Edits modify your source code directly.** Use `--dry-run` (CLI) or `preview=true` (MCP `patch` and other write tools) to see the unified diff before applying.
 
 - **`--dry-run` / `--diff`** (CLI) prints the unified diff for every change without writing to disk
-- **`preview=true`** (MCP `patch_function` / `patch_struct` / `patch_interface`) returns the diff without writing
-- **Atomic operations** — each edit either fully succeeds or returns a structured error; `patch_*` tools abort the whole batch on any single failure
+- **`preview=true`** (MCP `patch` and other write tools) returns the diff without writing
+- **Atomic operations** — each edit either fully succeeds or returns a structured error; `patch` aborts the whole batch on any single failure
+- **Brace and body guards** — `patch` on `function` rejects edits with unbalanced braces or that would erase the entire function body, with hints pointing at the correct syntax
 - **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
 - **Mocks stay in sync** — `delete_interface` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
 
