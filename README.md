@@ -84,10 +84,10 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
 ```
 
-Installs the latest release binary to `/usr/local/bin`. Override the destination with `INSTALL_DIR`:
+Installs the latest release binary to `~/.local/bin` (no root required). Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
 ```
 
 **Homebrew / Scoop / Windows** — coming soon.
