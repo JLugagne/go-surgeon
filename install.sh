@@ -3,7 +3,7 @@ set -e
 
 REPO="JLugagne/go-surgeon"
 BINARY="go-surgeon"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 os() {
   case "$(uname -s)" in
@@ -40,12 +40,8 @@ echo "Installing ${BINARY} ${VERSION} (${OS}/${ARCH})..."
 curl -fsSL "$URL" -o "${TMP}/${TARBALL}"
 tar -xzf "${TMP}/${TARBALL}" -C "$TMP"
 
-if [ ! -w "$INSTALL_DIR" ]; then
-  echo "No write access to ${INSTALL_DIR}, using sudo..."
-  sudo install -m 0755 "${TMP}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-else
-  install -m 0755 "${TMP}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-fi
+mkdir -p "$INSTALL_DIR"
+install -m 0755 "${TMP}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 
 echo "Installed ${INSTALL_DIR}/${BINARY}"
 "${INSTALL_DIR}/${BINARY}" --version
