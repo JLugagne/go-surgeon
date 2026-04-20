@@ -87,10 +87,15 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 	}
 	if targetFn == nil {
-		return domain.PatchFunctionResult{}, &domain.Error{
-			Code:    "NODE_NOT_FOUND",
-			Message: fmt.Sprintf("function %q not found in %s", req.Identifier, req.FilePath),
+		// Check whether the name matches a var or func-returning expression
+		// (e.g. a Cobra command constructor like newSyncCmd). If so, emit a
+		// targeted hint so the agent doesn't burn two attempts.
+		hint := closureFuncHint(f, nameTarget)
+		msg := fmt.Sprintf("function %q not found in %s", req.Identifier, req.FilePath)
+		if hint != "" {
+			msg += "\n" + hint
 		}
+		return domain.PatchFunctionResult{}, &domain.Error{Code: "NODE_NOT_FOUND", Message: msg}
 	}
 	if targetFn.Body == nil {
 		return domain.PatchFunctionResult{}, &domain.Error{
@@ -219,6 +224,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				}
 				continue
 			}
+			if p.Op == domain.PatchOpReplace && replaceEndsWithBareClosingBrace(p.Replace) {
+				errs = append(errs, fmt.Sprintf("patch #%d (replace): replacement has more closing braces than opening ones — it would consume the function's own '}'. Ensure braces in the replacement are balanced.", i+1))
+				continue
+			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
 			continue
@@ -236,6 +245,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 		// Restrict text-match hits to the top-level body region by dropping
 		// any hit that lies entirely inside a nested closure's body.
+		allHits := hits
 		hits = filterHitsByRanges(hits, closureRanges)
 
 		if len(hits) == 0 {
@@ -243,10 +253,20 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			if needle == "" {
 				needle = p.MatchRegex
 			}
-			msg := fmt.Sprintf("patch #%d (%s %q): no match found in body of %s",
-				i+1, p.Op, needle, req.Identifier)
-			if suggestions := suggestClosestLines(origBody, needle, 3); suggestions != "" {
-				msg += "\n  Closest lines in body:\n" + suggestions
+			var msg string
+			if len(allHits) > 0 && len(closureRanges) > 0 {
+				// The match exists but lies inside a nested closure — give a direct hint.
+				msg = fmt.Sprintf("patch #%d (%s %q): match found but is inside a nested closure of %s. "+
+					"Use identifier %q to target the closure directly, or pass include_nested=true.",
+					i+1, p.Op, needle, req.Identifier, req.Identifier+">closure[0]")
+			} else {
+				msg = fmt.Sprintf("patch #%d (%s %q): no match found in body of %s",
+					i+1, p.Op, needle, req.Identifier)
+			}
+			if len(allHits) == 0 {
+				if suggestions := suggestClosestLines(origBody, needle, 3); suggestions != "" {
+					msg += "\n  Closest lines in body:\n" + suggestions
+				}
 			}
 			errs = append(errs, msg)
 			continue
@@ -322,6 +342,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 
 		switch p.Op {
 		case domain.PatchOpReplace:
+			if replaceEndsWithBareClosingBrace(p.Replace) {
+				errs = append(errs, fmt.Sprintf("patch #%d (replace): replacement has more closing braces than opening ones — it would consume the function's own '}'. Ensure braces in the replacement are balanced.", i+1))
+				continue
+			}
 			repl := p.Replace
 			// Re-apply the original line's indentation when the replacement has none,
 			// so callers don't need to reproduce leading whitespace.
@@ -399,6 +423,16 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	for _, i := range order {
 		e := edits[i]
 		newBody = append(newBody[:e.start], append([]byte(e.replacement), newBody[e.end:]...)...)
+	}
+
+	// Reject a patch that would wipe the entire function body. An empty body
+	// is almost never intentional from patch_function — use delete op or
+	// patch target=file for wholesale replacement.
+	if strings.TrimSpace(string(newBody)) == "" && strings.TrimSpace(origBody) != "" {
+		return domain.PatchFunctionResult{}, &domain.Error{
+			Code:    "PATCH_FAILED",
+			Message: fmt.Sprintf("patch would erase the entire body of %s — use op:delete to remove individual statements, or patch target=file for a full rewrite", req.Identifier),
+		}
 	}
 
 	// Reassemble the full file.
@@ -927,6 +961,40 @@ func startsWithWhitespace(s string) bool {
 	return len(s) > 0 && (s[0] == ' ' || s[0] == '\t')
 }
 
+// replaceEndsWithBareClosingBrace reports whether repl's last non-empty line
+// is a bare '}'. Such a replacement inside a function body would introduce a
+// second closing brace that conflicts with the function's own '}'.
+func replaceEndsWithBareClosingBrace(repl string) bool {
+	// Count only top-level (unquoted, uncommented) braces to detect an
+	// unbalanced replacement that would consume the function's own '}'.
+	depth := 0
+	inString := false
+	var stringChar byte
+	for i := 0; i < len(repl); i++ {
+		ch := repl[i]
+		if inString {
+			if ch == '\\' {
+				i++ // skip escaped char
+			} else if ch == stringChar {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"', '`', '\'':
+			inString = true
+			stringChar = ch
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	// depth < 0 means more closing braces than opening ones — the replacement
+	// would consume brace(s) from the surrounding function body.
+	return depth < 0
+}
+
 // reIndentReplacement prepends indent to the first line of repl and applies
 // the same indent to any subsequent lines that have no leading whitespace.
 // Lines that already carry their own indentation are left untouched.
@@ -1190,6 +1258,59 @@ func resolveSignatureEdit(fset *token.FileSet, fn *ast.FuncDecl, src []byte, new
 type signatureEdit struct {
 	start, end  int
 	replacement string
+}
+
+// closureFuncHint returns a non-empty hint string when name matches a var/const
+// in file f whose value contains a func literal (e.g. a Cobra command constructor
+// built with cobra.Command{RunE: func(...){...}}). It tells the agent which
+// >closure[N] suffix to use instead of a bare identifier.
+func closureFuncHint(f *ast.File, name string) string {
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, id := range vs.Names {
+				if id.Name != name {
+					continue
+				}
+				if i >= len(vs.Values) {
+					continue
+				}
+				if countFuncLits(vs.Values[i]) > 0 {
+					return fmt.Sprintf("%q is a var/const, not a named func declaration. "+
+						"If it contains a closure body you want to edit, use identifier %q.",
+						name, name+">closure[0]")
+				}
+			}
+		}
+	}
+	// Also check func declarations that return a struct literal containing
+	// func literals (e.g. func newCmd() *cobra.Command { return &cobra.Command{RunE: func...} }).
+	// These ARE named funcs and resolve fine, so no hint needed for them —
+	// they use >closure[N] syntax already. Only emit hints for var/const mismatches.
+	return ""
+}
+
+// countFuncLits returns the number of *ast.FuncLit nodes directly or
+// indirectly contained within expr.
+func countFuncLits(expr ast.Expr) int {
+	if expr == nil {
+		return 0
+	}
+	count := 0
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			count++
+		}
+		return true
+	})
+	return count
 }
 
 // parseClosurePath splits an identifier of the form Parent>closure[N]>closure[M]...
