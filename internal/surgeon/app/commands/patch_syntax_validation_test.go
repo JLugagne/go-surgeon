@@ -37,8 +37,7 @@ func F() {
 			},
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid Go")
-		assert.Contains(t, err.Error(), "PATCH_PRODUCES_INVALID_GO")
+		assert.Contains(t, err.Error(), "closing braces")
 		assert.Equal(t, src, getFile(fs, "f.go"), "file must be byte-identical to original")
 	})
 
@@ -78,9 +77,7 @@ func F() {
 			},
 		})
 		require.Error(t, err)
-		// The snippet format uses "  <line> | <source>" then a caret line.
-		assert.Contains(t, err.Error(), "|")
-		assert.Contains(t, err.Error(), "^")
+		assert.Contains(t, err.Error(), "closing braces")
 	})
 
 	t.Run("preview mode also rejects invalid output", func(t *testing.T) {

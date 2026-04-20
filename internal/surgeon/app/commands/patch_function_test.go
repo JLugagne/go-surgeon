@@ -194,6 +194,147 @@ func Bar() {
 	})
 }
 
+// ── closing-brace guard ─────────────────────────────────────────────────────
+
+func TestPatchFunction_Replace_BareClosingBraceGuard(t *testing.T) {
+	ctx := context.Background()
+
+	const src = `package p
+func Foo() {
+	x := 1
+	_ = x
+}
+`
+
+	t.Run("match-mode replace ending with bare } is rejected", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "Foo",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: `x := 1`, Replace: "x := 2\n}"},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closing braces")
+		assert.Equal(t, src, getFile(fs, "f.go"), "file must not be modified")
+	})
+
+	t.Run("line-mode replace ending with bare } is rejected", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "Foo",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, AtLine: 3, Replace: "x := 2\n}"},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closing braces")
+		assert.Equal(t, src, getFile(fs, "f.go"), "file must not be modified")
+	})
+
+	t.Run("replace ending with } inside a block is allowed", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "Foo",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: `x := 1`, Replace: "if true {\n\tx := 2\n\t}"},
+			},
+		})
+		require.NoError(t, err)
+	})
+}
+
+// ── empty-body wipe guard ───────────────────────────────────────────────────
+
+func TestPatchFunction_EmptyBodyWipeGuard(t *testing.T) {
+	ctx := context.Background()
+
+	const src = `package p
+func DeleteFile(path string) error {
+	err := os.Remove(path)
+	return err
+}
+`
+
+	t.Run("replace that wipes entire body is rejected", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "DeleteFile",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "err := os.Remove(path)\nreturn err", Replace: ""},
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "erase the entire body")
+		assert.Equal(t, src, getFile(fs, "f.go"), "file must not be modified")
+	})
+
+	t.Run("replace that leaves content is allowed", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "DeleteFile",
+			Patches: []domain.FunctionPatch{
+				{Op: domain.PatchOpReplace, Match: "err := os.Remove(path)", Replace: "err := os.Remove(path + \".bak\")"},
+			},
+		})
+		require.NoError(t, err)
+	})
+}
+
+// ── closure hint ───────────────────────────────────────────────────────────────
+
+func TestPatchFunction_ClosureHints(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("var holding func literal hints at >closure[0]", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+var myCmd = &Command{
+	Run: func(args []string) {
+		doWork()
+	},
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "myCmd",
+			Patches:    []domain.FunctionPatch{{Op: domain.PatchOpReplace, Match: "doWork()", Replace: "doOther()"}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), ">closure[0]")
+	})
+
+	t.Run("match inside nested closure hints at >closure[0]", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+func newSyncCmd() {
+	run := func() {
+		doSync()
+	}
+	_ = run
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "newSyncCmd",
+			Patches:    []domain.FunctionPatch{{Op: domain.PatchOpReplace, Match: "doSync()", Replace: "doSync2()"}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), ">closure[0]")
+		assert.Contains(t, err.Error(), "nested closure")
+	})
+}
+
 // ── input validation ──────────────────────────────────────────────────────────
 
 func TestPatchFunction_InputValidation(t *testing.T) {
