@@ -76,11 +76,35 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 ---
 
+## Install
+
+**curl installer (Linux / macOS)**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
+```
+
+Installs the latest release to `/usr/local/bin`. Override the destination with `INSTALL_DIR`:
+
+```bash
+INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
+```
+
+**Go install (requires Go 1.25+)**
+
+```bash
+go install github.com/JLugagne/go-surgeon/cmd/go-surgeon@latest
+```
+
+**Homebrew / Scoop** — coming soon.
+
+---
+
 ## Quick Start
 
 ```bash
-# Build
-go build -o go-surgeon ./cmd/go-surgeon
+# Verify installation
+go-surgeon --version
 
 # Run as MCP server (stdio)
 go-surgeon mcp
