@@ -973,9 +973,10 @@ func replaceEndsWithBareClosingBrace(repl string) bool {
 	for i := 0; i < len(repl); i++ {
 		ch := repl[i]
 		if inString {
-			if ch == '\\' {
+			switch ch {
+			case '\\':
 				i++ // skip escaped char
-			} else if ch == stringChar {
+			case stringChar:
 				inString = false
 			}
 			continue
