@@ -377,3 +377,22 @@ const MaxItems = 10
 }
 
 func (m *mockFS) DeleteFile(_ context.Context, _ string) error { return nil }
+
+// TestFindSymbols_MaxResults verifies that MaxResults caps the result set in pattern mode.
+func TestFindSymbols_MaxResults(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.go")
+	code := `package testpkg
+
+type FooA struct{}
+type FooB struct{}
+type FooC struct{}
+`
+	require.NoError(t, os.WriteFile(filePath, []byte(code), 0644))
+	fs := &mockFS{files: map[string][]byte{filePath: []byte(code)}}
+	handler := queries.NewSurgeonQueriesHandler(fs)
+
+	res, err := handler.FindSymbols(context.Background(), domain.SymbolQuery{Pattern: "^Foo", MaxResults: 2}, tmpDir)
+	require.NoError(t, err)
+	assert.Len(t, res, 2, "MaxResults=2 must cap results at 2 even though 3 match")
+}

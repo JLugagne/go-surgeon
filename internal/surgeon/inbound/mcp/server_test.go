@@ -601,7 +601,7 @@ func TestDelete_InvalidObject(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 
 	result := callTool(t, cs, "delete", map[string]any{
-		"object":     "file",
+		"object":     "interface",
 		"file":       "book.go",
 		"identifier": "whatever",
 	})
@@ -1438,4 +1438,27 @@ func (m *mockCommands) PatchFunctionBulk(ctx context.Context, req domain.PatchFu
 		return m.patchFunctionBulkFn(ctx, req)
 	}
 	return domain.PatchFunctionBulkResult{}, nil
+}
+
+func TestDelete_File(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "delete", map[string]any{
+		"object": "file",
+		"file":   "internal/domain/book.go",
+	})
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "SUCCESS (delete file)")
+
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeDeleteFile, receivedPlan.Actions[0].Action)
+	assert.Equal(t, "internal/domain/book.go", receivedPlan.Actions[0].FilePath)
 }

@@ -394,3 +394,54 @@ func F() {}
 	assert.Contains(t, got, "// foo line two")
 	assert.NotContains(t, got, "bar")
 }
+
+// TestPatchFile_MatchLiteral verifies that match_literal=true causes match_regex to be
+// treated as a plain string, so regex special characters are not interpreted.
+func TestPatchFile_MatchLiteral(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	src := `package p
+
+// connect with postgres://user:password@host/db
+var dsn = "postgres://user:password@host/db"
+`
+	setFile(fs, "f.go", src)
+	res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+		FilePath: "f.go",
+		Patches: []domain.FilePatch{
+			{MatchRegex: "postgres://user:password@host/db", MatchLiteral: true, Replace: "postgres://newuser:newpass@newhost/db"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.Hits[0])
+	got := getFile(fs, "f.go")
+	assert.Contains(t, got, "postgres://newuser:newpass@newhost/db")
+	assert.Equal(t, 0, strings.Count(got, "postgres://user:password@host/db"))
+}
+
+// TestPatchFile_Occurrence verifies that occurrence=N replaces only the Nth match (1-based).
+func TestPatchFile_Occurrence(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	src := `package p
+
+var a = foo(1)
+var b = foo(2)
+var c = foo(3)
+`
+	setFile(fs, "f.go", src)
+	res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+		FilePath: "f.go",
+		Patches: []domain.FilePatch{
+			{Match: "foo", Replace: "bar", Occurrence: 2},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Hits[0])
+	got := getFile(fs, "f.go")
+	assert.Equal(t, 2, strings.Count(got, "foo"), "first and third occurrence must be untouched")
+	assert.Equal(t, 1, strings.Count(got, "bar"), "only second occurrence replaced")
+	assert.Contains(t, got, "foo(1)")
+	assert.Contains(t, got, "bar(2)")
+	assert.Contains(t, got, "foo(3)")
+}
