@@ -1085,6 +1085,19 @@ These apply to every edit, on CLI and MCP:
 
 ---
 
+## FAQ
+
+### My pre-commit hook rejects a patch containing a URL or credential-like string
+
+Some pre-commit secret-scanner hooks (e.g. `detect-secrets`, `gitleaks`) trigger on strings like `postgres://user:password@host` even inside patch operations. This is a false positive in the hook, not a go-surgeon bug.
+
+Options:
+1. Adjust your hook's allowlist for the affected file or pattern.
+2. Rephrase the patch to avoid the sensitive-looking substring in the `match` field — use `match_regex` with a pattern that avoids the literal string, or use `at_line`/`from_line`/`to_line` targeting instead of text matching.
+3. Use `patch target=file` with `match_regex` and capture groups to avoid reproducing the full credential string in the match.
+
+---
+
 ## See also
 
 - [`README.md`](README.md) — overview and positioning
