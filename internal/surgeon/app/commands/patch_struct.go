@@ -295,6 +295,9 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 			return fieldNotFoundMsg(p.Name, *working)
 		}
 		(*working)[idx].typeExpr = p.Type
+		if p.Tag != "" {
+			(*working)[idx].tag = formatTag(p.Tag)
+		}
 		(*working)[idx].dirty = true
 		return ""
 

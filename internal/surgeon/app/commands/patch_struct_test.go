@@ -314,6 +314,27 @@ type User struct {
 		assert.Contains(t, content, "ID uuid.UUID")
 		assert.Contains(t, content, `json:"id"`)
 	})
+	t.Run("retypes field and updates tag when tag is provided", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+
+type User struct {
+	ID string `+"`"+`json:"id"`+"`"+`
+}
+`)
+		_, err := h.PatchStruct(ctx, domain.PatchStructRequest{
+			FilePath:   "f.go",
+			Identifier: "User",
+			Patches: []domain.StructPatch{
+				{Op: domain.StructPatchOpRetypeField, Name: "ID", Type: "uuid.UUID", Tag: `json:"uuid"`},
+			},
+		})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, "ID uuid.UUID")
+		assert.Contains(t, content, `json:"uuid"`)
+		assert.NotContains(t, content, `json:"id"`, "old tag must be replaced")
+	})
 }
 
 // ── set_tag ──────────────────────────────────────────────────────────────────
