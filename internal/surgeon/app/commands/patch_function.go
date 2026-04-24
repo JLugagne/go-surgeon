@@ -269,9 +269,14 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			var msg string
 			if len(allHits) > 0 && len(closureRanges) > 0 {
 				// The match exists but lies inside a nested closure — give a direct hint.
-				msg = fmt.Sprintf("patch #%d (%s %q): match found but is inside a nested closure of %s. "+
-					"Use identifier %q to target the closure directly, or pass include_nested=true.",
-					i+1, p.Op, needle, req.Identifier, req.Identifier+">closure[0]")
+				filtered := len(allHits)
+				plural := "match"
+				if filtered > 1 {
+					plural = "matches"
+				}
+				msg = fmt.Sprintf("patch #%d (%s %q): no match in the top-level body of %s, but %d %s found inside a nested closure. "+
+					"Retry with include_nested=true to match inside closures, or use identifier %q to target the closure directly.",
+					i+1, p.Op, needle, req.Identifier, filtered, plural, req.Identifier+">closure[0]")
 			} else {
 				msg = fmt.Sprintf("patch #%d (%s %q): no match found in body of %s",
 					i+1, p.Op, needle, req.Identifier)
