@@ -303,7 +303,7 @@ type updateInput struct {
 type deleteInput struct {
 	Object     string `json:"object" jsonschema:"what to delete: func or struct"`
 	File       string `json:"file" jsonschema:"target file path"`
-	Identifier string `json:"identifier" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method"`
+	Identifier string `json:"identifier,omitempty" jsonschema:"AST identifier (e.g. FuncName or Receiver.Method); not required when object=file"`
 	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
 }
 
