@@ -1462,3 +1462,129 @@ func TestDelete_File(t *testing.T) {
 	assert.Equal(t, domain.ActionTypeDeleteFile, receivedPlan.Actions[0].Action)
 	assert.Equal(t, "internal/domain/book.go", receivedPlan.Actions[0].FilePath)
 }
+
+func TestCreate_Auto_FuncContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "create", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "func NewBook(title string) *Book { return &Book{Title: title} }",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeAddFunc, receivedPlan.Actions[0].Action)
+}
+
+func TestCreate_Auto_StructContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "create", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "type Book struct {\n\tTitle string\n}",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeAddStruct, receivedPlan.Actions[0].Action)
+}
+
+func TestCreate_Auto_FileContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "create", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "package domain\n\nvar ErrNotFound = errors.New(\"not found\")",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeCreateFile, receivedPlan.Actions[0].Action)
+}
+
+func TestUpdate_Auto_FuncContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "update", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "func NewBook(title string) *Book { return &Book{Title: title} }",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeUpdateFunc, receivedPlan.Actions[0].Action)
+}
+
+func TestUpdate_Auto_StructContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "update", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "type Book struct {\n\tTitle string\n}",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeUpdateStruct, receivedPlan.Actions[0].Action)
+}
+
+func TestUpdate_Auto_FileContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "update", map[string]any{
+		"object":  "auto",
+		"file":    "internal/domain/book.go",
+		"content": "package domain\n\nvar ErrNotFound = errors.New(\"not found\")",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeReplaceFile, receivedPlan.Actions[0].Action)
+}
