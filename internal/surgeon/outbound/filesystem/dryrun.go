@@ -12,14 +12,16 @@ import (
 
 // DryRunFileSystem accumulates file changes in memory and prints unified diffs on Close.
 type DryRunFileSystem struct {
-	real  filesystem.FileSystem
-	files map[string][]byte
+	real    filesystem.FileSystem
+	files   map[string][]byte
+	deleted map[string]bool
 }
 
 func NewDryRunFileSystem(real filesystem.FileSystem) *DryRunFileSystem {
 	return &DryRunFileSystem{
-		real:  real,
-		files: make(map[string][]byte),
+		real:    real,
+		files:   make(map[string][]byte),
+		deleted: make(map[string]bool),
 	}
 }
 
@@ -45,6 +47,14 @@ func (f *DryRunFileSystem) IsDir(ctx context.Context, path string) (bool, error)
 }
 
 func (f *DryRunFileSystem) MkdirAll(ctx context.Context, path string) error {
+	return nil
+}
+
+func (f *DryRunFileSystem) DeleteFile(ctx context.Context, path string) error {
+	if f.deleted == nil {
+		f.deleted = make(map[string]bool)
+	}
+	f.deleted[path] = true
 	return nil
 }
 

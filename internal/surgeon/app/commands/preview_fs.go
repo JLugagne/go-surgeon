@@ -15,16 +15,18 @@ import (
 // here to avoid an upward import from the app layer to the outbound
 // layer. The two implementations are intentionally similar.
 type previewFS struct {
-	real  filesystem.FileSystem
-	files map[string][]byte
-	wrote map[string]bool
+	real    filesystem.FileSystem
+	files   map[string][]byte
+	wrote   map[string]bool
+	deleted map[string]bool
 }
 
 func newPreviewFS(real filesystem.FileSystem) *previewFS {
 	return &previewFS{
-		real:  real,
-		files: make(map[string][]byte),
-		wrote: make(map[string]bool),
+		real:    real,
+		files:   make(map[string][]byte),
+		wrote:   make(map[string]bool),
+		deleted: make(map[string]bool),
 	}
 }
 
@@ -57,6 +59,11 @@ func (f *previewFS) IsDir(ctx context.Context, path string) (bool, error) {
 // MkdirAll is a no-op on a preview filesystem: we never want to create
 // directories on disk during a dry-run.
 func (f *previewFS) MkdirAll(ctx context.Context, path string) error {
+	return nil
+}
+
+func (f *previewFS) DeleteFile(ctx context.Context, path string) error {
+	f.deleted[path] = true
 	return nil
 }
 

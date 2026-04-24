@@ -14,6 +14,7 @@ const (
 	ActionTypeUpdateStruct    ActionType = "update_struct"
 	ActionTypeDeleteFunc      ActionType = "delete_func"
 	ActionTypeDeleteStruct    ActionType = "delete_struct"
+	ActionTypeDeleteFile      ActionType = "delete_file"
 	ActionTypeAddInterface    ActionType = "add_interface"
 	ActionTypeUpdateInterface ActionType = "update_interface"
 	ActionTypeDeleteInterface ActionType = "delete_interface"
