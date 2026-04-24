@@ -17,7 +17,7 @@ import (
 // Runner is a function that executes the CLI logic.
 type Runner func(ctx context.Context, args []string) error
 
-func Setup() Runner {
+func Setup(version string) Runner {
 	return func(ctx context.Context, args []string) error {
 		realFS := filesystem.NewFileSystem()
 		proxyFS := &filesystem.ProxyFileSystem{Active: realFS}
@@ -96,6 +96,7 @@ func Setup() Runner {
 			clicommands.NewTagCommand(executePlanHandler),
 			clicommands.NewExtractInterfaceCommand(executePlanHandler),
 			clicommands.NewExecutePlanCommand(executePlanHandler),
+			clicommands.NewUpgradeCommand(version),
 		)
 
 		// MCP stdio server

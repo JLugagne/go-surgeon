@@ -15,7 +15,7 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	runner := surgeon.Setup()
+	runner := surgeon.Setup(version)
 	ctx := context.Background()
 	if err := runner(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
