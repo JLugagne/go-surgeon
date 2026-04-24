@@ -2245,3 +2245,58 @@ func markerB() {}
 		assert.Contains(t, err.Error(), "invalid closure segment")
 	})
 }
+
+func TestPatchFunction_OccurrenceMinusOne_Replace(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo() {
+	bar()
+	bar()
+	bar()
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:         domain.PatchOpReplace,
+			Match:      "bar()",
+			Replace:    "baz()",
+			Occurrence: -1,
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.NotContains(t, content, "bar()")
+	assert.Equal(t, 3, strings.Count(content, "baz()"))
+}
+
+func TestPatchFunction_OccurrenceMinusOne_Delete(t *testing.T) {
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func Foo() {
+	bar()
+	baz()
+	bar()
+	baz()
+	bar()
+}
+`)
+	res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "Foo",
+		Patches: []domain.FunctionPatch{{
+			Op:         domain.PatchOpDelete,
+			Match:      "bar()",
+			Occurrence: -1,
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.NotContains(t, content, "bar()")
+	assert.Equal(t, 2, strings.Count(content, "baz()"))
+}

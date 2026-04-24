@@ -159,6 +159,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		replacement string // text to substitute
 	}
 	edits := make([]resolvedEdit, len(req.Patches))
+	var extraEdits []resolvedEdit
 	var sigEdits []signatureEdit
 	var errs []string
 
@@ -281,6 +282,56 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				}
 			}
 			errs = append(errs, msg)
+			continue
+		}
+		if p.Occurrence == -1 {
+			// Apply the patch to every hit. Collect into extraEdits so the
+			// main edits[i] slot stays zero and the apply phase picks up all
+			// of them together.
+			for _, h := range hits {
+				switch p.Op {
+				case domain.PatchOpReplace:
+					if replaceEndsWithBareClosingBrace(p.Replace) {
+						errs = append(errs, fmt.Sprintf("patch #%d (replace): replacement has more closing braces than opening ones — it would consume the function's own '}'. Ensure braces in the replacement are balanced.", i+1))
+						break
+					}
+					repl := p.Replace
+					if repl != "" && !startsWithWhitespace(repl) {
+						if indent := lineIndent(origBody, h[0]); indent != "" && h[0] == lineStartOffset(origBody, h[0]) {
+							repl = reIndentReplacement(repl, indent)
+						}
+					}
+					extraEdits = append(extraEdits, resolvedEdit{start: h[0], end: h[1], replacement: repl})
+				case domain.PatchOpDelete:
+					start, end := deletionRange(origBody, h[0], h[1])
+					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: ""})
+				case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
+					plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, h[0])
+					extraEdits = append(extraEdits, resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line})
+					if plan.Lift != nil {
+						autoLifts = append(autoLifts, *plan.Lift)
+						pendingCtx = append(pendingCtx, pendingInsertCtx{
+							liftIndex:     len(autoLifts) - 1,
+							bodyRelStart:  plan.Start,
+							insertedBytes: len(plan.Line),
+							insertedLines: plan.LineCount,
+						})
+					}
+				case domain.PatchOpWrap:
+					indent := lineIndent(origBody, h[0])
+					trimmedMatch := strings.TrimSpace(origBody[h[0]:h[1]])
+					replacement := indent + fmt.Sprintf(p.Wrap, trimmedMatch)
+					if wrapErr := validateGoStmt(replacement); wrapErr != nil {
+						errs = append(errs, fmt.Sprintf("patch #%d (wrap): result of wrap does not parse as a Go statement: %v", i+1, wrapErr))
+						break
+					}
+					lineStart := lineStartOffset(origBody, h[0])
+					lineEnd := lineEndOffset(origBody, h[0])
+					extraEdits = append(extraEdits, resolvedEdit{start: lineStart, end: lineEnd, replacement: replacement + "\n"})
+				default:
+					errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap, set_signature)", i+1, p.Op))
+				}
+			}
 			continue
 		}
 		if len(hits) > 1 && p.Occurrence == 0 {
@@ -423,17 +474,20 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	// Phase 2: apply edits to origBody working backwards (highest offset first).
-	order := make([]int, len(edits))
-	for i := range order {
-		order[i] = i
+	// Merge per-patch edits with extraEdits from occurrence=-1 patches.
+	allEdits := make([]resolvedEdit, 0, len(edits)+len(extraEdits))
+	for _, e := range edits {
+		if e.start != 0 || e.end != 0 || e.replacement != "" {
+			allEdits = append(allEdits, e)
+		}
 	}
-	sort.Slice(order, func(a, b int) bool {
-		return edits[order[a]].start > edits[order[b]].start
+	allEdits = append(allEdits, extraEdits...)
+	sort.Slice(allEdits, func(a, b int) bool {
+		return allEdits[a].start > allEdits[b].start
 	})
 
 	newBody := []byte(origBody)
-	for _, i := range order {
-		e := edits[i]
+	for _, e := range allEdits {
 		newBody = append(newBody[:e.start], append([]byte(e.replacement), newBody[e.end:]...)...)
 	}
 
