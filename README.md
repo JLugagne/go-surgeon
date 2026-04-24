@@ -76,6 +76,25 @@ The unified `patch` tool makes scoped edits with a `target` selector: edit insid
 
 ---
 
+## When go-surgeon helps vs. when Edit is fine
+
+**Use go-surgeon for:**
+- Exploring unfamiliar Go code (`symbol body=true context=file` gives you a function body + full file outline in one call)
+- Structural edits: adding/renaming struct fields, interface methods, managing imports
+- Batch edits across many functions or files in one atomic operation
+- Multi-step sessions where AST validation prevents compounding errors
+- Any edit where import management matters
+
+**Edit is fine or better when:**
+- Single-line tweak in a file you already have open and know well
+- Files outside Go: `.yaml`, `.md`, `.sh`, `Dockerfile`, etc.
+- One-off prototyping where you don't need AST guarantees
+- 3-line changes where the 200–500 ms MCP overhead isn't amortized
+
+> Each go-surgeon MCP call adds ~200–500 ms overhead vs a direct Edit. The break-even is roughly 5+ structural edits, or any task requiring AST-level guarantees (import management, type-aware renames, struct/interface modifications). For a single 3-line tweak in a file you already know, Edit is faster.
+
+---
+
 ## Install
 
 **Linux / macOS**
@@ -155,6 +174,18 @@ See [`USAGE.md`](USAGE.md) for the full parameter reference.
 ---
 
 ## Highlighted features
+
+### `symbol body=true context=file` — explore a 1000-line file in 4 calls
+
+`symbol` with `body=true` and `context="file"` returns the full body of the target function **and** an outline of every sibling declaration in the same file — in one call.
+
+```
+symbol(query="BookHandler.Create", body=true, context="file")
+```
+
+This replaces what used to be: read the file, grep for the function, read again with offset, grep for related symbols. Measured on a 1000-line file: **4 calls instead of 15**.
+
+Use this as your first move when entering any unfamiliar file — you get the implementation you care about plus a map of everything around it.
 
 ### `execute_plan` — atomic multi-step refactors
 
@@ -318,6 +349,8 @@ See [`USAGE.md`](USAGE.md) for the full CLI reference.
 - **Brace and body guards** — `patch` on `function` rejects edits with unbalanced braces or that would erase the entire function body, with hints pointing at the correct syntax
 - **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
 - **Mocks stay in sync** — `delete_interface` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
+
+**Performance note:** each MCP call adds ~200–500 ms overhead compared to a direct file edit. This cost is amortized when you're doing structural work (imports, renames, multi-step edits). For a single short tweak in a file you already know, a direct Edit is faster. See [When go-surgeon helps vs. when Edit is fine](#when-go-surgeon-helps-vs-when-edit-is-fine).
 
 ---
 
