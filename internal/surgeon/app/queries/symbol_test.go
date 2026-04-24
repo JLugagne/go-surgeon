@@ -375,3 +375,5 @@ const MaxItems = 10
 		require.Error(t, err)
 	})
 }
+
+func (m *mockFS) DeleteFile(_ context.Context, _ string) error { return nil }
