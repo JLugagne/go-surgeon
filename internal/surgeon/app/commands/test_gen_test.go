@@ -40,7 +40,9 @@ func SimpleFunc() string {
 		assert.Contains(t, testSrc, "id")
 		assert.Contains(t, testSrc, "int")
 		assert.Contains(t, testSrc, "name string")
-		assert.Contains(t, testSrc, "got, err := tt.s.DoWork(tt.args.ctx, tt.args.id, tt.args.name)")
+		// t.Run body is a single t.Fatal placeholder — agent must fill it in or delete.
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
+		assert.Contains(t, testSrc, "TODO(go-surgeon): no test cases defined for TestService_DoWork")
 	})
 
 	t.Run("generate test for simple function", func(t *testing.T) {
@@ -50,11 +52,9 @@ func SimpleFunc() string {
 
 		testSrc := string(fs.files["main_test.go"])
 		assert.Contains(t, testSrc, "func TestSimpleFunc(t *testing.T)")
-		// Bug 003: free function in black-box test must be package-qualified.
-		assert.Contains(t, testSrc, "got := main.SimpleFunc()")
-		// Bug 002: no assert library detected in mock FS → stdlib assertions.
+		// t.Run body is a placeholder — no call/assertion wiring.
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
 		assert.NotContains(t, testSrc, "assert.Equal")
-		assert.Contains(t, testSrc, "tt.want0")
 
 		// Ensure it didn't duplicate package statement
 		assert.Equal(t, 1, strings.Count(testSrc, "package main_test"))
@@ -109,10 +109,10 @@ func Compute(x int) int {
 		require.NoError(t, err)
 		assert.Equal(t, "pkg/service_test.go", testFile)
 		testSrc := string(fs3.files["pkg/service_test.go"])
-		// Bug 002: testify detected → use assert.Equal
-		assert.Contains(t, testSrc, "assert.Equal")
-		// Bug 003: free function qualified with package name
-		assert.Contains(t, testSrc, "pg.Compute(")
+		// t.Run body is a t.Fatal placeholder; we still drive the import header
+		// off detectAssertLib so the file stays compilable once filled in.
+		assert.Contains(t, testSrc, "testify/assert")
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
 	})
 
 	t.Run("exported receiver is package-qualified in black-box test", func(t *testing.T) {
@@ -159,8 +159,8 @@ func ToPublicBookList(ids []string) BookListResponse {
 		testSrc := string(fs5.files["conv/book_test.go"])
 		// Slice param must appear in args struct.
 		assert.Contains(t, testSrc, "[]string")
-		// BookListResponse is an exported struct → must use reflect.DeepEqual.
-		assert.Contains(t, testSrc, "reflect.DeepEqual")
+		// Body is a t.Fatal placeholder — no call/assertion wiring.
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
 		assert.NotContains(t, testSrc, "got != want")
 	})
 
@@ -178,8 +178,8 @@ func ListIDs() []string {
 		require.NoError(t, err)
 
 		testSrc := string(fs6.files["svc/book_test.go"])
-		// []string return → must use reflect.DeepEqual, not got != want
-		assert.Contains(t, testSrc, "reflect.DeepEqual")
+		// Body is a t.Fatal placeholder — no reflect.DeepEqual wiring.
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
 		assert.NotContains(t, testSrc, "got != want")
 	})
 
@@ -199,9 +199,8 @@ func computeHash(s string) int {
 		testSrc := string(fs7.files["util/helper_internal_test.go"])
 		assert.Contains(t, testSrc, "package util\n")
 		assert.NotContains(t, testSrc, "package util_test")
-		// Unexported free function: no package qualification
-		assert.Contains(t, testSrc, "computeHash(")
-		assert.NotContains(t, testSrc, "util.computeHash(")
+		// Body is a t.Fatal placeholder — no call wiring.
+		assert.Contains(t, testSrc, "TODO(go-surgeon): implement this test case")
 	})
 
 	t.Run("test dedup: skips if test func already exists", func(t *testing.T) {
