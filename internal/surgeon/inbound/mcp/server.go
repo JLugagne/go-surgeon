@@ -131,6 +131,7 @@ type symbolInput struct {
 	Outline     bool   `json:"outline,omitempty" jsonschema:"pattern mode only: include first-sentence doc summary per match (middle ground between signature-only and body=true)"`
 	File        string `json:"file,omitempty" jsonschema:"absolute or relative path to the Go file; required when at_line is set"`
 	AtLine      int    `json:"at_line,omitempty" jsonschema:"resolve the outermost declaration that spans this 1-based line number in file; mutually exclusive with query and pattern"`
+	MaxResults  int    `json:"max_results,omitempty" jsonschema:"pattern mode only: cap the number of results returned; 0 = unlimited (default). Use to avoid large payloads with broad patterns."`
 }
 
 func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
@@ -208,7 +209,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 		}
 
 		if in.Pattern != "" {
-			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: in.Pattern, Tests: in.Tests, Module: in.Module, Context: in.Context}, dir)
+			results, err := queries.FindSymbols(ctx, domain.SymbolQuery{Pattern: in.Pattern, Tests: in.Tests, Module: in.Module, Context: in.Context, MaxResults: in.MaxResults}, dir)
 			if err != nil {
 				return errorResultWithCode(err.Error(), err), nil, nil
 			}
@@ -227,7 +228,6 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 		text := formatSymbolResults(results, in.Body, in.Query)
 		return textResult(text), nil, nil
 	})
-
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "build_check",
 		Description: "Run `go build` against a package/directory and return structured compile diagnostics. Use this AFTER editing Go code to verify the package still compiles — diagnostics carry file:line:column + message, deduplicated per file. Set tests=true to also compile _test.go files. dir defaults to './...' (the whole module); pass a relative path like 'internal/foo' or 'internal/foo/...' to scope the check. timeout_seconds defaults to 60 (max 600). `go vet` is out of scope — this tool only reports errors the compiler itself sees.",
@@ -322,6 +322,7 @@ var updateObjectMap = map[string]domain.ActionType{
 var deleteObjectMap = map[string]domain.ActionType{
 	"func":   domain.ActionTypeDeleteFunc,
 	"struct": domain.ActionTypeDeleteStruct,
+	"file":   domain.ActionTypeDeleteFile,
 }
 
 func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
@@ -430,14 +431,14 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete",
-		Description: "Remove a function, method, or struct. object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup). preview=true returns a unified diff without writing.",
+		Description: "Remove a function, method, struct, or file. object='file' deletes the file from disk (no identifier needed); object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup). preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
 		actionType, ok := deleteObjectMap[in.Object]
 		if !ok {
-			return errorResult(fmt.Sprintf("invalid object %q: must be func or struct", in.Object)), nil, nil
+			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
 		}
 
 		result, err := commands.ExecutePlan(ctx, domain.Plan{
@@ -794,9 +795,11 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 // --- patch_file ---
 
 type filePatchOpInput struct {
-	Match      string `json:"match,omitempty" jsonschema:"literal text; all occurrences are replaced. Mutually exclusive with match_regex."`
-	MatchRegex string `json:"match_regex,omitempty" jsonschema:"RE2 regex alternative to match; use $1, $2, ... in replace for submatch substitution. Mutually exclusive with match."`
-	Replace    string `json:"replace" jsonschema:"replacement text; supports $1/$2/... when match_regex is used"`
+	Match        string `json:"match,omitempty" jsonschema:"literal text; all occurrences are replaced. Mutually exclusive with match_regex."`
+	MatchRegex   string `json:"match_regex,omitempty" jsonschema:"RE2 regex alternative to match; use $1, $2, ... in replace for submatch substitution. Mutually exclusive with match."`
+	Replace      string `json:"replace" jsonschema:"replacement text; supports $1/$2/... when match_regex is used"`
+	MatchLiteral bool   `json:"match_literal,omitempty" jsonschema:"when true, treats match_regex as a literal string (applies regexp.QuoteMeta). Use when the pattern contains special characters like postgres://. Mutually exclusive with match."`
+	Occurrence   int    `json:"occurrence,omitempty" jsonschema:"0 = replace all occurrences (default); N = replace only the Nth occurrence (1-based). Useful when two similar blocks need separate patches."`
 }
 
 type structPatchOpInput struct {
