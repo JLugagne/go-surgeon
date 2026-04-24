@@ -800,6 +800,7 @@ type filePatchOpInput struct {
 	Replace      string `json:"replace" jsonschema:"replacement text; supports $1/$2/... when match_regex is used"`
 	MatchLiteral bool   `json:"match_literal,omitempty" jsonschema:"when true, treats match_regex as a literal string (applies regexp.QuoteMeta). Use when the pattern contains special characters like postgres://. Mutually exclusive with match."`
 	Occurrence   int    `json:"occurrence,omitempty" jsonschema:"0 = replace all occurrences (default); N = replace only the Nth occurrence (1-based). Useful when two similar blocks need separate patches."`
+	MatchMode    string `json:"match_mode,omitempty" jsonschema:"'exact' (default) or 'normalized' — normalized collapses whitespace runs before matching, useful for aligned struct/table code"`
 }
 
 type structPatchOpInput struct {

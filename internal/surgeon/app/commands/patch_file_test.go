@@ -420,6 +420,59 @@ var dsn = "postgres://user:password@host/db"
 }
 
 // TestPatchFile_Occurrence verifies that occurrence=N replaces only the Nth match (1-based).
+func TestPatchFile_MatchModeNormalized(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	// source has extra alignment spaces (common in mock/table-driven code)
+	src := `package p
+
+type mockFS struct{}
+
+func (m *mockFS) MkdirAll(ctx context.Context, path string)        error { return nil }
+`
+	setFile(fs, "f.go", src)
+	res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+		FilePath: "f.go",
+		Patches: []domain.FilePatch{
+			{
+				Match:     "func (m *mockFS) MkdirAll(ctx context.Context, path string) error { return nil }",
+				Replace:   "func (m *mockFS) MkdirAll(_ context.Context, _ string) error { return nil }",
+				MatchMode: "normalized",
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Hits[0], "normalized match should find the aligned line")
+	got := getFile(fs, "f.go")
+	assert.Contains(t, got, "_ context.Context", "replacement must be applied")
+}
+
+func TestPatchFile_MatchModeExactFailsOnAligned(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	// same aligned source
+	src := `package p
+
+type mockFS struct{}
+
+func (m *mockFS) MkdirAll(ctx context.Context, path string)        error { return nil }
+`
+	setFile(fs, "f.go", src)
+	res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+		FilePath: "f.go",
+		Patches: []domain.FilePatch{
+			{
+				// single spaces — does NOT match the aligned source exactly
+				Match:   "func (m *mockFS) MkdirAll(ctx context.Context, path string) error { return nil }",
+				Replace: "func (m *mockFS) MkdirAll(_ context.Context, _ string) error { return nil }",
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.Hits[0], "exact match must not match aligned code")
+	assert.Len(t, res.Warnings, 1, "zero-match should produce a warning")
+}
+
 func TestPatchFile_Occurrence(t *testing.T) {
 	ctx := context.Background()
 	h, fs := newPatchHandler()

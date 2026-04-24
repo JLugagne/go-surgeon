@@ -89,6 +89,7 @@ func toFilePatches(in []filePatchOpInput) []domain.FilePatch {
 			Replace:      p.Replace,
 			MatchLiteral: p.MatchLiteral,
 			Occurrence:   p.Occurrence,
+			MatchMode:    p.MatchMode,
 		}
 	}
 	return out
