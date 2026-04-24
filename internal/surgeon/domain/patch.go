@@ -171,6 +171,10 @@ type FilePatch struct {
 	Match      string // literal text; all occurrences are replaced
 	MatchRegex string // RE2 alternative to Match; mutually exclusive
 	Replace    string // replacement text; supports $1, $2, ... for MatchRegex
+	// when true, regexp.QuoteMeta is applied to MatchRegex before compiling. Mutually exclusive with Match.
+	MatchLiteral bool
+	// 0 = replace all occurrences (default); N = replace only the Nth occurrence (1-based).
+	Occurrence int
 }
 
 // PatchFileRequest is the input to PatchFile — whole-file text substitution

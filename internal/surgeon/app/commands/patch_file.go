@@ -78,8 +78,20 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 			errs = append(errs, fmt.Sprintf("patch #%d: match and match_regex are mutually exclusive", i+1))
 			continue
 		}
+		if p.MatchLiteral && p.Match != "" {
+			errs = append(errs, fmt.Sprintf("patch #%d: match_literal requires match_regex, not match", i+1))
+			continue
+		}
+		if p.Occurrence < 0 {
+			errs = append(errs, fmt.Sprintf("patch #%d: occurrence must be >= 0", i+1))
+			continue
+		}
 		if p.MatchRegex != "" {
-			re, regErr := regexp.Compile(p.MatchRegex)
+			pattern := p.MatchRegex
+			if p.MatchLiteral {
+				pattern = regexp.QuoteMeta(p.MatchRegex)
+			}
+			re, regErr := regexp.Compile(pattern)
 			if regErr != nil {
 				errs = append(errs, fmt.Sprintf("patch #%d: invalid match_regex: %v", i+1, regErr))
 				continue
@@ -131,10 +143,15 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		)
 		if p.MatchRegex != "" {
 			re := compiled[i]
+			matchIndex := 0
 			for _, m := range re.FindAllStringSubmatchIndex(working, -1) {
 				start, end := m[0], m[1]
 				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
 					filtered = append(filtered, [2]int{start, end})
+					continue
+				}
+				matchIndex++
+				if p.Occurrence > 0 && matchIndex != p.Occurrence {
 					continue
 				}
 				accepted = append(accepted, [2]int{start, end})
@@ -142,6 +159,7 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 				replaces = append(replaces, string(re.ExpandString(nil, p.Replace, working, m)))
 			}
 		} else {
+			matchIndex := 0
 			for from := 0; from < len(working); {
 				idx := strings.Index(working[from:], p.Match)
 				if idx < 0 {
@@ -152,6 +170,11 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
 					filtered = append(filtered, [2]int{start, end})
 				} else {
+					matchIndex++
+					if p.Occurrence > 0 && matchIndex != p.Occurrence {
+						from = end
+						continue
+					}
 					accepted = append(accepted, [2]int{start, end})
 					replaces = append(replaces, p.Replace)
 				}
