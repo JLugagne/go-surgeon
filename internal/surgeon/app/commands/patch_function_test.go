@@ -1437,6 +1437,33 @@ func Greet(name string) string {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "out of")
 	})
+	t.Run("insert_after on function declaration line inserts after closing brace", func(t *testing.T) {
+		const src = "package p\n\nfunc helper() error { return nil }\n\nfunc other() {}\n"
+		fs := &mockFS{files: map[string][]byte{"p.go": []byte(src)}}
+		h := commands.NewExecutePlanHandler(fs)
+		// helper() is declared on line 3. insert_after at_line=3 should insert
+		// after the closing } of helper, not inside the body.
+		res, err := h.PatchFunction(context.Background(), domain.PatchFunctionRequest{
+			FilePath:   "p.go",
+			Identifier: "helper",
+			Patches: []domain.FunctionPatch{{
+				Op:     domain.PatchOpInsertAfter,
+				AtLine: 3,
+				Code:   "func inserted() error { return nil }",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.Applied)
+		got := string(fs.files["p.go"])
+		// inserted() must appear AFTER the closing } of helper, not inside the body.
+		helperIdx := strings.Index(got, "func helper")
+		insertedIdx := strings.Index(got, "func inserted")
+		require.True(t, helperIdx >= 0, "helper not found")
+		require.True(t, insertedIdx > helperIdx, "inserted() must be after helper()")
+		// The result must not have the insertion jammed inside helper's body.
+		assert.NotContains(t, got, "return nilfunc inserted", "insertion must not be inside body")
+		assert.NotContains(t, got, "return nil }func inserted", "insertion must not be adjacent to closing brace without newline")
+	})
 }
 
 func TestPatchFunction_OccurrenceLeftoverWarning(t *testing.T) {

@@ -191,6 +191,14 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 
 		if lineMode {
+			// insert_after on the function declaration line means
+			// "insert after the closing } of the function". Detect this
+			// before resolveBodyLineRange so it works for one-liners too
+			// (where the declaration line equals bodyStartLine).
+			if p.Op == domain.PatchOpInsertAfter && p.AtLine > 0 && p.AtLine == fset.Position(targetFn.Pos()).Line {
+				afterFuncEdits[i] = afterFuncEdit{code: p.Code}
+				continue
+			}
 			fromL := p.FromLine
 			toL := p.ToLine
 			if fromL == 0 && toL == 0 {
@@ -203,12 +211,6 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			}
 			start, end, ok := resolveBodyLineRange(origBody, bodyStartLine, fromL, toL)
 			if !ok {
-				// Special case: insert_after on the function declaration line itself
-				// means "insert after the closing } of the function".
-				if p.Op == domain.PatchOpInsertAfter && p.AtLine > 0 && p.AtLine == fset.Position(targetFn.Pos()).Line {
-					afterFuncEdits[i] = afterFuncEdit{code: p.Code}
-					continue
-				}
 				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d out of %s body (body lines %d-%d)", i+1, p.Op, fromL, toL, req.Identifier, bodyStartLine, bodyStartLine+strings.Count(origBody, "\n")))
 				continue
 			}
@@ -451,9 +453,6 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	newSrc = append(newSrc, newBody...)
 	newSrc = append(newSrc, src[rbraceOff:]...)
 
-	// Reject the patch before writing if it would produce invalid Go.
-	// Apply signature edits (set_signature) on the assembled file. Their
-	// offsets are absolute in src and unchanged in newSrc because sig edits
 	// Apply after-func insertions: code that goes immediately after the closing
 	// } of the function. These are collected from insert_after patches whose
 	// at_line pointed at the function declaration line.
@@ -480,7 +479,8 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			insertOff += len(code)
 		}
 	}
-	// sit before the body range that we replaced.
+	// Apply signature edits (set_signature). Their offsets are absolute in src
+	// and unchanged in newSrc because sig edits sit before the body range.
 	if len(sigEdits) > 0 {
 		sort.Slice(sigEdits, func(a, b int) bool { return sigEdits[a].start > sigEdits[b].start })
 		for _, se := range sigEdits {
@@ -491,10 +491,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 	}
 	if err := validateGoSource(req.FilePath, newSrc); err != nil {
-		if dirErr := checkDirectivesIntact(newSrc, req.FilePath); dirErr != nil {
-			return domain.PatchFunctionResult{}, dirErr
-		}
 		return domain.PatchFunctionResult{}, err
+	}
+	if dirErr := checkDirectivesIntact(newSrc, req.FilePath); dirErr != nil {
+		return domain.PatchFunctionResult{}, dirErr
 	}
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
