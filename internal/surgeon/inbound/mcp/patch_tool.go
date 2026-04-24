@@ -99,7 +99,7 @@ func handlePatchFunction(ctx context.Context, commands service.SurgeonCommands, 
 			AtLine:     p.AtLine,
 			FromLine:   p.FromLine,
 			ToLine:     p.ToLine,
-			Params:     p.Params,
+			Params:     joinParams(p.Params),
 			Returns:    p.Returns,
 		}
 	}

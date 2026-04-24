@@ -129,7 +129,7 @@ func registerPatchFunctionBulkTool(s *mcp.Server, commands service.SurgeonComman
 					AtLine:     p.AtLine,
 					FromLine:   p.FromLine,
 					ToLine:     p.ToLine,
-					Params:     p.Params,
+					Params:     joinParams(p.Params),
 					Returns:    p.Returns,
 				}
 			}

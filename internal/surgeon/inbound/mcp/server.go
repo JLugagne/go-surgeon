@@ -799,18 +799,18 @@ type extractInterfaceInput struct {
 // --- Patch tools ---
 
 type patchOpInput struct {
-	Op         string `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap"`
-	Match      string `json:"match,omitempty" jsonschema:"literal text to match inside the function body (whitespace-normalized)"`
-	MatchRegex string `json:"match_regex,omitempty" jsonschema:"regex alternative to match; mutually exclusive with match"`
-	Occurrence int    `json:"occurrence,omitempty" jsonschema:"which match to operate on (1-based, default 0 = error-if-ambiguous for function). Use -1 to apply to all matches."`
-	Replace    string `json:"replace,omitempty" jsonschema:"replacement text (for replace op)"`
-	Code       string `json:"code,omitempty" jsonschema:"line of code to insert (for insert_before / insert_after ops)"`
-	Wrap       string `json:"wrap,omitempty" jsonschema:"wrap template with %s as the matched text (for wrap op)"`
-	AtLine     int    `json:"at_line,omitempty" jsonschema:"target a single line by file-absolute line number (1-based, matches symbol body=true output). Mutually exclusive with match/match_regex."`
-	FromLine   int    `json:"from_line,omitempty" jsonschema:"first line of a file-absolute line range (1-based, inclusive). Pair with to_line."`
-	ToLine     int    `json:"to_line,omitempty" jsonschema:"last line of a file-absolute line range (1-based, inclusive). Must be >= from_line."`
-	Params     string `json:"params,omitempty" jsonschema:"for set_signature: new parameter list including parens, e.g. '(ctx context.Context, x int)'. Empty keeps the current params."`
-	Returns    string `json:"returns,omitempty" jsonschema:"for set_signature: new result list, e.g. 'error' or '([]byte, error)'. Empty keeps the current returns."`
+	Op         string   `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap"`
+	Match      string   `json:"match,omitempty" jsonschema:"literal text to match inside the function body (whitespace-normalized)"`
+	MatchRegex string   `json:"match_regex,omitempty" jsonschema:"regex alternative to match; mutually exclusive with match"`
+	Occurrence int      `json:"occurrence,omitempty" jsonschema:"which match to operate on (1-based, default 0 = error-if-ambiguous for function). Use -1 to apply to all matches."`
+	Replace    string   `json:"replace,omitempty" jsonschema:"replacement text (for replace op)"`
+	Code       string   `json:"code,omitempty" jsonschema:"line of code to insert (for insert_before / insert_after ops)"`
+	Wrap       string   `json:"wrap,omitempty" jsonschema:"wrap template with %s as the matched text (for wrap op)"`
+	AtLine     int      `json:"at_line,omitempty" jsonschema:"target a single line by file-absolute line number (1-based, matches symbol body=true output). Mutually exclusive with match/match_regex."`
+	FromLine   int      `json:"from_line,omitempty" jsonschema:"first line of a file-absolute line range (1-based, inclusive). Pair with to_line."`
+	ToLine     int      `json:"to_line,omitempty" jsonschema:"last line of a file-absolute line range (1-based, inclusive). Must be >= from_line."`
+	Params     []string `json:"params,omitempty" jsonschema:"for set_signature: new parameter list as an array of parameter declarations (without parens), e.g. [\"ctx context.Context\", \"x int\"]. Empty keeps the current params."`
+	Returns    string   `json:"returns,omitempty" jsonschema:"for set_signature: new result list, e.g. 'error' or '([]byte, error)'. Empty keeps the current returns."`
 }
 
 func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
