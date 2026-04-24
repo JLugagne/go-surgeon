@@ -158,6 +158,22 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 				// Expand backrefs using the captured groups for THIS match.
 				replaces = append(replaces, string(re.ExpandString(nil, p.Replace, working, m)))
 			}
+		} else if p.MatchMode == "normalized" {
+			allMatches := findNormalizedMatches(working, p.Match)
+			matchIndex := 0
+			for _, rng := range allMatches {
+				start, end := rng[0], rng[1]
+				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+					filtered = append(filtered, [2]int{start, end})
+					continue
+				}
+				matchIndex++
+				if p.Occurrence > 0 && matchIndex != p.Occurrence {
+					continue
+				}
+				accepted = append(accepted, [2]int{start, end})
+				replaces = append(replaces, p.Replace)
+			}
 		} else {
 			matchIndex := 0
 			for from := 0; from < len(working); {
@@ -219,6 +235,9 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		}
 	}
 
+	if dirErr := checkDirectivesIntact(formatted, req.FilePath); dirErr != nil {
+		return domain.PatchFileResult{}, dirErr
+	}
 	diff := diffStrings(req.FilePath, string(src), string(formatted))
 
 	if req.Preview {

@@ -175,6 +175,8 @@ type FilePatch struct {
 	MatchLiteral bool
 	// 0 = replace all occurrences (default); N = replace only the Nth occurrence (1-based).
 	Occurrence int
+	// "exact" (default) or "normalized" — normalized collapses whitespace runs before matching, useful for aligned struct/table code
+	MatchMode string
 }
 
 // PatchFileRequest is the input to PatchFile — whole-file text substitution

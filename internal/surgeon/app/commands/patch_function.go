@@ -162,6 +162,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	var sigEdits []signatureEdit
 	var errs []string
 
+	type afterFuncEdit struct {
+		code string
+	}
+	afterFuncEdits := map[int]afterFuncEdit{}
 	for i, p := range req.Patches {
 		if p.Op == domain.PatchOpSetSignature {
 			ses, sigErr := resolveSignatureEdit(fset, targetFn, src, p.Params, p.Returns)
@@ -199,6 +203,12 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			}
 			start, end, ok := resolveBodyLineRange(origBody, bodyStartLine, fromL, toL)
 			if !ok {
+				// Special case: insert_after on the function declaration line itself
+				// means "insert after the closing } of the function".
+				if p.Op == domain.PatchOpInsertAfter && p.AtLine > 0 && p.AtLine == fset.Position(targetFn.Pos()).Line {
+					afterFuncEdits[i] = afterFuncEdit{code: p.Code}
+					continue
+				}
 				errs = append(errs, fmt.Sprintf("patch #%d (%s): line range %d-%d out of %s body (body lines %d-%d)", i+1, p.Op, fromL, toL, req.Identifier, bodyStartLine, bodyStartLine+strings.Count(origBody, "\n")))
 				continue
 			}
@@ -444,6 +454,32 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	// Reject the patch before writing if it would produce invalid Go.
 	// Apply signature edits (set_signature) on the assembled file. Their
 	// offsets are absolute in src and unchanged in newSrc because sig edits
+	// Apply after-func insertions: code that goes immediately after the closing
+	// } of the function. These are collected from insert_after patches whose
+	// at_line pointed at the function declaration line.
+	if len(afterFuncEdits) > 0 {
+		// The '}' in newSrc sits at lbraceOff+1+len(newBody) because
+		// newSrc = src[:lbraceOff+1] + newBody + src[rbraceOff:].
+		// Advance past the '}' and any immediately following newline.
+		insertOff := lbraceOff + 1 + len(newBody) + 1 // past '}'
+		if insertOff < len(newSrc) && newSrc[insertOff] == '\n' {
+			insertOff++ // past the newline after '}'
+		}
+		// Collect patch indices in order so output is deterministic.
+		afterKeys := make([]int, 0, len(afterFuncEdits))
+		for k := range afterFuncEdits {
+			afterKeys = append(afterKeys, k)
+		}
+		sort.Ints(afterKeys)
+		for _, k := range afterKeys {
+			code := afterFuncEdits[k].code
+			if !strings.HasSuffix(code, "\n") {
+				code += "\n"
+			}
+			newSrc = append(newSrc[:insertOff], append([]byte(code), newSrc[insertOff:]...)...)
+			insertOff += len(code)
+		}
+	}
 	// sit before the body range that we replaced.
 	if len(sigEdits) > 0 {
 		sort.Slice(sigEdits, func(a, b int) bool { return sigEdits[a].start > sigEdits[b].start })
@@ -455,6 +491,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 		}
 	}
 	if err := validateGoSource(req.FilePath, newSrc); err != nil {
+		if dirErr := checkDirectivesIntact(newSrc, req.FilePath); dirErr != nil {
+			return domain.PatchFunctionResult{}, dirErr
+		}
 		return domain.PatchFunctionResult{}, err
 	}
 
