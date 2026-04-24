@@ -1,6 +1,21 @@
 package mcp
 
-import "github.com/JLugagne/go-surgeon/internal/surgeon/domain"
+import (
+	"strings"
+
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
+)
+
+// joinParams renders an array of parameter declarations into the
+// parenthesised list form expected by domain.FunctionPatch.Params
+// ("(a string, b int)"). Returns an empty string when the input is empty,
+// which signals "keep current params" to the patch engine.
+func joinParams(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
 
 // toFunctionPatches converts MCP patchOpInput items (shared with patch_function
 // and patch_decl tool inputs) into the domain.FunctionPatch shape used by
@@ -22,7 +37,7 @@ func toFunctionPatches(in []patchOpInput) []domain.FunctionPatch {
 			AtLine:     p.AtLine,
 			FromLine:   p.FromLine,
 			ToLine:     p.ToLine,
-			Params:     p.Params,
+			Params:     joinParams(p.Params),
 			Returns:    p.Returns,
 		}
 	}
