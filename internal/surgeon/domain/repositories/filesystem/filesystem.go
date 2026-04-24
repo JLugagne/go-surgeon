@@ -16,4 +16,5 @@ type FileSystem interface {
 	ReadDir(ctx context.Context, path string) ([]string, error)
 	IsDir(ctx context.Context, path string) (bool, error)
 	MkdirAll(ctx context.Context, path string) error
+	DeleteFile(ctx context.Context, path string) error
 }

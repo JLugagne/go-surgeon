@@ -30,3 +30,7 @@ func (p *ProxyFileSystem) IsDir(ctx context.Context, path string) (bool, error) 
 func (p *ProxyFileSystem) MkdirAll(ctx context.Context, path string) error {
 	return p.Active.MkdirAll(ctx, path)
 }
+
+func (p *ProxyFileSystem) DeleteFile(ctx context.Context, path string) error {
+	return p.Active.DeleteFile(ctx, path)
+}

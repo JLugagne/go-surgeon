@@ -69,6 +69,14 @@ func (f *FileSystem) MkdirAll(ctx context.Context, path string) error {
 	return os.MkdirAll(path, 0755)
 }
 
+// DeleteFile removes a file from disk.
+func (f *FileSystem) DeleteFile(ctx context.Context, path string) error {
+	if err := guardWriteInWorktree(path); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
 // warnUnresolvedImports parses the Go source and warns to stderr about any
 // package-qualified identifiers (e.g. domainerror.New) that have no matching import.
 // This catches cases where goimports silently drops unresolvable packages.

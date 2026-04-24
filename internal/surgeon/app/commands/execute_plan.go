@@ -209,6 +209,8 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			return nil, nil, err
 		}
 		return res.Warnings, res.AddedImports, nil
+	case domain.ActionTypeDeleteFile:
+		return nil, nil, h.fs.DeleteFile(ctx, action.FilePath)
 	default:
 		return nil, nil, fmt.Errorf("invalid action type: %s", action.Action)
 	}
