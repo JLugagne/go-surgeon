@@ -84,9 +84,11 @@ func toFilePatches(in []filePatchOpInput) []domain.FilePatch {
 	out := make([]domain.FilePatch, len(in))
 	for i, p := range in {
 		out[i] = domain.FilePatch{
-			Match:      p.Match,
-			MatchRegex: p.MatchRegex,
-			Replace:    p.Replace,
+			Match:        p.Match,
+			MatchRegex:   p.MatchRegex,
+			Replace:      p.Replace,
+			MatchLiteral: p.MatchLiteral,
+			Occurrence:   p.Occurrence,
 		}
 	}
 	return out
