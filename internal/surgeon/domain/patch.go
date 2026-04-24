@@ -20,6 +20,8 @@ type FunctionPatch struct {
 	Op         PatchOp
 	Match      string // literal text; whitespace-normalized comparison
 	MatchRegex string // regex alternative to Match; mutually exclusive
+	// Occurrence selects which match to operate on (1-based). 0 = error if
+	// ambiguous (default). -1 = apply to all matches.
 	Occurrence int    // 1-based; 0 means the match must be unique
 	Replace    string // for replace: the replacement text
 	Code       string // for insert_before / insert_after: the line to insert
