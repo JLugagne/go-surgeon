@@ -328,14 +328,27 @@ var deleteObjectMap = map[string]domain.ActionType{
 func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create",
-		Description: "Add a new file, function, or struct. object='file' creates a new file; 'func'/'struct' append to an existing file. When adding several related items, use execute_plan instead.",
+		Description: "Add a new file, function, or struct. object='file' creates a new file; 'func'/'struct' append to an existing file; 'auto' infers from content (func ... → func, type ... struct → struct, else file). When adding several related items, use execute_plan instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		actionType, ok := createObjectMap[in.Object]
-		if !ok {
-			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
+		var actionType domain.ActionType
+		if in.Object == "auto" {
+			trimmed := strings.TrimSpace(in.Content)
+			if strings.HasPrefix(trimmed, "func ") {
+				actionType = domain.ActionTypeAddFunc
+			} else if strings.Contains(trimmed, "type ") && strings.Contains(trimmed, "struct {") {
+				actionType = domain.ActionTypeAddStruct
+			} else {
+				actionType = domain.ActionTypeCreateFile
+			}
+		} else {
+			var ok bool
+			actionType, ok = createObjectMap[in.Object]
+			if !ok {
+				return errorResult(fmt.Sprintf("invalid object %q: must be file, func, struct, or auto", in.Object)), nil, nil
+			}
 		}
 
 		result, err := commands.ExecutePlan(ctx, domain.Plan{
@@ -378,14 +391,27 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true. preview=true returns a unified diff without writing.",
+		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true. preview=true returns a unified diff without writing. object='auto' infers from content (func ... → func, type ... struct → struct, else file).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
 		}
-		actionType, ok := updateObjectMap[in.Object]
-		if !ok {
-			return errorResult(fmt.Sprintf("invalid object %q: must be file, func, or struct", in.Object)), nil, nil
+		var actionType domain.ActionType
+		if in.Object == "auto" {
+			trimmed := strings.TrimSpace(in.Content)
+			if strings.HasPrefix(trimmed, "func ") {
+				actionType = domain.ActionTypeUpdateFunc
+			} else if strings.Contains(trimmed, "type ") && strings.Contains(trimmed, "struct {") {
+				actionType = domain.ActionTypeUpdateStruct
+			} else {
+				actionType = domain.ActionTypeReplaceFile
+			}
+		} else {
+			var ok bool
+			actionType, ok = updateObjectMap[in.Object]
+			if !ok {
+				return errorResult(fmt.Sprintf("invalid object %q: must be file, func, struct, or auto", in.Object)), nil, nil
+			}
 		}
 
 		result, err := commands.ExecutePlan(ctx, domain.Plan{
@@ -776,7 +802,7 @@ type patchOpInput struct {
 	Op         string `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap"`
 	Match      string `json:"match,omitempty" jsonschema:"literal text to match inside the function body (whitespace-normalized)"`
 	MatchRegex string `json:"match_regex,omitempty" jsonschema:"regex alternative to match; mutually exclusive with match"`
-	Occurrence int    `json:"occurrence,omitempty" jsonschema:"1-based index when match appears multiple times; required when ambiguous"`
+	Occurrence int    `json:"occurrence,omitempty" jsonschema:"which match to operate on (1-based, default 0 = error-if-ambiguous for function). Use -1 to apply to all matches."`
 	Replace    string `json:"replace,omitempty" jsonschema:"replacement text (for replace op)"`
 	Code       string `json:"code,omitempty" jsonschema:"line of code to insert (for insert_before / insert_after ops)"`
 	Wrap       string `json:"wrap,omitempty" jsonschema:"wrap template with %s as the matched text (for wrap op)"`

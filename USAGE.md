@@ -174,22 +174,22 @@ Rejects renames that would flip export status (e.g. `Foo` → `foo`) or collide 
 
 #### `create`, `update`, `delete` tools
 
-The unified editing API. Each takes an `object` parameter (`file`, `func`, or `struct`).
+The unified editing API. Each takes an `object` parameter (`file`, `func`, `struct`, or `auto`).
 
-**`create`** — object: `file` | `func` | `struct`
+**`create`** — object: `file` | `func` | `struct` | `auto`
 
 | Parameter | Required | Description |
 |---|---|---|
-| `object` | yes | What to create |
+| `object` | yes | What to create. `auto` — infer from content: `func ...` → func, `type ... struct` → struct, else file |
 | `file` | yes | Target file path |
 | `content` | yes | Raw Go source. **No package declaration, no imports.** |
 | `with_test` | no | Generate a test skeleton alongside (only when `object=func`) |
 
-**`update`** — object: `file` | `func` | `struct`
+**`update`** — object: `file` | `func` | `struct` | `auto`
 
 | Parameter | Required | Description |
 |---|---|---|
-| `object` | yes | What to update |
+| `object` | yes | What to update. `auto` — infer from content: `func ...` → func, `type ... struct` → struct, else file |
 | `file` | yes | Target file path |
 | `identifier` | yes for `func`/`struct` | `FuncName`, `Receiver.Method`, or `StructName` |
 | `content` | yes | Complete new declaration |
