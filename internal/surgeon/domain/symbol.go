@@ -22,6 +22,8 @@ type SymbolQuery struct {
 	// that line in File. Mutually exclusive with Name/Pattern/Receiver.
 	File   string
 	AtLine int
+	// pattern mode only: cap results at this count; 0 = unlimited
+	MaxResults int
 }
 
 // SymbolResult represents the extracted information for a symbol.

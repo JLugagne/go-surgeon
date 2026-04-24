@@ -166,6 +166,9 @@ func (h *SurgeonQueriesHandler) FindSymbols(ctx context.Context, query domain.Sy
 		}
 	}
 
+	if query.MaxResults > 0 && len(results) > query.MaxResults {
+		results = results[:query.MaxResults]
+	}
 	return results, err
 }
 
