@@ -94,3 +94,5 @@ type MyContext struct {}
 	require.NoError(t, err)
 	assert.Len(t, results2, 0, "Should return 0 new methods if already implemented")
 }
+
+func (m *mockFS) DeleteFile(_ context.Context, _ string) error { return nil }
