@@ -117,31 +117,6 @@ func qualifyType(typStr, pkgName string) string {
 	return prefix + pkgName + "." + base
 }
 
-// typeNeedsDeepEqual reports whether a Go type string requires reflect.DeepEqual
-// instead of ==. This covers:
-//   - slices ([]T)
-//   - maps (map[K]V)
-//   - funcs (func(...))
-//   - named struct types (exported identifiers) — conservatively treated as
-//     potentially containing slice/map fields, since we cannot inspect their
-//     definition without full type analysis. reflect.DeepEqual is always safe
-//     to use, even on purely comparable structs.
-func typeNeedsDeepEqual(typStr string) bool {
-	t := strings.TrimLeft(typStr, "*")
-	if strings.HasPrefix(t, "[]") ||
-		strings.HasPrefix(t, "map[") ||
-		strings.HasPrefix(t, "func(") {
-		return true
-	}
-	// Named struct type: exported identifier (possibly package-qualified).
-	// Strip package qualifier if present (e.g. "app.App" → "App").
-	base := t
-	if dot := strings.LastIndex(t, "."); dot >= 0 {
-		base = t[dot+1:]
-	}
-	return base != "" && unicode.IsUpper([]rune(base)[0])
-}
-
 func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
 	src, err := h.fs.ReadFile(ctx, filePath)
 	if err != nil {
@@ -281,93 +256,34 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	buf.WriteString("\t\t// TODO(go-surgeon): Add test cases.\n")
 	buf.WriteString("\t}\n")
 
-	// Skip with a clear message when no test cases have been added yet,
-	// so the test shows up as SKIP in verbose mode rather than silently passing.
+	// Fail loudly when no cases are defined so an agent can't land an empty
+	// test that silently passes.
 	fmt.Fprintf(&buf, "\tif len(tests) == 0 {\n")
-	fmt.Fprintf(&buf, "\t\tt.Skip(\"TODO(go-surgeon): no test cases defined for %s\")\n", testName)
+	fmt.Fprintf(&buf, "\t\tt.Fatal(\"TODO(go-surgeon): no test cases defined for %s — add cases or delete this test\")\n", testName)
 	buf.WriteString("\t}\n")
 
+	// Each generated t.Run body is a single t.Fatal placeholder. The agent
+	// must replace the body with a real implementation or remove the t.Run
+	// entry entirely — no silent passes.
 	buf.WriteString("\tfor _, tt := range tests {\n")
 	buf.WriteString("\t\tt.Run(tt.name, func(t *testing.T) {\n")
-
-	// Call the function
-	var callArgs []string
-	for _, p := range params {
-		callArgs = append(callArgs, "tt.args."+p.Name)
-	}
-
-	lib := h.detectAssertLib(ctx, filePath)
-
-	var assignVars []string
-	var wantChecks []string
-	for i, r := range results {
-		vName := fmt.Sprintf("got%d", i)
-		if len(results) == 1 {
-			vName = "got"
-		}
-		assignVars = append(assignVars, vName)
-		switch lib {
-		case assertLibTestify:
-			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, tt.%s, %s)", r.Name, vName))
-		case assertLibGotest:
-			wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tassert.Equal(t, %s, tt.%s)", vName, r.Name))
-		default:
-			if typeNeedsDeepEqual(r.Type) {
-				wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif !reflect.DeepEqual(%s, tt.%s) { t.Errorf(\"got %%v, want %%v\", %s, tt.%s) }", vName, r.Name, vName, r.Name))
-			} else {
-				wantChecks = append(wantChecks, fmt.Sprintf("\t\t\tif got, want := %s, tt.%s; got != want { t.Errorf(\"%%v != %%v\", got, want) }", vName, r.Name))
-			}
-		}
-	}
-	if returnsError {
-		assignVars = append(assignVars, "err")
-	}
-
-	var callStr string
-	if recvVar != "" {
-		callStr = fmt.Sprintf("tt.%s.%s(%s)", recvVar, funcName, strings.Join(callArgs, ", "))
-	} else if blackBox {
-		// Black-box test: qualify free function with package name.
-		callStr = fmt.Sprintf("%s.%s(%s)", pkgName, funcName, strings.Join(callArgs, ", "))
-	} else {
-		callStr = fmt.Sprintf("%s(%s)", funcName, strings.Join(callArgs, ", "))
-	}
-
-	if len(assignVars) > 0 {
-		fmt.Fprintf(&buf, "\t\t\t%s := %s\n", strings.Join(assignVars, ", "), callStr)
-	} else {
-		fmt.Fprintf(&buf, "\t\t\t%s\n", callStr)
-	}
-
-	if returnsError {
-		buf.WriteString("\t\t\tif tt.wantErr {\n")
-		switch lib {
-		case assertLibTestify:
-			buf.WriteString("\t\t\t\tassert.Error(t, err)\n")
-		case assertLibGotest:
-			buf.WriteString("\t\t\t\tassert.ErrorContains(t, err, \"\")\n")
-		default:
-			buf.WriteString("\t\t\t\tif err == nil { t.Error(\"expected error, got nil\") }\n")
-		}
-		buf.WriteString("\t\t\t\treturn\n")
-		buf.WriteString("\t\t\t}\n")
-		switch lib {
-		case assertLibTestify:
-			buf.WriteString("\t\t\trequire.NoError(t, err)\n")
-		case assertLibGotest:
-			buf.WriteString("\t\t\tassert.NilError(t, err)\n")
-		default:
-			buf.WriteString("\t\t\tif err != nil { t.Fatalf(\"unexpected error: %v\", err) }\n")
-		}
-	}
-
-	for _, check := range wantChecks {
-		buf.WriteString(check + "\n")
-	}
-
+	buf.WriteString("\t\t\tt.Fatal(\"TODO(go-surgeon): implement this test case or remove the t.Run block entirely — do not leave placeholders\")\n")
 	buf.WriteString("\t\t})\n")
 	buf.WriteString("\t}\n")
 	buf.WriteString("}\n")
+
+	// detectAssertLib still drives the import header below, even though the
+	// t.Run body no longer emits assertions — a correct import set keeps the
+	// file compilable once the agent fills the placeholder in.
+	lib := h.detectAssertLib(ctx, filePath)
+
+	// These locals no longer feed the t.Run body (it is a single t.Fatal
+	// placeholder). They stay in scope because the surrounding generator still
+	// uses some of them, and referencing the others keeps the intent explicit.
+	_ = params
+	_ = results
+	_ = returnsError
+	_ = recvVar
 
 	// Formatted generated code
 	formattedTest, err := format.Source(buf.Bytes())
