@@ -332,6 +332,31 @@ func newSyncCmd() {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), ">closure[0]")
 		assert.Contains(t, err.Error(), "nested closure")
+		assert.Contains(t, err.Error(), "include_nested=true",
+			"hint must surface include_nested=true as the simpler retry option")
+		assert.Contains(t, err.Error(), "1 match found inside",
+			"hint must report how many matches were filtered out")
+	})
+
+	t.Run("multiple matches inside nested closures pluralize correctly", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", `package p
+func newSyncCmd() {
+	run := func() {
+		doSync()
+		doSync()
+	}
+	_ = run
+}
+`)
+		_, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:   "f.go",
+			Identifier: "newSyncCmd",
+			Patches:    []domain.FunctionPatch{{Op: domain.PatchOpReplace, Match: "doSync()", Replace: "doSync2()"}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "2 matches found inside",
+			"hint must pluralize 'matches' when >1 hit was filtered")
 	})
 }
 
