@@ -370,6 +370,7 @@ type patchFileOutput struct {
 	Diff         string   `json:"diff,omitempty"`
 	AddedImports []string `json:"added_imports,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
+	Hint         string   `json:"hint,omitempty"`
 }
 
 // patchOutput is the structured result for patch_function, patch_struct and patch_interface.
@@ -382,6 +383,7 @@ type patchOutput struct {
 	MockUpdated  bool           `json:"mock_updated,omitempty"`
 	AddedImports []string       `json:"added_imports,omitempty"`
 	Warnings     []string       `json:"warnings,omitempty"`
+	Hint         string         `json:"hint,omitempty"`
 	AutoLifts    []autoLiftJSON `json:"auto_lifts,omitempty"`
 }
 
