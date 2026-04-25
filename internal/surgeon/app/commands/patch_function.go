@@ -162,6 +162,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	var extraEdits []resolvedEdit
 	var sigEdits []signatureEdit
 	var errs []string
+	// replaceChecks accumulates the resolved replacement text for every
+	// op=replace patch so we can verify post-splice that the replacement
+	// actually landed in newSrc (issue #3 — silent data loss guard).
+	var replaceChecks []replaceValidation
 
 	type afterFuncEdit struct {
 		code string
@@ -243,6 +247,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			if p.Op == domain.PatchOpReplace {
+				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl})
+			}
 			continue
 		}
 		var hits [][2]int // [start, end] byte ranges in origBody
@@ -307,6 +314,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 						}
 					}
 					extraEdits = append(extraEdits, resolvedEdit{start: h[0], end: h[1], replacement: repl})
+					replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
 				case domain.PatchOpDelete:
 					start, end := deletionRange(origBody, h[0], h[1])
 					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: ""})
@@ -423,6 +431,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				}
 			}
 			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
+			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
 
 		case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
 			plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
@@ -554,6 +563,13 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 	if dirErr := checkDirectivesIntact(newSrc, req.FilePath); dirErr != nil {
 		return domain.PatchFunctionResult{}, dirErr
+	}
+	// Issue #3 guard: confirm every op=replace patch's text is present in
+	// the assembled source. If a multi-line replacement was mangled in
+	// transport and the splice removed the match without inserting the
+	// payload, fail loudly instead of writing corrupted bytes.
+	if vErr := validateReplaceApplied(newSrc, replaceChecks); vErr != nil {
+		return domain.PatchFunctionResult{}, vErr
 	}
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))

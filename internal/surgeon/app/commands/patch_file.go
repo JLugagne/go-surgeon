@@ -204,6 +204,17 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		filteredLines := formatFilteredLines(working, filtered)
 		if len(accepted) > 0 {
 			working = applyRangeReplacements(working, accepted, replaces)
+			// Issue #3 guard: validate THIS patch's replacement landed before
+			// subsequent patches mutate the working source. Sequential patches
+			// may legitimately rewrite an earlier replacement (e.g. "a"->"b"
+			// then "b"->"c"), so we cannot defer the check to the final source.
+			perPatch := make([]replaceValidation, 0, len(replaces))
+			for _, r := range replaces {
+				perPatch = append(perPatch, replaceValidation{Index: i + 1, Replacement: r})
+			}
+			if vErr := validateReplaceApplied([]byte(working), perPatch); vErr != nil {
+				return domain.PatchFileResult{}, vErr
+			}
 		}
 
 		switch {
@@ -238,6 +249,11 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 	if dirErr := checkDirectivesIntact(formatted, req.FilePath); dirErr != nil {
 		return domain.PatchFileResult{}, dirErr
 	}
+	// Issue #3 guard: per-patch validation that each replacement landed in
+	// `working` already happened inside the patch loop above; sequential
+	// patches may legitimately overwrite earlier replacements so the check
+	// is local to each step rather than against the final source.
+
 	diff := diffStrings(req.FilePath, string(src), string(formatted))
 
 	if req.Preview {

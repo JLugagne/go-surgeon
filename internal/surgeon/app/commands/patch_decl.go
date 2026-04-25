@@ -62,6 +62,9 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 	}
 	edits := make([]resolvedEdit, len(req.Patches))
 	var errs []string
+	// Issue #3: track resolved replacements so we can verify post-splice that
+	// each op=replace's text actually landed in the new file.
+	var replaceChecks []replaceValidation
 
 	for i, p := range req.Patches {
 		lineMode := p.AtLine > 0 || p.FromLine > 0 || p.ToLine > 0
@@ -96,6 +99,9 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			if p.Op == domain.PatchOpReplace {
+				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl})
+			}
 			continue
 		}
 
@@ -185,6 +191,7 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 				}
 			}
 			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
+			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
 
 		case domain.PatchOpInsertBefore:
 			indent := lineIndent(origBody, hit[0])
@@ -256,6 +263,12 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 
 	if err := validateGoSource(req.FilePath, newSrc); err != nil {
 		return domain.PatchDeclResult{}, err
+	}
+	// Issue #3 guard: ensure every op=replace patch's text is actually
+	// present in the assembled source — protect against silent data loss
+	// when a multi-line replacement is mangled in transport.
+	if vErr := validateReplaceApplied(newSrc, replaceChecks); vErr != nil {
+		return domain.PatchDeclResult{}, vErr
 	}
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
