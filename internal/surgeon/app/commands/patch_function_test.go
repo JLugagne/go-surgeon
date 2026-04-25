@@ -2325,3 +2325,72 @@ func Foo() {
 	assert.NotContains(t, content, "bar()")
 	assert.Equal(t, 2, strings.Count(content, "baz()"))
 }
+
+// TestPatchFunction_Issue3_MultiLineFunctionBodyRewrite reproduces case #1
+// from issue #3: a function body rewrite where the replacement spans
+// multiple lines. After the fix this must succeed cleanly — applied=1, the
+// replacement text is present in the result, and no validation error fires.
+func TestPatchFunction_Issue3_MultiLineFunctionBodyRewrite(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	setFile(fs, "f.go", `package p
+
+func ProcessOrder(id int) error {
+	if id <= 0 {
+		return fmt.Errorf("bad id")
+	}
+	return nil
+}
+`)
+
+	multiLineMatch := "if id <= 0 {\n\t\treturn fmt.Errorf(\"bad id\")\n\t}"
+	multiLineReplace := "if id <= 0 {\n\t\treturn fmt.Errorf(\"order id must be positive, got %d\", id)\n\t}\n\tif id > 1_000_000 {\n\t\treturn fmt.Errorf(\"order id %d is out of supported range\", id)\n\t}"
+
+	res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+		FilePath:   "f.go",
+		Identifier: "ProcessOrder",
+		Patches: []domain.FunctionPatch{
+			{Op: domain.PatchOpReplace, Match: multiLineMatch, Replace: multiLineReplace},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "f.go")
+	assert.Contains(t, content, "order id must be positive")
+	assert.Contains(t, content, "out of supported range")
+}
+
+// TestPatchFunction_Issue3_StructLiteralFieldInsertion reproduces case #2
+// from issue #3: inserting a new field into a struct literal inside a
+// function body via a multi-line op=replace. The replacement is a literal
+// struct-literal block. The validation must accept it (not fire a
+// PATCH_REPLACE_NOT_APPLIED) and the resulting file must contain the new
+// field.
+func TestPatchFunction_Issue3_StructLiteralFieldInsertion(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	setFile(fs, "main.go", `package main
+
+func build() Backends {
+	return Backends{
+		Postgres: pool,
+	}
+}
+`)
+
+	matchText := "Backends{\n\t\tPostgres: pool,\n\t}"
+	replaceText := "Backends{\n\t\tPostgres: pool,\n\t\tKafka:    kafkaBackend,\n\t}"
+
+	res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
+		FilePath:   "main.go",
+		Identifier: "build",
+		Patches: []domain.FunctionPatch{
+			{Op: domain.PatchOpReplace, Match: matchText, Replace: replaceText},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied)
+	content := getFile(fs, "main.go")
+	assert.Contains(t, content, "Kafka:    kafkaBackend")
+	assert.Contains(t, content, "Postgres: pool")
+}
