@@ -76,7 +76,7 @@ var toolCatalog = []toolEntry{
 
 	// VALIDATE
 	{Name: "build_check", Category: "validate", Summary: "run go build and return structured compile diagnostics; affected_by=file narrows to that file's reverse-dep closure", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "test_run"},
-	{Name: "test_run", Category: "validate", Summary: "run go test and return a compact pass/fail report; affected_by=file narrows to owning package + reverse-deps", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "build_check, test"},
+	{Name: "test_run", Category: "validate", Summary: "run go test and return a compact pass/fail report; affected_by=file narrows to owning package + reverse-deps; verbosity=summary|full controls payload size (auto-summary above 50 tests)", Example: `{"affected_by": "internal/foo/bar.go", "verbosity": "summary"}`, Related: "build_check, test"},
 
 	// BATCH
 	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch", "file": "a.go", "identifier": "Foo", "target": "function", "patch_function_ops": [...]}]}`, Related: "patch, create"},
