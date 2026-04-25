@@ -218,6 +218,7 @@ func dispatchBatchFindReferences(ctx context.Context, queries service.SurgeonQue
 		Dir:               item.Dir,
 		Tests:             item.Tests,
 		IncludeDefinition: item.IncludeDefinition,
+		Module:            item.Module,
 	}
 	result, err := queries.FindReferences(ctx, q)
 	if err != nil {
@@ -239,8 +240,9 @@ func dispatchBatchFindDefinition(ctx context.Context, queries service.SurgeonQue
 			File:     item.File,
 			Line:     item.Line,
 		},
-		Dir:   item.Dir,
-		Tests: item.Tests,
+		Dir:    item.Dir,
+		Tests:  item.Tests,
+		Module: item.Module,
 	}
 	result, err := queries.FindDefinition(ctx, q)
 	if err != nil {

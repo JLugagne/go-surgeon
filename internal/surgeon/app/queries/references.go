@@ -21,11 +21,12 @@ import (
 // object resolves — we still load packages with NeedTypes because the
 // symbol might be a method whose receiver must be matched by type.
 func (h *SurgeonQueriesHandler) FindDefinition(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error) {
-	obj, pkg, loaded, err := h.resolveSymbol(ctx, query)
+	obj, pkg, loaded, moduleRoot, err := h.resolveSymbol(ctx, query)
 	if err != nil {
 		return domain.ReferencesResult{}, err
 	}
 	def := objectLocation(obj, loaded)
+	relativizeLocation(&def, moduleRoot)
 	return domain.ReferencesResult{
 		Symbol:     symbolRefFromObject(obj, pkg),
 		Kind:       classifyObject(obj),
@@ -39,7 +40,7 @@ func (h *SurgeonQueriesHandler) FindDefinition(ctx context.Context, query domain
 // The resulting slice includes no duplicates and is sorted by
 // file/line/column.
 func (h *SurgeonQueriesHandler) FindReferences(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error) {
-	obj, pkg, loaded, err := h.resolveSymbol(ctx, query)
+	obj, pkg, loaded, moduleRoot, err := h.resolveSymbol(ctx, query)
 	if err != nil {
 		return domain.ReferencesResult{}, err
 	}
@@ -47,6 +48,10 @@ func (h *SurgeonQueriesHandler) FindReferences(ctx context.Context, query domain
 	def := objectLocation(obj, loaded)
 	refs := collectReferences(obj, loaded)
 	sortLocations(refs)
+	relativizeLocation(&def, moduleRoot)
+	for i := range refs {
+		relativizeLocation(&refs[i], moduleRoot)
+	}
 
 	out := domain.ReferencesResult{
 		Symbol:     symbolRefFromObject(obj, pkg),
@@ -71,28 +76,43 @@ type loadedPackages struct {
 // their type information until it finds the declaration of the named
 // symbol. It is the workhorse that both FindDefinition, FindReferences,
 // and the rename command rely on.
-func (h *SurgeonQueriesHandler) resolveSymbol(ctx context.Context, query domain.ReferencesQuery) (types.Object, *packages.Package, *loadedPackages, error) {
+func (h *SurgeonQueriesHandler) resolveSymbol(ctx context.Context, query domain.ReferencesQuery) (types.Object, *packages.Package, *loadedPackages, string, error) {
 	if query.Symbol.Name == "" {
-		return nil, nil, nil, fmt.Errorf("symbol.name is required")
+		return nil, nil, nil, "", fmt.Errorf("symbol.name is required")
 	}
 
 	dir := query.Dir
-	if dir == "" {
+	var moduleRoot string
+	if query.Module != "" {
+		info, err := h.resolver.Resolve(ctx, query.Module)
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+		moduleRoot = info.Dir
+		switch {
+		case dir == "" || dir == ".":
+			dir = info.Dir
+		case filepath.IsAbs(dir):
+			return nil, nil, nil, "", fmt.Errorf("dir must be a relative path when module is set; got %q", dir)
+		default:
+			dir = filepath.Join(info.Dir, dir)
+		}
+	} else if dir == "" {
 		dir = "."
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolve dir %q: %w", dir, err)
+		return nil, nil, nil, "", fmt.Errorf("resolve dir %q: %w", dir, err)
 	}
 
 	loadedPkgs, err := h.loader.Load(ctx, absDir, query.Tests)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 	fset := loadedPkgs.Fset
 	pkgs := loadedPkgs.Pkgs
 	if len(pkgs) == 0 {
-		return nil, nil, nil, fmt.Errorf("no Go packages found under %q", absDir)
+		return nil, nil, nil, "", fmt.Errorf("no Go packages found under %q", absDir)
 	}
 
 	// Surface hard loader errors (missing deps, parse failures). A
@@ -103,7 +123,7 @@ func (h *SurgeonQueriesHandler) resolveSymbol(ctx context.Context, query domain.
 			// Only elevate errors from packages the user asked for.
 			// Transitive-dep errors are surfaced with a package prefix.
 			if e.Kind == packages.TypeError || e.Kind == packages.ParseError {
-				return nil, nil, nil, fmt.Errorf("%s: %s", p.PkgPath, e.Msg)
+				return nil, nil, nil, "", fmt.Errorf("%s: %s", p.PkgPath, e.Msg)
 			}
 		}
 	}
@@ -112,9 +132,9 @@ func (h *SurgeonQueriesHandler) resolveSymbol(ctx context.Context, query domain.
 
 	obj, pkg, err := findObject(loaded, query.Symbol)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
-	return obj, pkg, loaded, nil
+	return obj, pkg, loaded, moduleRoot, nil
 }
 
 // findObject walks the type-checked packages looking for the symbol's
@@ -450,4 +470,16 @@ func classifyObject(obj types.Object) string {
 		return "package"
 	}
 	return "symbol"
+}
+
+// relativizeLocation rewrites loc.File to a path relative to moduleRoot
+// when the location lives under that root. Used so module-scoped lookups
+// return paths consistent with FindSymbols (relative, no version marker).
+func relativizeLocation(loc *domain.Location, moduleRoot string) {
+	if moduleRoot == "" || loc == nil || loc.File == "" {
+		return
+	}
+	if rel, err := filepath.Rel(moduleRoot, loc.File); err == nil && !strings.HasPrefix(rel, "..") {
+		loc.File = rel
+	}
 }

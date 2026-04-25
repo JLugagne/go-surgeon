@@ -171,3 +171,76 @@ func TestGraph_WithModule_AbsoluteDir_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "relative",
 		"error should mention that --dir must be a relative path when --module is set")
 }
+
+// TestFindDefinition_WithModule_FindsCobraSymbol verifies that FindDefinition
+// scoped to a dependency resolves the symbol inside the module cache and
+// returns a path relative to the module root.
+func TestFindDefinition_WithModule_FindsCobraSymbol(t *testing.T) {
+	handler := realHandler(t)
+
+	result, err := handler.FindDefinition(context.Background(), domain.ReferencesQuery{
+		Symbol: domain.SymbolRef{Name: "Command"},
+		Module: "github.com/spf13/cobra",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Definition.File, "expected a definition site")
+
+	assert.False(t, filepath.IsAbs(result.Definition.File),
+		"definition path %q should be relative to module root", result.Definition.File)
+	assert.NotContains(t, result.Definition.File, "@",
+		"definition path %q should not contain a version marker", result.Definition.File)
+	assert.Equal(t, "Command", result.Symbol.Name)
+}
+
+// TestFindReferences_WithModule_ReturnsRelativePaths verifies that
+// FindReferences scoped to a module returns reference paths relative to
+// the module root, matching the convention used by FindSymbols.
+func TestFindReferences_WithModule_ReturnsRelativePaths(t *testing.T) {
+	handler := realHandler(t)
+
+	result, err := handler.FindReferences(context.Background(), domain.ReferencesQuery{
+		Symbol:            domain.SymbolRef{Name: "Command"},
+		Module:            "github.com/spf13/cobra",
+		IncludeDefinition: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.References, "expected at least one reference")
+
+	for _, ref := range result.References {
+		assert.False(t, filepath.IsAbs(ref.File),
+			"reference path %q should be relative to module root", ref.File)
+		assert.NotContains(t, ref.File, "@",
+			"reference path %q should not contain a version marker", ref.File)
+	}
+	assert.False(t, filepath.IsAbs(result.Definition.File),
+		"definition path %q should be relative to module root", result.Definition.File)
+}
+
+// TestFindDefinition_WithModule_InvalidModule_ReturnsError verifies that
+// scoping to a module not in go.mod produces a descriptive error.
+func TestFindDefinition_WithModule_InvalidModule_ReturnsError(t *testing.T) {
+	handler := realHandler(t)
+
+	_, err := handler.FindDefinition(context.Background(), domain.ReferencesQuery{
+		Symbol: domain.SymbolRef{Name: "Command"},
+		Module: "github.com/this/does/not/exist/in/gomod",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a dependency",
+		"error should mention that the module is not a dependency")
+}
+
+// TestFindDefinition_WithModule_AbsoluteDir_ReturnsError verifies that
+// passing an absolute --dir together with --module is rejected.
+func TestFindDefinition_WithModule_AbsoluteDir_ReturnsError(t *testing.T) {
+	handler := realHandler(t)
+
+	_, err := handler.FindDefinition(context.Background(), domain.ReferencesQuery{
+		Symbol: domain.SymbolRef{Name: "Command"},
+		Module: "github.com/spf13/cobra",
+		Dir:    "/tmp/absolute",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "relative",
+		"error should mention that --dir must be a relative path when --module is set")
+}
