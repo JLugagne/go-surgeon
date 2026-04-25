@@ -45,6 +45,7 @@ const patchToolDescription = "Surgical AST-aware editor — one tool for all dec
 	"'decl' edits a top-level const/var value. " +
 	"All targets: file + patches required; preview=true returns diff without writing. " +
 	"FUNCTION ops: replace, insert_before, insert_after, delete, wrap, set_signature. " +
+	"SIGNATURE: set_signature takes params (array of declarations without parens, e.g. [\"ctx context.Context\", \"x int\"]) and/or returns; at least one is required. " +
 	"LINE TARGETING (preferred for function/decl): at_line or from_line/to_line with file-absolute line numbers — faster and unambiguous than text match. " +
 	"TEXT MATCHING (fallback): match (whitespace-normalized) or match_regex (RE2); disambiguate with occurrence. " +
 	"STRUCT ops: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. " +

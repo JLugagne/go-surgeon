@@ -144,7 +144,7 @@ var patchFunctionOps = map[string]toolOpEntry{
 		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "wrap", "match": "doStuff()", "wrap": "if ok {\n\t%s\n}"}]}`,
 	},
 	"set_signature": {
-		Description: "Rewrite only the params list and/or the returns of a function or method, leaving the body, name, receiver, and type parameters intact. Supply params (with parens) and/or returns.",
+		Description: "Rewrite only the params list and/or the returns of a function or method, leaving the body, name, receiver, and type parameters intact. Supply params as an array of declarations without parens (e.g. [\"ctx context.Context\", \"x int\"]) and/or returns; at least one is required.",
 		Required:    []string{"file", "identifier", "patches[].op=set_signature", "patches[].params AND/OR patches[].returns"},
 		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "set_signature", "params": ["ctx context.Context", "x int"], "returns": "error"}]}`,
 	},
