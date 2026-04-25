@@ -52,7 +52,7 @@ const patchToolDescription = "Surgical AST-aware editor — one tool for all dec
 	"DOCS: doc on add_field/set_doc accepts multiline text using \\n. " +
 	"INTERFACE ops: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed. " +
 	"FILE patches apply sequentially; scope: all (default), code_only, identifiers_only. " +
-	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically."
+	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically. WHEN TO USE update INSTEAD: op=replace is a known weak spot for multi-line replacements (issue #3) — if your replacement spans multiple lines, contains tabs/escapes, or you're inserting/replacing fields inside a large struct literal, prefer 'update object=func' (or update object=struct) with the full new declaration. The patch response includes a hint when a replace splice produces a shorter-than-expected result. Call 'describe_tool name=patch' for the full Limitations list."
 
 func registerPatchTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -124,6 +124,10 @@ func handlePatchFunction(ctx context.Context, commands service.SurgeonCommands, 
 	for _, w := range result.Warnings {
 		prefix += "\n  WARNING: " + w
 	}
+	hint := replaceShorterHint(ops)
+	if hint != "" {
+		prefix += "\n  HINT: " + hint
+	}
 	var liftJSON []autoLiftJSON
 	for _, al := range result.AutoLifts {
 		liftJSON = append(liftJSON, autoLiftJSON{
@@ -142,11 +146,11 @@ func handlePatchFunction(ctx context.Context, commands service.SurgeonCommands, 
 	}
 	if result.Diff != "" {
 		res := textResult(prefix + "\n\n" + result.Diff)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings, AutoLifts: liftJSON}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint, AutoLifts: liftJSON}
 		return res, nil, nil
 	}
 	res := textResult(prefix)
-	res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings, AutoLifts: liftJSON}
+	res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint, AutoLifts: liftJSON}
 	return res, nil, nil
 }
 
@@ -295,13 +299,17 @@ func handlePatchFile(ctx context.Context, commands service.SurgeonCommands, in p
 	for _, w := range result.Warnings {
 		prefix += "\n  WARNING: " + w
 	}
+	hint := replaceShorterHintFile(ops)
+	if hint != "" {
+		prefix += "\n  HINT: " + hint
+	}
 	if result.Diff != "" {
 		res := textResult(prefix + "\n\n" + result.Diff)
-		res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
+		res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint}
 		return res, nil, nil
 	}
 	res := textResult(prefix)
-	res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
+	res.StructuredContent = patchFileOutput{File: in.File, Applied: result.Applied, Hits: result.Hits, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint}
 	return res, nil, nil
 }
 
@@ -345,12 +353,52 @@ func handlePatchDecl(ctx context.Context, commands service.SurgeonCommands, in p
 	for _, w := range result.Warnings {
 		prefix += "\n  WARNING: " + w
 	}
+	hint := replaceShorterHint(ops)
+	if hint != "" {
+		prefix += "\n  HINT: " + hint
+	}
 	if result.Diff != "" {
 		res := textResult(prefix + "\n\n" + result.Diff)
-		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings}
+		res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint}
 		return res, nil, nil
 	}
 	res := textResult(prefix)
-	res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings}
+	res.StructuredContent = patchOutput{File: in.File, Identifier: in.Identifier, Applied: result.Applied, Preview: result.Preview, AddedImports: result.AddedImports, Warnings: result.Warnings, Hint: hint}
 	return res, nil, nil
+}
+
+// replaceShorterHint scans the supplied patches for op=replace ops whose
+// replacement text is shorter than the matched text. When at least one such
+// op is present, it returns the agent-facing hint string that points to
+// 'update object=func' as the recommended workaround for the multi-line
+// replacement edge case tracked by issue #3. Returns "" when no shrinking
+// replace is detected.
+func replaceShorterHint(ops []patchOpInput) string {
+	for _, p := range ops {
+		if p.Op != "replace" {
+			continue
+		}
+		if p.Match == "" {
+			continue
+		}
+		if len(p.Replace) < len(p.Match) {
+			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (see describe_tool name=patch for the full Limitations list)"
+		}
+	}
+	return ""
+}
+
+// replaceShorterHintFile is the patch_file (whole-file substitution)
+// counterpart of replaceShorterHint. It inspects the file-level patches and
+// flags the same shrinking-replace pattern that motivates the update fallback.
+func replaceShorterHintFile(ops []filePatchOpInput) string {
+	for _, p := range ops {
+		if p.Match == "" {
+			continue
+		}
+		if len(p.Replace) < len(p.Match) {
+			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (see describe_tool name=patch for the full Limitations list)"
+		}
+	}
+	return ""
 }

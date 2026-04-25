@@ -30,7 +30,9 @@ type toolEntry struct {
 	Summary  string // one-line "when to use"
 	Example  string // optional canonical example JSON arguments
 	Related  string // comma-separated names of related tools (optional)
-	Ops      map[string]toolOpEntry
+	// optional list of known limitations / edge cases with workarounds — surfaced under a 'limitations:' section in the per-tool detail view
+	Limitations []string
+	Ops         map[string]toolOpEntry
 }
 
 // toolCatalog is the machine-readable version of serverInstructions.
@@ -46,7 +48,11 @@ var toolCatalog = []toolEntry{
 	{Name: "rename_symbol", Category: "refs", Summary: "type-aware: rename a symbol and every reference; blocks export-status flips and in-scope collisions; preview=true for dry run", Example: `{"name": "OldName", "new_name": "NewName", "preview": true}`, Related: "find_references"},
 
 	// EDIT — narrowest first
-	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Ops: patchOps},
+	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Limitations: []string{
+		"multi-line replacement: op=replace can mis-splice multi-line replacements (issue #3) — workaround: use 'update object=func' (or update object=struct) with the full new declaration",
+		"replacement containing tabs/escapes: literal tab characters and escape sequences inside a multi-line replace value can confuse the splice — workaround: use 'update object=func' which takes raw Go source verbatim",
+		"large struct-literal field insertion: inserting many fields into a big struct literal via op=replace is fragile — workaround: use 'update object=func' to rewrite the whole declaration that contains the literal",
+	}, Ops: patchOps},
 	{Name: "patch.function", Category: "edit", Summary: "ops for target=function: replace, insert_before, insert_after, delete, wrap, set_signature", Ops: patchFunctionOps},
 	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc", Ops: patchStructOps},
 	{Name: "patch.interface", Category: "edit", Summary: "ops for target=interface: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed", Ops: patchInterfaceOps},
@@ -307,6 +313,12 @@ func renderDescribeOne(name, format string) *mcp.CallToolResult {
 			if e.Related != "" {
 				fmt.Fprintf(&sb, "  see also: %s\n", e.Related)
 			}
+			if len(e.Limitations) > 0 {
+				sb.WriteString("  limitations:\n")
+				for _, lim := range e.Limitations {
+					fmt.Fprintf(&sb, "    - %s\n", lim)
+				}
+			}
 			return textResult(sb.String())
 		}
 	}
@@ -486,11 +498,12 @@ func canonicalOpOrder(ops map[string]toolOpEntry) []string {
 // shape exposed via StructuredContent.
 func toolEntryJSON(e toolEntry) toolEntryOut {
 	return toolEntryOut{
-		Name:     e.Name,
-		Category: e.Category,
-		Summary:  e.Summary,
-		Example:  e.Example,
-		Related:  e.Related,
+		Name:        e.Name,
+		Category:    e.Category,
+		Summary:     e.Summary,
+		Example:     e.Example,
+		Related:     e.Related,
+		Limitations: e.Limitations,
 	}
 }
 
@@ -512,11 +525,12 @@ func jsonResult(payload any) *mcp.CallToolResult {
 
 // toolEntryOut is the JSON projection of toolEntry (catalog row).
 type toolEntryOut struct {
-	Name     string `json:"name"`
-	Category string `json:"category"`
-	Summary  string `json:"summary"`
-	Example  string `json:"example,omitempty"`
-	Related  string `json:"related,omitempty"`
+	Name        string   `json:"name"`
+	Category    string   `json:"category"`
+	Summary     string   `json:"summary"`
+	Example     string   `json:"example,omitempty"`
+	Related     string   `json:"related,omitempty"`
+	Limitations []string `json:"limitations,omitempty"`
 }
 
 // describeToolOutput is the JSON shape for name=X (single tool).
