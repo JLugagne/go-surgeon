@@ -174,3 +174,43 @@ func TestSchemaHint_PatchesIsUnrelatedString(t *testing.T) {
 	assert.Contains(t, text, "JSON-encoded string instead of an array")
 	assert.False(t, strings.Contains(text, "serialized twice"), "inner value is not a JSON array, should not claim double-serialization")
 }
+
+// TestSchemaHint_PatchOpReplaceAsArray verifies that a patch op whose
+// 'replace' field arrived as a JSON array (the silent-data-loss pattern
+// described in issue #3) is intercepted before the splice ever runs.
+// The middleware must return an actionable message naming the offending
+// patch index and field, and the business handler must not be invoked.
+func TestSchemaHint_PatchOpReplaceAsArray(t *testing.T) {
+	var called bool
+	commands := &mockCommands{
+		patchFunctionFn: func(_ context.Context, _ domain.PatchFunctionRequest) (domain.PatchFunctionResult, error) {
+			called = true
+			return domain.PatchFunctionResult{}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "patch",
+		Arguments: map[string]any{
+			"target":     "function",
+			"file":       "foo.go",
+			"identifier": "Foo",
+			"patches": []map[string]any{
+				{
+					"op":      "replace",
+					"match":   "x",
+					"replace": []string{"line1", "line2"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "expected the middleware to flag the bad type")
+	text := resultText(t, result)
+	assert.Contains(t, text, "patch #1")
+	assert.Contains(t, text, "replace")
+	assert.Contains(t, text, "JSON array")
+	assert.Contains(t, text, "string is required")
+	assert.False(t, called, "business handler must not run when the middleware rejects")
+}
