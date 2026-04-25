@@ -22,6 +22,7 @@ type referencesInput struct {
 	Dir               string `json:"dir,omitempty" jsonschema:"directory to load packages from (defaults to '.')"`
 	Tests             bool   `json:"tests,omitempty" jsonschema:"include _test.go files when resolving and scanning for references"`
 	IncludeDefinition bool   `json:"include_definition,omitempty" jsonschema:"on find_references only: also return the definition site; defaults to false"`
+	Module            string `json:"module,omitempty" jsonschema:"import path of a dependency to search in instead of the current project, e.g. 'github.com/spf13/cobra'"`
 }
 
 // renameInput drives the rename_symbol MCP tool.
@@ -75,7 +76,7 @@ type renameOutput struct {
 func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "find_definition",
-		Description: "Locate the declaration of a Go symbol (function, method, type, var, const, or struct field). Resolution is type-aware via go/packages — works across packages, including when the same name exists in multiple packages. Returns file:line:column of the defining identifier. Pair name with receiver/package/file+line when ambiguous.",
+		Description: "Locate the declaration of a Go symbol (function, method, type, var, const, or struct field). Resolution is type-aware via go/packages — works across packages, including when the same name exists in multiple packages. Returns file:line:column of the defining identifier. Pair name with receiver/package/file+line when ambiguous. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in referencesInput) (*mcp.CallToolResult, any, error) {
 		if in.Name == "" {
 			return errorResult("find_definition: name is required"), nil, nil
@@ -88,8 +89,9 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 				File:     in.File,
 				Line:     in.Line,
 			},
-			Dir:   in.Dir,
-			Tests: in.Tests,
+			Dir:    in.Dir,
+			Tests:  in.Tests,
+			Module: in.Module,
 		}
 		result, err := queries.FindDefinition(ctx, q)
 		if err != nil {
@@ -104,7 +106,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "find_references",
-		Description: "Find every reference to a Go symbol across the module, using go/packages type information. Returns file:line:column for each use, deduplicated and sorted. Set include_definition=true to also get the declaration site in one call. Use this before a rename to preview impact.",
+		Description: "Find every reference to a Go symbol across the module, using go/packages type information. Returns file:line:column for each use, deduplicated and sorted. Set include_definition=true to also get the declaration site in one call. Use this before a rename to preview impact. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in referencesInput) (*mcp.CallToolResult, any, error) {
 		if in.Name == "" {
 			return errorResult("find_references: name is required"), nil, nil
@@ -120,6 +122,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 			Dir:               in.Dir,
 			Tests:             in.Tests,
 			IncludeDefinition: in.IncludeDefinition,
+			Module:            in.Module,
 		}
 		result, err := queries.FindReferences(ctx, q)
 		if err != nil {

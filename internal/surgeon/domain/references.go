@@ -38,6 +38,10 @@ type ReferencesQuery struct {
 	IncludeDefinition bool
 	// Tests, when true, also loads _test.go files.
 	Tests bool
+	// Module, when set, scopes the lookup to that dependency's source
+	// instead of the current project. Dir is interpreted relative to the
+	// resolved module root when Module is set.
+	Module string
 }
 
 // Location is a file:line:column position inside a Go source file,

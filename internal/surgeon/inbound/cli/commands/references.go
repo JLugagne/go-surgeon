@@ -14,7 +14,7 @@ import (
 // declaration — useful when grep gives too many matches or when the
 // caller wants a type-aware resolution.
 func NewFindDefinitionCommand(queries service.SurgeonQueries) *cobra.Command {
-	var receiver, pkg, file, dir string
+	var receiver, pkg, file, dir, module string
 	var line int
 	var tests bool
 
@@ -23,10 +23,12 @@ func NewFindDefinitionCommand(queries service.SurgeonQueries) *cobra.Command {
 		Short: "Locate the declaration of a Go symbol (type-aware)",
 		Long: `Resolves the symbol via go/packages and prints the file:line:column
 of its declaration. Pair NAME with --receiver / --package / --file / --line
-to disambiguate when the name is not unique.`,
+to disambiguate when the name is not unique. Use --module to look inside a
+dependency's source instead of the current project.`,
 		Example: `  go-surgeon find-definition BookRepository
   go-surgeon find-definition Handle --receiver BookHandler
-  go-surgeon find-definition Config --package internal/surgeon/domain`,
+  go-surgeon find-definition Config --package internal/surgeon/domain
+  go-surgeon find-definition Command --module github.com/spf13/cobra`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -38,8 +40,9 @@ to disambiguate when the name is not unique.`,
 					File:     file,
 					Line:     line,
 				},
-				Dir:   dir,
-				Tests: tests,
+				Dir:    dir,
+				Tests:  tests,
+				Module: module,
 			})
 			if err != nil {
 				return err
@@ -61,13 +64,14 @@ to disambiguate when the name is not unique.`,
 	cmd.Flags().IntVar(&line, "line", 0, "Declaration line (1-based); pair with --file")
 	cmd.Flags().StringVarP(&dir, "dir", "d", ".", "Directory to load packages from")
 	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files in the search")
+	cmd.Flags().StringVar(&module, "module", "", "Import path of a dependency to search in instead of the current project")
 	return cmd
 }
 
 // NewFindReferencesCommand wires the find-references CLI subcommand.
 // Prints each site the type-checker attributes to the resolved symbol.
 func NewFindReferencesCommand(queries service.SurgeonQueries) *cobra.Command {
-	var receiver, pkg, file, dir string
+	var receiver, pkg, file, dir, module string
 	var line int
 	var tests, includeDef bool
 
@@ -76,10 +80,12 @@ func NewFindReferencesCommand(queries service.SurgeonQueries) *cobra.Command {
 		Short: "Find every reference to a Go symbol across the module",
 		Long: `Loads the module via go/packages and prints file:line:column for every
 identifier that resolves to the named symbol. Use --include-definition to
-also print the declaration.`,
+also print the declaration. Use --module to look inside a dependency's
+source instead of the current project.`,
 		Example: `  go-surgeon find-references BookRepository
   go-surgeon find-references Handle --receiver BookHandler --include-definition
-  go-surgeon find-references helper --tests`,
+  go-surgeon find-references helper --tests
+  go-surgeon find-references Command --module github.com/spf13/cobra`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -94,6 +100,7 @@ also print the declaration.`,
 				Dir:               dir,
 				Tests:             tests,
 				IncludeDefinition: includeDef,
+				Module:            module,
 			})
 			if err != nil {
 				return err
@@ -120,6 +127,7 @@ also print the declaration.`,
 	cmd.Flags().StringVarP(&dir, "dir", "d", ".", "Directory to load packages from")
 	cmd.Flags().BoolVarP(&tests, "tests", "t", false, "Include _test.go files in the search")
 	cmd.Flags().BoolVar(&includeDef, "include-definition", false, "Also print the definition site")
+	cmd.Flags().StringVar(&module, "module", "", "Import path of a dependency to search in instead of the current project")
 	return cmd
 }
 
