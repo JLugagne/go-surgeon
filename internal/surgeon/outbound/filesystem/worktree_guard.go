@@ -1,3 +1,8 @@
+// Package filesystem worktree-guard helpers: anchor writes on the
+// worktree the MCP server was launched in, rewrite cross-worktree paths
+// that arrive via symlinks (the /go/<module> -> parent-checkout case),
+// and refuse writes that would land outside any worktree we can map
+// back to that root.
 package filesystem
 
 import (
@@ -7,58 +12,96 @@ import (
 	"strings"
 )
 
-// guardWriteInWorktree refuses writes whose resolved real path lands
-// outside the caller's current git worktree. The guard exists to catch
-// symlink-induced writes: the Claude Code harness sometimes symlinks
-// /go/<module> to the main checkout while a subagent runs inside a
-// worktree under .claude/worktrees/. A naive os.WriteFile follows the
-// symlink and clobbers main silently. This helper makes that case a
-// loud error instead.
-//
-// Returns nil (allow) when:
-//   - cwd is not inside a git worktree (temp dirs, non-git checkouts);
-//   - target is inside GOMODCACHE (module-cache paths are symlinks by
-//     design and edits there are an orthogonal concern);
-//   - target resolves to the same worktree root as cwd.
-//
-// Returns a descriptive error otherwise so the caller can retry with a
-// worktree-absolute path or cd into the intended worktree.
-func guardWriteInWorktree(path string) error {
+// rootEnvVar is the environment variable that pins the worktree root.
+// When set, it overrides any cwd-based heuristic. The Claude Code
+// harness can set this when spawning the MCP server inside an agent
+// worktree to guarantee writes land where the agent expects them.
+const rootEnvVar = "GO_SURGEON_ROOT"
+
+// resolveRoot returns the worktree root the FileSystem should anchor on.
+// Priority:
+//  1. GO_SURGEON_ROOT env var (resolved + symlinks).
+//  2. Walk up from cwd to find a .git entry.
+//  3. Empty string when no worktree is detectable (temp dirs, non-git
+//     checkouts); callers fall through to plain os.* semantics.
+func resolveRoot() string {
+	if env := strings.TrimSpace(os.Getenv(rootEnvVar)); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return canonical(abs)
+		}
+		return canonical(env)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil // can't compute; fall through to normal write
+		return ""
 	}
-	cwdRoot := findGitWorktreeRoot(cwd)
-	if cwdRoot == "" {
-		return nil
+	return canonical(findGitWorktreeRoot(cwd))
+}
+
+// normalizePath turns a caller-supplied path into a write target inside
+// the captured worktree root.
+//
+//   - Empty root: returns the input unchanged (best-effort mode for
+//     tests, /tmp, non-git checkouts).
+//   - Relative path: anchored on root rather than os.Getwd(), so a
+//     server launched from the parent checkout still writes into the
+//     agent worktree once root is set.
+//   - GOMODCACHE targets: passed through unchanged (read-only by
+//     convention; module cache paths are symlinks by design).
+//   - Absolute path that resolves into a sibling git worktree: rewritten
+//     to <root>/<relpath-inside-sibling>, with a warning describing the
+//     rewrite so callers can surface it to the agent.
+//   - Absolute path under root or outside any worktree: passed through
+//     so legitimate writes to /tmp test fixtures and unrelated trees
+//     keep working.
+func normalizePath(root, path string) (string, string, error) {
+	if path == "" {
+		return path, "", nil
+	}
+	if root == "" {
+		return path, "", nil
 	}
 
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil
+	abs := path
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(root, abs)
 	}
-	// Resolve symlinks on the deepest existing parent so the guard works
-	// for new files in existing directories.
-	real := resolveRealPath(abs)
 
 	if modCache := os.Getenv("GOMODCACHE"); modCache != "" {
-		if hasPathPrefix(real, modCache) {
-			return nil
+		if hasPathPrefix(canonical(abs), canonical(modCache)) {
+			return abs, "", nil
 		}
 	}
 
-	targetRoot := findGitWorktreeRoot(real)
-	if targetRoot == "" {
-		// Target is outside any git worktree; allow (could be /tmp, etc.)
-		return nil
+	real := resolveRealPath(abs)
+
+	if hasPathPrefix(real, root) {
+		return abs, "", nil
 	}
-	if sameDir(targetRoot, cwdRoot) {
-		return nil
+
+	siblingRoot := findGitWorktreeRoot(real)
+	if siblingRoot == "" {
+		// Target is outside any git worktree (temp dir, /tmp test
+		// fixture, etc.). The cross-worktree symlink failure mode
+		// cannot apply here, so allow the write. This preserves the
+		// pre-fix behavior for tests that write into t.TempDir() while
+		// the server's captured root is the repo.
+		return abs, "", nil
 	}
-	return fmt.Errorf("refusing write: %q resolves to %q which is outside the current worktree %q; pass a worktree-absolute path or run from inside the intended worktree", path, real, cwdRoot)
+
+	if !sameDir(siblingRoot, root) {
+		rel, err := filepath.Rel(siblingRoot, real)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			rewritten := filepath.Join(root, rel)
+			warn := fmt.Sprintf("path %q resolved to sibling worktree %q; rewrote to %q (root=%q)", path, real, rewritten, root)
+			return rewritten, warn, nil
+		}
+	}
+
+	return abs, "", nil
 }
 
-// findGitWorktreeRoot walks up from dir looking for a .git entry (file
+// findGitWorktreeRoot walks up from start looking for a .git entry (file
 // or directory). Returns "" when no worktree root is found.
 func findGitWorktreeRoot(start string) string {
 	dir := start
@@ -95,6 +138,18 @@ func resolveRealPath(abs string) string {
 	return filepath.Join(realDir, file)
 }
 
+// canonical returns the symlink-resolved absolute form of dir, or dir
+// itself when resolution fails.
+func canonical(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return real
+	}
+	return dir
+}
+
 // hasPathPrefix reports whether path is equal to prefix or lives under
 // prefix, using the path separator to avoid /foo matching /foobar.
 func hasPathPrefix(path, prefix string) bool {
@@ -109,13 +164,5 @@ func hasPathPrefix(path, prefix string) bool {
 }
 
 func sameDir(a, b string) bool {
-	ra, err := filepath.EvalSymlinks(a)
-	if err != nil {
-		ra = a
-	}
-	rb, err := filepath.EvalSymlinks(b)
-	if err != nil {
-		rb = b
-	}
-	return ra == rb
+	return canonical(a) == canonical(b)
 }

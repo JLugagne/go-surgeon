@@ -13,31 +13,49 @@ import (
 )
 
 // FileSystem is an adapter that interacts with the real file system.
-type FileSystem struct{}
-
-// NewFileSystem creates a new FileSystem adapter.
-func NewFileSystem() *FileSystem {
-	return &FileSystem{}
+// The captured root anchors path normalization so that writes from a
+// server launched in one worktree never silently land in a sibling
+// checkout reached via symlink.
+type FileSystem struct {
+	root string
 }
 
-// ReadFile reads the content of the file at path.
+// NewFileSystem creates a new FileSystem adapter and captures the
+// worktree root once. Honors the GO_SURGEON_ROOT env var when set;
+// falls back to walking up from cwd to a .git entry.
+func NewFileSystem() *FileSystem {
+	return &FileSystem{root: resolveRoot()}
+}
+
+// ReadFile reads the content of the file at path. Reads are allowed
+// from anywhere — the worktree guard only protects writes from
+// escaping the captured root.
 func (f *FileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// WriteFile writes content to the file at path.
+// WriteFile writes content to the file at path. Path is normalized
+// against the captured root: relative paths are anchored on root, and
+// absolute paths that resolve through a symlink into a sibling worktree
+// are rewritten to land inside our root. A one-line warning is emitted
+// to stderr when a rewrite happens so agents learn the canonical path.
 func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
-	if err := guardWriteInWorktree(path); err != nil {
+	resolved, warning, err := normalizePath(f.root, path)
+	if err != nil {
 		return nil, err
 	}
-	content, addedImports := applyGoImports(path, content)
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, "go-surgeon: "+warning)
+	}
+	content, addedImports := applyGoImports(resolved, content)
+	if err := os.WriteFile(resolved, content, 0644); err != nil {
 		return nil, err
 	}
 	return addedImports, nil
 }
 
 // ReadDir returns the names of the files and directories in path.
+// Reads are allowed from anywhere.
 func (f *FileSystem) ReadDir(ctx context.Context, path string) ([]string, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -52,7 +70,8 @@ func (f *FileSystem) ReadDir(ctx context.Context, path string) ([]string, error)
 	return names, nil
 }
 
-// IsDir returns true if the path is a directory.
+// IsDir returns true if the path is a directory. Reads are allowed
+// from anywhere.
 func (f *FileSystem) IsDir(ctx context.Context, path string) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -61,20 +80,31 @@ func (f *FileSystem) IsDir(ctx context.Context, path string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-// MkdirAll creates a directory and all necessary parents.
+// MkdirAll creates a directory and all necessary parents. Path is
+// normalized against the captured root; cross-worktree rewrites are
+// warned about on stderr.
 func (f *FileSystem) MkdirAll(ctx context.Context, path string) error {
-	if err := guardWriteInWorktree(path); err != nil {
+	resolved, warning, err := normalizePath(f.root, path)
+	if err != nil {
 		return err
 	}
-	return os.MkdirAll(path, 0755)
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, "go-surgeon: "+warning)
+	}
+	return os.MkdirAll(resolved, 0755)
 }
 
-// DeleteFile removes a file from disk.
+// DeleteFile removes a file from disk. Path is normalized against the
+// captured root; cross-worktree rewrites are warned about on stderr.
 func (f *FileSystem) DeleteFile(ctx context.Context, path string) error {
-	if err := guardWriteInWorktree(path); err != nil {
+	resolved, warning, err := normalizePath(f.root, path)
+	if err != nil {
 		return err
 	}
-	return os.Remove(path)
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, "go-surgeon: "+warning)
+	}
+	return os.Remove(resolved)
 }
 
 // warnUnresolvedImports parses the Go source and warns to stderr about any

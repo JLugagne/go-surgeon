@@ -13,10 +13,14 @@ import (
 
 func TestDryRunFileSystem(t *testing.T) {
 	ctx := context.Background()
+	tmpDir := t.TempDir()
+	// Anchor FileSystem on the tmpdir so writes under it don't trip
+	// the cross-worktree guard that resolves cwd to the repo root.
+	t.Setenv("GO_SURGEON_ROOT", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755))
 	realFS := filesystem.NewFileSystem()
 	dryFS := filesystem.NewDryRunFileSystem(realFS)
 
-	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.go")
 
 	err := os.WriteFile(testFile, []byte("package main\n"), 0644)
@@ -36,10 +40,12 @@ func TestDryRunFileSystem(t *testing.T) {
 
 func TestProxyFileSystem(t *testing.T) {
 	ctx := context.Background()
+	tmpDir := t.TempDir()
+	t.Setenv("GO_SURGEON_ROOT", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755))
 	realFS := filesystem.NewFileSystem()
 	proxy := &filesystem.ProxyFileSystem{Active: realFS}
 
-	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "proxy.txt")
 
 	_, err := proxy.WriteFile(ctx, testFile, []byte("hello"))
