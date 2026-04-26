@@ -248,7 +248,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
 			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
 			if p.Op == domain.PatchOpReplace {
-				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl})
+				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl, Match: origBody[ls:le], PreBody: origBody})
 			}
 			continue
 		}
@@ -314,7 +314,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 						}
 					}
 					extraEdits = append(extraEdits, resolvedEdit{start: h[0], end: h[1], replacement: repl})
-					replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
+					replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl, Match: origBody[h[0]:h[1]], PreBody: origBody})
 				case domain.PatchOpDelete:
 					start, end := deletionRange(origBody, h[0], h[1])
 					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: ""})
@@ -431,7 +431,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				}
 			}
 			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
-			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
+			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl, Match: origBody[hit[0]:hit[1]], PreBody: origBody})
 
 		case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
 			plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
@@ -570,6 +570,20 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	// payload, fail loudly instead of writing corrupted bytes.
 	if vErr := validateReplaceApplied(newSrc, replaceChecks); vErr != nil {
 		return domain.PatchFunctionResult{}, vErr
+	}
+	// Issue #14 guard: if a replace patch's match consumed more statements
+	// than the replacement re-inserted (and the function body now has fewer
+	// statements than the math says it should), refuse the write. This is
+	// the multi-line shrinking-replace case where validateReplaceApplied's
+	// substring check passes but the body still ends up missing content.
+	postBody := string(newBody)
+	for _, rv := range replaceChecks {
+		if rv.Match == "" || rv.PreBody == "" {
+			continue
+		}
+		if vErr := validateNoDroppedStmts(rv.Replacement, rv.Match, rv.PreBody, postBody); vErr != nil {
+			return domain.PatchFunctionResult{}, vErr
+		}
 	}
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
