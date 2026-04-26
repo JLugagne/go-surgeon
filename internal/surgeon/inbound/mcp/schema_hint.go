@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -36,18 +37,10 @@ func schemaHintMiddleware() mcp.Middleware {
 				return next(ctx, method, req)
 			}
 			if msg := detectPatchesStringMismatch(params.Arguments); msg != "" {
-				res := &mcp.CallToolResult{
-					Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-					IsError: true,
-				}
-				return res, nil
+				return errorResultWithCode(msg, &domain.Error{Code: "INVALID_ARGUMENT", Message: msg}), nil
 			}
 			if msg := detectPatchOpFieldTypeMismatch(params.Arguments); msg != "" {
-				res := &mcp.CallToolResult{
-					Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-					IsError: true,
-				}
-				return res, nil
+				return errorResultWithCode(msg, &domain.Error{Code: "INVALID_ARGUMENT", Message: msg}), nil
 			}
 			return next(ctx, method, req)
 		}
