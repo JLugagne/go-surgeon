@@ -49,7 +49,7 @@ var toolCatalog = []toolEntry{
 
 	// EDIT — narrowest first
 	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Limitations: []string{
-		"multi-line replacement: op=replace can mis-splice multi-line replacements (issue #3) — workaround: use 'update object=func' (or update object=struct) with the full new declaration",
+		"multi-line replacement: op=replace can mis-splice multi-line replacements (issues #3, #14) — patch validates results post-splice and refuses with PATCH_REPLACE_NOT_APPLIED or PATCH_DROPPED_CONTENT when content is dropped, leaving the file unchanged. Workaround: use 'update object=func' (or update object=file/struct) with the full new declaration",
 		"replacement containing tabs/escapes: literal tab characters and escape sequences inside a multi-line replace value can confuse the splice — workaround: use 'update object=func' which takes raw Go source verbatim",
 		"large struct-literal field insertion: inserting many fields into a big struct literal via op=replace is fragile — workaround: use 'update object=func' to rewrite the whole declaration that contains the literal",
 	}, Ops: patchOps},

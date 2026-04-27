@@ -31,6 +31,15 @@ import (
 type replaceValidation struct {
 	Index       int
 	Replacement string
+	// Match holds the matched text the replacement displaced. Optional —
+	// left empty by callers (patch_file) that do not need the dropped-content
+	// check. patch_function fills it so validateNoDroppedStmts can compare
+	// statement counts.
+	Match string
+	// PreBody holds the function body text BEFORE this patch was applied.
+	// Optional and only used by patch_function to feed the statement-count
+	// comparison in validateNoDroppedStmts.
+	PreBody string
 }
 
 // validateReplaceApplied checks every entry in replacements against newSrc.

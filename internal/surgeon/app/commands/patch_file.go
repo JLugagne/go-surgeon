@@ -215,6 +215,17 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 			if vErr := validateReplaceApplied([]byte(working), perPatch); vErr != nil {
 				return domain.PatchFileResult{}, vErr
 			}
+			// Issue #14 guard: if the replacement contains top-level declarations
+			// that the post-splice file is missing, refuse the write. This catches
+			// the multi-line shrinking-replace bug where validateReplaceApplied's
+			// substring check passes but the result is still missing decls (e.g.
+			// the splice swallowed adjacent code that the replacement did not
+			// re-insert).
+			for _, r := range replaces {
+				if vErr := validateNoDroppedDecls(req.FilePath, r, []byte(working)); vErr != nil {
+					return domain.PatchFileResult{}, vErr
+				}
+			}
 		}
 
 		switch {
