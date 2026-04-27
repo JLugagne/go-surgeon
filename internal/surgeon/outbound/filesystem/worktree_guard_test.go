@@ -12,18 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// chdirT chdirs into dir for the duration of the test, restoring the
-// original cwd afterwards.
-func chdirT(t *testing.T, dir string) {
-	t.Helper()
-	prev, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() {
-		_ = os.Chdir(prev)
-	})
-}
-
 // initGitRoot makes dir look like a git worktree root by creating a
 // .git directory (so findGitWorktreeRoot stops there).
 func initGitRoot(t *testing.T, dir string) {
