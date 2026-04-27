@@ -52,7 +52,7 @@ const patchToolDescription = "Surgical AST-aware editor — one tool for all dec
 	"DOCS: doc on add_field/set_doc accepts multiline text using \\n. " +
 	"INTERFACE ops: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed. " +
 	"FILE patches apply sequentially; scope: all (default), code_only, identifiers_only. " +
-	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically. WHEN TO USE update INSTEAD: op=replace is a known weak spot for multi-line replacements (issue #3) — if your replacement spans multiple lines, contains tabs/escapes, or you're inserting/replacing fields inside a large struct literal, prefer 'update object=func' (or update object=struct) with the full new declaration. The patch response includes a hint when a replace splice produces a shorter-than-expected result. Call 'describe_tool name=patch' for the full Limitations list."
+	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically. WHEN TO USE update INSTEAD: op=replace is still a weak spot for multi-line replacements — for replacements that span multiple lines, contain tabs/escapes, or restructure a large struct literal, prefer 'update object=func' (or update object=struct/file) with the full new declaration. patch validates op=replace results post-splice (issues #3 and #14): replacements whose substring is missing or whose declarations were silently dropped are refused with PATCH_REPLACE_NOT_APPLIED / PATCH_DROPPED_CONTENT and the file is left unchanged. Call 'describe_tool name=patch' for the full Limitations list."
 
 func registerPatchTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
