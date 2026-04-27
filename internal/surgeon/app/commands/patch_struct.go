@@ -315,7 +315,7 @@ func applyStructPatch(working *[]*element, original []*element, p domain.StructP
 
 	case domain.StructPatchOpSetDoc:
 		if p.Name == "" {
-			return "name is required"
+			return "set_doc on a struct field requires name (the field whose doc you want to set); to set the struct's own doc comment, use 'update object=struct' with a doc field — see issue #15"
 		}
 		idx := findElement(*working, p.Name)
 		if idx == -1 {
