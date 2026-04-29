@@ -19,6 +19,11 @@ type TestRunRequest struct {
 	TimeoutSeconds int
 	// AffectedBy narrows the test run to the package that owns this file plus its reverse-dependency closure within the module. Mutually exclusive with Dir. The path is relative to the project root.
 	AffectedBy string
+	// Symbols is a list of symbol references in the form "FuncName" or
+	// "pkg.FuncName". Each symbol is resolved to its owning package and a
+	// -run filter is derived from Go naming conventions (^TestFuncName).
+	// Mutually exclusive with Dir and AffectedBy.
+	Symbols []string
 }
 
 // TestCaseResult summarizes a single `go test -json` test action.
