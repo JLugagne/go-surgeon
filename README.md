@@ -74,12 +74,17 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 The unified `patch` tool makes scoped edits with a `target` selector: edit inside a function body, add/rename/retype a single struct field, add or remove a single interface method and regenerate the mock — all without re-emitting the whole declaration.
 
+### 6. Type-aware references and renames across the module
+
+`find_definition`, `find_references`, and `rename_symbol` resolve the target via `go/packages` so they only touch identifiers that bind to the same `types.Object` — not other symbols that happen to share a name. They also accept `module=` to resolve into a dependency.
+
 ---
 
 ## When go-surgeon helps vs. when Edit is fine
 
 **Use go-surgeon for:**
 - Exploring unfamiliar Go code (`symbol body=true context=file` gives you a function body + full file outline in one call)
+- Resolving a `file:line` build/stack diagnostic to a declaration (`symbol file=... at_line=...`)
 - Structural edits: adding/renaming struct fields, interface methods, managing imports
 - Batch edits across many functions or files in one atomic operation
 - Multi-step sessions where AST validation prevents compounding errors
@@ -107,6 +112,12 @@ Installs the latest release binary to `~/.local/bin` (no root required). Overrid
 
 ```bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh | sh
+```
+
+**Self-update** — once installed, keep the binary current with:
+
+```bash
+go-surgeon upgrade
 ```
 
 **Homebrew / Scoop / Windows** — coming soon.
@@ -154,20 +165,21 @@ Tools over stdio, grouped by purpose:
 
 | Tools | Purpose |
 |---|---|
-| `overview`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob** |
-| `find_definition`, `find_references`, `rename_symbol` | Type-aware cross-package symbol lookup and rename — powered by `go/packages` |
-| `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write** |
-| `patch` | Unified surgical editor — one tool, five targets (`function`, `struct`, `interface`, `file`, `decl`). Scoped in-place edits without re-emitting whole declarations |
+| `overview`, `symbol` | Explore packages and look up symbols — **replaces Read / Grep / Glob**. `symbol` also resolves a `file:at_line` diagnostic directly to its declaration. |
+| `find_definition`, `find_references`, `rename_symbol` | Type-aware cross-package symbol lookup and rename — powered by `go/packages`. All three accept `module=` to resolve into a dependency. |
+| `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write**. `object="auto"` infers from the content; `delete object="file"` removes the file from disk. |
+| `patch` | Unified surgical editor — one tool, five targets (`function`, `struct`, `interface`, `file`, `decl`). Scoped in-place edits without re-emitting whole declarations. Function ops include `replace`, `insert_before`/`insert_after`, `delete`, `wrap`, and `set_signature` (rewrite params/returns without touching the body). |
+| `patch_function_bulk`, `patch_struct_bulk` | Apply many `patch` operations to many targets in a single atomic call — useful when one refactor touches dozens of functions or structs. |
 | `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`); auto-lifts out of nested scopes |
 | `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated (and auto-deleted) mocks |
 | `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
-| `build_check`, `test_run` | Compile-verify and run tests in-loop; `affected_by=<file>` narrows to the file's reverse-dep closure |
-| `execute_plan` | Run up to 15 edits atomically from a YAML plan — supports every action type including every `patch` target |
+| `build_check`, `test_run` | Compile-verify and run tests in-loop. Both accept `affected_by=<file>` to narrow to the file's reverse-dep closure; `test_run` also accepts `symbols=["pkg.MyFunc"]` to auto-resolve owning packages and build a `-run` filter, plus `verbosity=summary` for compact output on large suites. |
+| `execute_plan` | Run up to 15 edits atomically from a YAML/JSON plan — supports every action type including every `patch` target |
 | `batch_query` | Run up to 10 read-only queries (`symbol` / `overview` / `find_definition` / `find_references`) in one round-trip |
 | `describe_tool` | Queryable catalog of every tool — no args for the grouped list, `name=X` for detail |
 
-Every write tool supports `preview=true` to return a unified diff without writing. Errors carry a structured `{code, message}` in StructuredContent so agents can retry on `CONFLICT`, `NOT_FOUND`, `PATCH_FAILED`, etc. without string-matching.
+Every write tool supports `preview=true` to return a unified diff without writing. Errors carry a structured `{code, message}` in StructuredContent so agents can retry on `CONFLICT`, `NOT_FOUND`, `PATCH_FAILED`, `PATCH_REPLACE_NOT_APPLIED`, `PATCH_DROPPED_CONTENT`, `PATCH_PRODUCES_INVALID_GO`, etc. without string-matching.
 
 See [`USAGE.md`](USAGE.md) for the full parameter reference.
 
@@ -186,6 +198,16 @@ symbol(query="BookHandler.Create", body=true, context="file")
 This replaces what used to be: read the file, grep for the function, read again with offset, grep for related symbols. Measured on a 1000-line file: **4 calls instead of 15**.
 
 Use this as your first move when entering any unfamiliar file — you get the implementation you care about plus a map of everything around it.
+
+### `symbol file=… at_line=…` — resolve a build error to a declaration
+
+When `build_check` or a stack trace gives you `internal/foo/bar.go:142`, you don't need to look up the symbol name. Pass the line and `symbol` returns the outermost named declaration that spans it:
+
+```
+symbol(file="internal/foo/bar.go", at_line=142, body=true)
+```
+
+Mutually exclusive with `query`/`pattern`. Saves the "grep for the function around this line" step entirely.
 
 ### `execute_plan` — atomic multi-step refactors
 
@@ -227,7 +249,7 @@ actions:
     position: before-return
 ```
 
-One tool call. One success or one rollback. No drift between steps.
+One tool call. One success or one rollback. No drift between steps. Every individual `patch_*` action type is also accepted, so atomic multi-step plans can mix in-place patches with whole-declaration replacements.
 
 ### `patch` — one tool, five targets, surgical edits
 
@@ -246,7 +268,22 @@ patch(
 )
 ```
 
-Line targeting (`at_line`, `from_line`/`to_line`) is preferred when you have line numbers from a build error or stack trace — faster and unambiguous. Text matching (`match`, `match_regex`) is the fallback.
+Line targeting (`at_line`, `from_line`/`to_line`) is preferred when you have line numbers from a build error or stack trace — faster and unambiguous. Text matching (`match`, `match_regex`) is the fallback. Use `occurrence=-1` to apply a patch to every match instead of just the first.
+
+**Rewrite a function's signature without touching its body:**
+
+```
+patch(
+  target="function",
+  file="internal/catalog/app/commands/book_handler.go",
+  identifier="BookHandler.Create",
+  patches=[
+    {op: "set_signature",
+     params: ["ctx context.Context", "input CreateBookInput"],
+     returns: "(*Book, error)"},
+  ],
+)
+```
 
 **Target a struct's field list:**
 
@@ -280,6 +317,10 @@ patch(
 
 Other targets: `file` for cross-function batch substitutions, `decl` for const/var values. See [`USAGE.md`](USAGE.md) for the full operation catalog per target.
 
+### `patch_*_bulk` — fan one refactor across many declarations atomically
+
+When the same shape of change has to land on dozens of structs or functions (e.g. add a `CreatedAt` field everywhere, or wrap every `return err` in a domain package), `patch_struct_bulk` and `patch_function_bulk` accept a list of `{file, identifier, patches}` items and apply all of them in one transaction. If any one item fails, nothing is written.
+
 ### `rename_symbol` — type-aware rename across the module
 
 Renaming a symbol with `sed` or generic Edit is how you rename the wrong thing: same-named identifiers in other packages, shadowing variables, method receivers that happen to share the name. `rename_symbol` resolves the target via `go/packages` and rewrites only the identifiers that bind to the same `types.Object`.
@@ -292,13 +333,25 @@ rename_symbol(name="Config", new_name="Settings", preview=true)
 
 Refuses export-status flips and in-scope name collisions. `find_references` (same resolver) lets you preview impact without touching files; set `include_definition=true` to see the declaration alongside the uses.
 
-### `module` — read third-party code the right way
+### `build_check` / `test_run` — verify in-loop, scoped to what changed
+
+After an edit, run the compiler or the tests directly without leaving the agent loop:
+
+```
+build_check(affected_by="internal/catalog/domain/book.go", tests=true)
+test_run(symbols=["catalog.NewBook", "catalog.Book.Validate"], verbosity="summary")
+```
+
+`affected_by=<file>` narrows the build/test to the file's owning package plus its in-module reverse-dep closure — orders of magnitude faster than `./...` on a monorepo. `test_run` additionally accepts `symbols=["pkg.Func", ...]`: it resolves the owning packages and synthesizes a `-run ^(TestFunc|...)$` filter for you. `verbosity="summary"` keeps the structured payload around 1KB even on huge suites; `auto` (default) flips to summary past 50 tests.
+
+### `module=` — read third-party code the right way
 
 Instead of your agent shelling into `$GOMODCACHE` with `find` and `cat`:
 
 ```
-graph(module="github.com/spf13/cobra", symbols=true)
+overview(module="github.com/spf13/cobra", symbols=true)
 symbol(query="Command.Execute", body=true, module="github.com/spf13/cobra")
+find_references(name="Execute", receiver="Command", module="github.com/spf13/cobra")
 ```
 
 Resolved via `go/packages`. Same output format as your own project. Works for stdlib, third-party, and project-local interfaces alike.
@@ -331,9 +384,14 @@ EOF
 
 # Generate stubs for an interface you don't own
 go-surgeon implement io.ReadCloser --receiver "*MyReader" --file internal/pkg/reader.go
+
+# Self-update to the latest release
+go-surgeon upgrade
 ```
 
 Pass `--dry-run` on any command to preview changes as a unified diff without writing to disk.
+
+> The granular `patch` family (in-place edits to function/struct/interface/file/decl) is **MCP-only** for now. The CLI exposes the whole-declaration `update-func` / `update-struct` / `update-interface` commands instead.
 
 See [`USAGE.md`](USAGE.md) for the full CLI reference.
 
@@ -347,6 +405,7 @@ See [`USAGE.md`](USAGE.md) for the full CLI reference.
 - **`preview=true`** (MCP `patch` and other write tools) returns the diff without writing
 - **Atomic operations** — each edit either fully succeeds or returns a structured error; `patch` aborts the whole batch on any single failure
 - **Brace and body guards** — `patch` on `function` rejects edits with unbalanced braces or that would erase the entire function body, with hints pointing at the correct syntax
+- **Post-splice validation** — `patch` on `function`/`file` re-parses the result and refuses replacements whose substring went missing or that silently dropped declarations (`PATCH_REPLACE_NOT_APPLIED`, `PATCH_DROPPED_CONTENT`); the file is left untouched
 - **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
 - **Mocks stay in sync** — `delete_interface` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
 
@@ -375,6 +434,9 @@ curl -fsSL https://raw.githubusercontent.com/JLugagne/go-surgeon/main/install.sh
 git clone https://github.com/JLugagne/go-surgeon.git
 cd go-surgeon && go build -o go-surgeon ./cmd/go-surgeon
 
+# Self-update an existing install
+go-surgeon upgrade
+
 # Shell completion
 go-surgeon completion bash > /etc/bash_completion.d/go-surgeon
 go-surgeon completion zsh  > "${fpath[1]}/_go-surgeon"
@@ -385,7 +447,7 @@ go-surgeon completion zsh  > "${fpath[1]}/_go-surgeon"
 ## Going further
 
 - [`USAGE.md`](USAGE.md) — full command reference for MCP and CLI
-- [`examples/`](examples) — real editing sessions
+- [`AI_INSTRUCTIONS.md`](AI_INSTRUCTIONS.md) — drop-in instructions for Cursor / Claude / Copilot system prompts
 
 ---
 
