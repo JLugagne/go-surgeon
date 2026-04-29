@@ -258,7 +258,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "test_run",
-		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600). Pass affected_by=path/to/file.go to run only the owning package plus its reverse-dependency closure (mutually exclusive with dir). On success the verbatim raw_output stream is omitted from the structured payload (it bloats responses without adding signal); set include_raw_output=true to force it on a green run. verbosity controls payload size on large suites: 'summary' returns only success/summary/failed tests (~1k chars regardless of suite size — ideal for the 25k token tool-result budget); 'full' keeps everything; default auto picks 'summary' once the suite has more than 50 tests.",
+		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600). Pass affected_by=path/to/file.go to run only the owning package plus its reverse-dependency closure (mutually exclusive with dir and symbols). Pass symbols=['pkg.MyFunc'] to auto-resolve the owning package and build a -run filter matching ^TestMyFunc — ideal when you only want tests related to specific functions you just edited; mutually exclusive with dir and affected_by. On success the verbatim raw_output stream is omitted from the structured payload (it bloats responses without adding signal); set include_raw_output=true to force it on a green run. verbosity controls payload size on large suites: 'summary' returns only success/summary/failed tests (~1k chars regardless of suite size — ideal for the 25k token tool-result budget); 'full' keeps everything; default auto picks 'summary' once the suite has more than 50 tests.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testRunInput) (*mcp.CallToolResult, any, error) {
 		result, err := queries.TestRun(ctx, domain.TestRunRequest{
 			Dir:            in.Dir,
@@ -268,6 +268,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			Tags:           in.Tags,
 			TimeoutSeconds: in.TimeoutSeconds,
 			AffectedBy:     in.AffectedBy,
+			Symbols:        in.Symbols,
 		})
 		if err != nil {
 			return errorResultWithCode(fmt.Sprintf("ERROR (test_run): %v", err), err), nil, nil
@@ -1155,13 +1156,14 @@ type executePlanActionInput struct {
 }
 
 type testRunInput struct {
-	Dir              string `json:"dir,omitempty" jsonschema:"directory to test (relative to the project root). Defaults to ./..."`
-	Run              string `json:"run,omitempty" jsonschema:"optional -run regexp filter"`
-	Count            int    `json:"count,omitempty" jsonschema:"iterations per test (default 1)"`
-	Race             bool   `json:"race,omitempty" jsonschema:"enable the race detector"`
-	Tags             string `json:"tags,omitempty" jsonschema:"build tags (whitelist [a-z_][a-z0-9_,.]*)"`
-	TimeoutSeconds   int    `json:"timeout_seconds,omitempty" jsonschema:"overall timeout in seconds (default 120, max 600)"`
-	AffectedBy       string `json:"affected_by,omitempty" jsonschema:"path to a .go file — narrow the test run to the package that owns this file plus every package in the module that (transitively) imports it. Mutually exclusive with dir. Great after editing one file in a large monorepo — skips running tests in unrelated packages."`
-	Verbosity        string `json:"verbosity,omitempty" jsonschema:"output verbosity: 'summary' returns only success, summary, and failed tests (compact ~1k chars regardless of suite size — ideal for large suites); 'full' returns everything including raw_output and per-test elapsed_ms. Defaults to auto: summary when the suite has more than 50 tests, full otherwise. Pass 'full' to force the verbose payload, 'summary' to force the compact one."`
-	IncludeRawOutput bool   `json:"include_raw_output,omitempty" jsonschema:"include the verbatim go test -json stream in structured output. By default RawOutput is dropped from the structured payload on success (where it bloats responses without adding signal); failures always keep it. Set true to force inclusion (e.g. when you want full test output regardless of pass/fail)."`
+	Dir              string   `json:"dir,omitempty" jsonschema:"directory to test (relative to the project root). Defaults to ./..."`
+	Run              string   `json:"run,omitempty" jsonschema:"optional -run regexp filter"`
+	Count            int      `json:"count,omitempty" jsonschema:"iterations per test (default 1)"`
+	Race             bool     `json:"race,omitempty" jsonschema:"enable the race detector"`
+	Tags             string   `json:"tags,omitempty" jsonschema:"build tags (whitelist [a-z_][a-z0-9_,.]*)"`
+	TimeoutSeconds   int      `json:"timeout_seconds,omitempty" jsonschema:"overall timeout in seconds (default 120, max 600)"`
+	AffectedBy       string   `json:"affected_by,omitempty" jsonschema:"path to a .go file — narrow the test run to the package that owns this file plus every package in the module that (transitively) imports it. Mutually exclusive with dir and symbols."`
+	Symbols          []string `json:"symbols,omitempty" jsonschema:"list of symbols in the form 'FuncName' or 'pkg.FuncName'. Each symbol is resolved to its owning package and a -run filter is built from Go naming conventions (^TestFuncName). Mutually exclusive with dir and affected_by. Use when you want to run only tests related to specific functions."`
+	Verbosity        string   `json:"verbosity,omitempty" jsonschema:"output verbosity: 'summary' returns only success, summary, and failed tests (compact ~1k chars regardless of suite size — ideal for large suites); 'full' returns everything including raw_output and per-test elapsed_ms. Defaults to auto: summary when the suite has more than 50 tests, full otherwise. Pass 'full' to force the verbose payload, 'summary' to force the compact one."`
+	IncludeRawOutput bool     `json:"include_raw_output,omitempty" jsonschema:"include the verbatim go test -json stream in structured output. By default RawOutput is dropped from the structured payload on success (where it bloats responses without adding signal); failures always keep it. Set true to force inclusion (e.g. when you want full test output regardless of pass/fail)."`
 }

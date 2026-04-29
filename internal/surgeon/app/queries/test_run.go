@@ -60,6 +60,9 @@ func (h *SurgeonQueriesHandler) TestRun(ctx context.Context, req domain.TestRunR
 	if dir != "" && affectedBy != "" {
 		return domain.TestRunResult{}, fmt.Errorf("dir and affected_by are mutually exclusive")
 	}
+	if len(req.Symbols) > 0 && (dir != "" || affectedBy != "") {
+		return domain.TestRunResult{}, fmt.Errorf("symbols is mutually exclusive with dir and affected_by")
+	}
 
 	var targets []string
 	var affectedPkgs []string
@@ -76,6 +79,15 @@ func (h *SurgeonQueriesHandler) TestRun(ctx context.Context, req domain.TestRunR
 		}
 		targets = pkgs
 		affectedPkgs = pkgs
+	} else if len(req.Symbols) > 0 {
+		resolvedTargets, runFilter, err := h.resolveSymbolTargets(ctx, req.Symbols)
+		if err != nil {
+			return domain.TestRunResult{}, err
+		}
+		targets = resolvedTargets
+		if req.Run == "" {
+			req.Run = runFilter
+		}
 	} else {
 		target, err := resolveTestTarget(dir)
 		if err != nil {
@@ -307,4 +319,69 @@ func parseTestRunOutput(stdout []byte) domain.TestRunResult {
 		Tests:   tests,
 		Summary: summary,
 	}
+}
+
+// resolveSymbolTargets maps a list of "pkg.FuncName" (or bare "FuncName")
+// symbols to their owning package directories and builds a combined -run
+// regexp that matches all derived test function names (^TestFuncName).
+func (h *SurgeonQueriesHandler) resolveSymbolTargets(ctx context.Context, symbols []string) (targets []string, runFilter string, err error) {
+	dirSet := make(map[string]struct{})
+	var runParts []string
+
+	for _, sym := range symbols {
+		pkgName, funcName := parseSymbolRef(sym)
+		if funcName == "" {
+			return nil, "", fmt.Errorf("invalid symbol %q: expected 'FuncName' or 'pkg.FuncName'", sym)
+		}
+
+		results, findErr := h.FindSymbols(ctx, domain.SymbolQuery{
+			PackageName: pkgName,
+			Name:        funcName,
+		}, ".")
+		if findErr != nil {
+			return nil, "", findErr
+		}
+		if len(results) == 0 {
+			return nil, "", fmt.Errorf("symbol %q not found in project", sym)
+		}
+
+		for _, r := range results {
+			dir := filepath.Dir(r.File)
+			if filepath.IsAbs(dir) {
+				rel, relErr := filepath.Rel(".", dir)
+				if relErr != nil || strings.HasPrefix(rel, "..") {
+					continue
+				}
+				dir = rel
+			}
+			key := dir
+			if _, seen := dirSet[key]; !seen {
+				dirSet[key] = struct{}{}
+				if dir == "." || dir == "" {
+					targets = append(targets, ".")
+				} else {
+					targets = append(targets, "./"+filepath.ToSlash(dir))
+				}
+			}
+		}
+
+		runParts = append(runParts, "^Test"+regexp.QuoteMeta(funcName))
+	}
+
+	if len(dirSet) == 0 {
+		return nil, "", fmt.Errorf("no packages found for symbols %v", symbols)
+	}
+
+	runFilter = strings.Join(runParts, "|")
+	return targets, runFilter, nil
+}
+
+// parseSymbolRef splits "pkg.FuncName" into ("pkg", "FuncName").
+// A bare "FuncName" with no dot returns ("", "FuncName").
+func parseSymbolRef(sym string) (pkg, name string) {
+	sym = strings.TrimSpace(sym)
+	if i := strings.LastIndex(sym, "."); i >= 0 {
+		return sym[:i], sym[i+1:]
+	}
+	return "", sym
 }
