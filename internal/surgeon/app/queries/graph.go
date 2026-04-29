@@ -95,14 +95,8 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 			}
 			packageFiles[dir] = append(packageFiles[dir], filepath.Join(dir, name))
 		}
-		// When the target directory is a module root (contains go.mod) but holds no
-		// top-level .go files, fall back to a recursive walk. This matches the common
-		// 'START HERE' case where an agent calls overview(dir='.', symbols=true) from
-		// the project root and expects a package tree — not an empty result.
 		if len(packageFiles) == 0 {
-			if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
-				recursive = true
-			}
+			recursive = true
 		}
 	}
 	if !symbols || recursive {

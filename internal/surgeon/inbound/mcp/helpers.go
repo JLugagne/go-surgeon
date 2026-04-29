@@ -57,7 +57,7 @@ func errorResult(msg string) *mcp.CallToolResult {
 func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) string {
 	if !opts.Symbols {
 		if len(packages) == 0 {
-			return fmt.Sprintf("No Go packages found in '%s'.", opts.Dir)
+			return fmt.Sprintf("No Go packages found in '%s'. If the project root has no top-level .go files, add recursive=true to walk sub-directories.", opts.Dir)
 		}
 		var sb strings.Builder
 		for _, pkg := range packages {
@@ -130,7 +130,7 @@ func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) strin
 	}
 
 	if sb.Len() == 0 {
-		return fmt.Sprintf("No Go packages found in '%s'.", opts.Dir)
+		return fmt.Sprintf("No Go packages found in '%s'. If the project root has no top-level .go files, add recursive=true to walk sub-directories.", opts.Dir)
 	}
 
 	return sb.String()
@@ -253,7 +253,7 @@ func formatSymbolResults(results []domain.SymbolResult, showBody bool, queryStr 
 		fmt.Fprintf(&sb, "Doc:\n%s\n", res.Doc)
 	}
 	if showBody {
-		fmt.Fprintf(&sb, "Code (Empty lines stripped):\n%s\n", res.Code)
+		fmt.Fprintf(&sb, "Code (Empty lines stripped; line numbers are file-absolute):\n%s\n", res.Code)
 	} else {
 		fmt.Fprintf(&sb, "Signature:\n%s\n", res.Signature)
 	}

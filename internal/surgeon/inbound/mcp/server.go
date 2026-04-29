@@ -22,7 +22,8 @@ EXPLORE (before you edit, to understand what's there)
 - Both accept module='github.com/org/repo' to look inside a dependency's source instead of the current project. Use this rather than find/cat inside $GOMODCACHE.
 
 EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewrite more)
-- Changing a few lines inside one function body      → patch_function
+- Changing a few lines inside one function body      → patch_function (op=replace/insert_before/insert_after/delete)
+- Multi-line replacement OR restructuring a func     → update object=func (NOT patch op=replace — op=replace is fragile across line boundaries)
 - Same rename across many functions in one file      → patch_file (bulk text substitution with AST safety)
 - Editing the VALUE of a top-level const or var      → patch_decl (multi-line string const, error var, etc.)
 - Single field change on a struct                    → patch_struct
@@ -202,7 +203,8 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 				return errorResultWithCode(err.Error(), err), nil, nil
 			}
 			if len(results) == 0 {
-				return textResult(fmt.Sprintf("No declaration found at %s:%d.", in.File, in.AtLine)), nil, nil
+				hint := fmt.Sprintf("Line %d is not a named declaration (it may be a package clause, import block, blank line, or comment). Try a line inside a func/type/const/var body, or use query='SymbolName' instead.", in.AtLine)
+				return textResult(fmt.Sprintf("No declaration found at %s:%d.\n%s", in.File, in.AtLine, hint)), nil, nil
 			}
 			text := formatSymbolResults(results, in.Body, fmt.Sprintf("%s:%d", in.File, in.AtLine))
 			return textResult(text), nil, nil
