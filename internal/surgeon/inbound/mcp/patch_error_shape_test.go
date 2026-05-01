@@ -236,7 +236,9 @@ func TestPatch_SchemaHintMiddlewarePath_ErrorShape_Issue12(t *testing.T) {
 			"file":       "foo.go",
 			"identifier": "Foo",
 			// patches double-encoded as a JSON string — triggers the middleware.
-			"patches": `[{"op":"replace","match":"x","replace":"y"}]`,
+			// patches as an unrelated non-array string — still rejected by the middleware
+			// (recovery only applies when the inner value parses as a JSON array).
+			"patches": "not-json",
 		},
 	})
 	require.NoError(t, err)
