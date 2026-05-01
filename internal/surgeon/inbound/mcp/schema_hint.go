@@ -36,7 +36,9 @@ func schemaHintMiddleware() mcp.Middleware {
 			if _, isPatchTool := patchToolNames[params.Name]; !isPatchTool {
 				return next(ctx, method, req)
 			}
-			if msg := detectPatchesStringMismatch(params.Arguments); msg != "" {
+			if fixed, ok := recoverDoubleEncodedPatches(params.Arguments); ok {
+				params.Arguments = fixed
+			} else if msg := detectPatchesStringMismatch(params.Arguments); msg != "" {
 				return errorResultWithCode(msg, &domain.Error{Code: "INVALID_ARGUMENT", Message: msg}), nil
 			}
 			if msg := detectPatchOpFieldTypeMismatch(params.Arguments); msg != "" {
@@ -95,7 +97,8 @@ func formatPatchesMismatchError(doubleSerialized bool) string {
 		header += " The inner value does parse as an array, so the payload was serialized twice."
 	}
 	return header + "\n" +
-		"This is a client-side serialization issue: send 'patches' as a raw JSON array, not as a string containing JSON.\n" +
+		"Send 'patches' as a raw JSON array, not as a string containing JSON. " +
+		"(If your client did send a raw array, this may be a server-side false positive — please file an issue.)\n" +
 		"Workaround: retry the same call (some clients are intermittent), or fall back to " +
 		"update_interface / update_struct / update with the full declaration."
 }
@@ -220,4 +223,53 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// recoverDoubleEncodedPatches detects the issue #21 false-positive scenario
+// (and the legitimate double-encoding case) by checking whether 'patches' is
+// a JSON string whose content parses as a JSON array. When it does, we treat
+// the inner array as the intended payload, splice it back into the arguments
+// JSON, and let the request continue normally — instead of rejecting it with
+// an actionable-but-wrong "client serialization bug" error. This is robust
+// against unknown client wrappers that re-encode complex args, and it is
+// strictly an improvement: the previous behaviour was an outright rejection.
+//
+// Returns the rewritten arguments and ok=true on recovery, otherwise zero
+// values. Callers must fall back to the existing detection path when ok=false
+// so plain non-array strings (e.g. "patches": "label") still produce the
+// original actionable error.
+func recoverDoubleEncodedPatches(args json.RawMessage) (json.RawMessage, bool) {
+	if len(args) == 0 {
+		return nil, false
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(args, &top); err != nil {
+		return nil, false
+	}
+	raw, present := top["patches"]
+	if !present || len(raw) == 0 {
+		return nil, false
+	}
+	trimmed := skipJSONWhitespace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return nil, false
+	}
+	var inner string
+	if err := json.Unmarshal(raw, &inner); err != nil {
+		return nil, false
+	}
+	innerTrimmed := skipJSONWhitespace([]byte(inner))
+	if len(innerTrimmed) == 0 || innerTrimmed[0] != '[' {
+		return nil, false
+	}
+	var probe []json.RawMessage
+	if err := json.Unmarshal([]byte(inner), &probe); err != nil {
+		return nil, false
+	}
+	top["patches"] = json.RawMessage(inner)
+	rewritten, err := json.Marshal(top)
+	if err != nil {
+		return nil, false
+	}
+	return rewritten, true
 }

@@ -36,11 +36,8 @@ func TestSchemaHint_PatchFunctionStringPatches(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.IsError, "expected IsError=true")
-	text := resultText(t, result)
-	assert.Contains(t, text, "JSON-encoded string instead of an array")
-	assert.Contains(t, text, "serialized twice", "inner value parses as array → mention double-serialization")
-	assert.False(t, called, "business handler must not run when the middleware rejects")
+	require.False(t, result.IsError, "middleware should auto-recover a stringified-but-parseable patches array (issue #21): %s", resultText(t, result))
+	assert.True(t, called, "business handler must run after recovery")
 }
 
 // TestSchemaHint_PatchStructStringPatches covers patch_struct — any patch tool
@@ -58,8 +55,7 @@ func TestSchemaHint_PatchStructStringPatches(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "JSON-encoded string instead of an array")
+	require.False(t, result.IsError, "recovery: %s", resultText(t, result))
 }
 
 // TestSchemaHint_PatchInterfaceStringPatches covers patch_interface.
@@ -76,8 +72,7 @@ func TestSchemaHint_PatchInterfaceStringPatches(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "JSON-encoded string instead of an array")
+	require.False(t, result.IsError, "recovery: %s", resultText(t, result))
 }
 
 // TestSchemaHint_PatchDeclStringPatches covers patch_decl.
@@ -94,8 +89,7 @@ func TestSchemaHint_PatchDeclStringPatches(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "JSON-encoded string instead of an array")
+	require.False(t, result.IsError, "recovery: %s", resultText(t, result))
 }
 
 // TestSchemaHint_ArrayPatchesPassThrough verifies that the middleware does not
@@ -213,4 +207,74 @@ func TestSchemaHint_PatchOpReplaceAsArray(t *testing.T) {
 	assert.Contains(t, text, "JSON array")
 	assert.Contains(t, text, "string is required")
 	assert.False(t, called, "business handler must not run when the middleware rejects")
+}
+
+// TestSchemaHint_RecoverDoubleEncodedPatches_Issue21 documents the recovery
+// path for issue #21: when 'patches' arrives as a JSON-encoded string whose
+// inner value parses as a JSON array, the middleware rewrites the arguments
+// in-place and lets the request proceed instead of rejecting it. This shields
+// users from MCP client wrappers that re-serialize complex args, regardless
+// of whether the double-encoding is the client's fault or a server-side
+// false positive.
+func TestSchemaHint_RecoverDoubleEncodedPatches_Issue21(t *testing.T) {
+	var received domain.PatchFunctionRequest
+	commands := &mockCommands{
+		patchFunctionFn: func(_ context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error) {
+			received = req
+			return domain.PatchFunctionResult{Applied: 1, Diff: "ok"}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "patch",
+		Arguments: map[string]any{
+			"target":     "function",
+			"file":       "foo.go",
+			"identifier": "Foo",
+			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "issue #21 recovery: %s", resultText(t, result))
+	assert.Equal(t, "foo.go", received.FilePath)
+	assert.Len(t, received.Patches, 1, "inner array must be decoded into one patch op")
+}
+
+// TestSchemaHint_BooleanParams_NotRejected_Issue21 guards against the bug 2
+// regression flagged in issue #21: tools like 'symbol' (body) and 'overview'
+// (symbols) declare boolean schema fields and must accept JSON booleans. A
+// past version of the validator rejected `body: true` claiming the schema
+// wanted a string. This test pins the boolean path end-to-end so the
+// regression cannot silently reappear.
+func TestSchemaHint_BooleanParams_NotRejected_Issue21(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	// symbol with body=true — must not be rejected on type grounds.
+	symResult, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "symbol",
+		Arguments: map[string]any{
+			"query": "NonexistentSymbolDoesNotMatter",
+			"body":  true,
+		},
+	})
+	require.NoError(t, err)
+	if symResult.IsError {
+		assert.NotContains(t, resultText(t, symResult), `has type "string", want "boolean"`,
+			"boolean field 'body' must not be validated against type string")
+	}
+
+	// overview with symbols=true — same contract.
+	ovResult, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "overview",
+		Arguments: map[string]any{
+			"dir":     ".",
+			"symbols": true,
+		},
+	})
+	require.NoError(t, err)
+	if ovResult.IsError {
+		assert.NotContains(t, resultText(t, ovResult), `has type "string", want "boolean"`,
+			"boolean field 'symbols' must not be validated against type string")
+	}
 }
