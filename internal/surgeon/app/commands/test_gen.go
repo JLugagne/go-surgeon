@@ -306,18 +306,20 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	testFileSrc, err := h.fs.ReadFile(ctx, testFile)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// For black-box tests the test struct typically references
+			// package-qualified types from the source package itself
+			// (e.g. *app.App). goimports cannot infer the local module's
+			// import path from a bare short name, so we emit it explicitly
+			// here. See issue #20.
+			localImport := ""
+			if blackBox {
+				localImport = h.detectPackagePath(ctx, filePath)
+			}
+
 			var header string
 			if blackBox {
-				switch lib {
-				case assertLibTestify:
-					header = fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName)
-				case assertLibGotest:
-					header = fmt.Sprintf("package %s_test\n\nimport (\n\t\"testing\"\n\t\"gotest.tools/assert\"\n)\n\n", pkgName)
-				default:
-					header = fmt.Sprintf("package %s_test\n\nimport \"testing\"\n\n", pkgName)
-				}
+				header = buildBlackBoxTestHeader(pkgName, localImport, lib)
 			} else {
-				// White-box: unexported — stay in same package.
 				switch lib {
 				case assertLibTestify:
 					header = fmt.Sprintf("package %s\n\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n", pkgName)
@@ -376,4 +378,41 @@ func testFuncExists(src []byte, funcName string) bool {
 		}
 	}
 	return false
+}
+
+// buildBlackBoxTestHeader emits the package + import block for a fresh
+// "<pkg>_test" file. localImport is the canonical import path of the package
+// under test (may be empty when `go list` could not resolve it — e.g. the
+// directory does not yet belong to a module). The local import is required
+// so that types referenced as e.g. *app.App resolve to the project's own
+// package and not to some unrelated module that happens to share a leaf
+// directory name. See issue #20.
+func buildBlackBoxTestHeader(pkgName, localImport string, lib assertLib) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "package %s_test\n\n", pkgName)
+
+	imports := []string{`"testing"`}
+	if localImport != "" {
+		imports = append(imports, fmt.Sprintf("%q", localImport))
+	}
+	switch lib {
+	case assertLibTestify:
+		imports = append(imports,
+			`"github.com/stretchr/testify/assert"`,
+			`"github.com/stretchr/testify/require"`,
+		)
+	case assertLibGotest:
+		imports = append(imports, `"gotest.tools/assert"`)
+	}
+
+	if len(imports) == 1 {
+		fmt.Fprintf(&b, "import %s\n\n", imports[0])
+		return b.String()
+	}
+	b.WriteString("import (\n")
+	for _, imp := range imports {
+		fmt.Fprintf(&b, "\t%s\n", imp)
+	}
+	b.WriteString(")\n\n")
+	return b.String()
 }

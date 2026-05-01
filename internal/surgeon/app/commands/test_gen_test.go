@@ -2,10 +2,13 @@ package commands_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/app/commands"
+	"github.com/JLugagne/go-surgeon/internal/surgeon/outbound/filesystem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -226,4 +229,47 @@ func TestGreet(t *testing.T) {}
 		// File content unchanged (TestGreet not duplicated)
 		assert.Equal(t, 1, strings.Count(string(fs8.files["svc/foo_test.go"]), "func TestGreet"))
 	})
+}
+
+// TestGenerateTest_BlackBoxLocalImport verifies that, for an exported
+// receiver in a real Go module, the generated black-box test file imports
+// the local package by its canonical module path. Regression test for
+// issue #20: previously the generator emitted the test in `package <name>_test`
+// without the local import, leaving goimports to guess and sometimes pick
+// the wrong external module.
+func TestGenerateTest_BlackBoxLocalImport(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Minimal real Go module so `go list` can resolve the local import path.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "go.mod"),
+		[]byte("module example.com/myapp\n\ngo 1.21\n"),
+		0o644,
+	))
+
+	srcDir := filepath.Join(tmpDir, "internal", "app")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	srcPath := filepath.Join(srcDir, "service.go")
+	require.NoError(t, os.WriteFile(srcPath, []byte(`package app
+
+type App struct{}
+
+func (a *App) DoWork(name string) (string, error) {
+	return name, nil
+}
+`), 0o644))
+
+	fs := filesystem.NewFileSystem()
+	handler := commands.NewExecutePlanHandler(fs)
+
+	testFile, err := handler.GenerateTest(context.Background(), srcPath, "(*App).DoWork")
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(testFile)
+	require.NoError(t, err)
+	content := string(got)
+
+	assert.Contains(t, content, "package app_test")
+	assert.Contains(t, content, `"example.com/myapp/internal/app"`,
+		"expected explicit local-package import in generated black-box test header")
 }
