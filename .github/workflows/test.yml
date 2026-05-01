@@ -27,12 +27,10 @@ jobs:
         run: go mod download
       - name: Run go vet
         run: go vet ./...
-      - name: Install and run golangci-lint
-        run: |
-          LATEST=$(curl -sSfL https://api.github.com/repos/golangci/golangci-lint/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
-          echo "Installing golangci-lint $LATEST"
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$LATEST/install.sh" | sh -s -- -b /usr/local/bin "$LATEST"
-          golangci-lint run ./...
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
