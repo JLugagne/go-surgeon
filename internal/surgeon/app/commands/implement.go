@@ -188,7 +188,9 @@ func (h *ExecutePlanHandler) ReceiverBaseName(receiver string) string {
 // resolvedIface holds the resolved interface along with its package metadata.
 type resolvedIface struct {
 	iface    *types.Interface
+	pkg      *types.Package
 	pkgName  string // e.g. "book"
+	pkgPath  string // e.g. "github.com/example/project/internal/book"
 	typeName string // e.g. "BookRepository"
 }
 
@@ -228,7 +230,9 @@ func resolveInterface(ifacePath string) (resolvedIface, error) {
 
 	return resolvedIface{
 		iface:    iface,
+		pkg:      pkg.Types,
 		pkgName:  pkg.Types.Name(),
+		pkgPath:  pkg.Types.Path(),
 		typeName: name,
 	}, nil
 }
