@@ -7,7 +7,9 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -35,20 +37,32 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 	receiverName := strings.TrimPrefix(req.Receiver, "*")
 	iface := resolved.iface
 
+	// Track every package referenced through the qualifier so we can emit
+	// explicit imports. goimports cannot resolve local project packages by
+	// short name (e.g. "domain") — only the source interface knows the
+	// canonical path, so we must propagate it ourselves. See issue #19.
+	targetPkgPath := h.detectPackagePath(ctx, req.FilePath)
+	usedPkgs := make(map[string]*types.Package)
 	qualifier := func(p *types.Package) string {
+		if p == nil {
+			return ""
+		}
+		if targetPkgPath != "" && p.Path() == targetPkgPath {
+			return ""
+		}
+		usedPkgs[p.Path()] = p
 		return p.Name()
 	}
 
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "package %s\n\n", targetPkg)
+	var body bytes.Buffer
 
-	fmt.Fprintf(&buf, "type %s struct {\n", receiverName)
+	fmt.Fprintf(&body, "type %s struct {\n", receiverName)
 	for i := 0; i < iface.NumMethods(); i++ {
 		m := iface.Method(i)
 		sig := m.Type().(*types.Signature)
-		fmt.Fprintf(&buf, "\t%sFunc %s\n", m.Name(), types.TypeString(sig, qualifier))
+		fmt.Fprintf(&body, "\t%sFunc %s\n", m.Name(), types.TypeString(sig, qualifier))
 	}
-	buf.WriteString("}\n")
+	body.WriteString("}\n")
 
 	for i := 0; i < iface.NumMethods(); i++ {
 		m := iface.Method(i)
@@ -57,25 +71,57 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		params, callArgs := buildMockParams(sig, qualifier)
 		results := buildMockResults(sig, qualifier)
 
-		fmt.Fprintf(&buf, "\nfunc (m *%s) %s%s %s {\n", receiverName, m.Name(), params, results)
-		fmt.Fprintf(&buf, "\tif m.%sFunc == nil {\n", m.Name())
-		fmt.Fprintf(&buf, "\t\tpanic(\"%s.%sFunc not set\")\n", receiverName, m.Name())
-		buf.WriteString("\t}\n")
+		fmt.Fprintf(&body, "\nfunc (m *%s) %s%s %s {\n", receiverName, m.Name(), params, results)
+		fmt.Fprintf(&body, "\tif m.%sFunc == nil {\n", m.Name())
+		fmt.Fprintf(&body, "\t\tpanic(\"%s.%sFunc not set\")\n", receiverName, m.Name())
+		body.WriteString("\t}\n")
 
 		if sig.Results().Len() > 0 {
-			fmt.Fprintf(&buf, "\treturn m.%sFunc(%s)\n", m.Name(), callArgs)
+			fmt.Fprintf(&body, "\treturn m.%sFunc(%s)\n", m.Name(), callArgs)
 		} else {
-			fmt.Fprintf(&buf, "\tm.%sFunc(%s)\n", m.Name(), callArgs)
+			fmt.Fprintf(&body, "\tm.%sFunc(%s)\n", m.Name(), callArgs)
 		}
-		buf.WriteString("}\n")
+		body.WriteString("}\n")
 	}
 
-	buf.WriteByte('\n')
-	if targetPkg == resolved.pkgName {
-		fmt.Fprintf(&buf, "var _ %s = (*%s)(nil)\n", resolved.typeName, receiverName)
+	body.WriteByte('\n')
+	if targetPkg == resolved.pkgName && (targetPkgPath == "" || targetPkgPath == resolved.pkgPath) {
+		fmt.Fprintf(&body, "var _ %s = (*%s)(nil)\n", resolved.typeName, receiverName)
 	} else {
-		fmt.Fprintf(&buf, "var _ %s.%s = (*%s)(nil)\n", resolved.pkgName, resolved.typeName, receiverName)
+		fmt.Fprintf(&body, "var _ %s.%s = (*%s)(nil)\n", resolved.pkgName, resolved.typeName, receiverName)
+		if resolved.pkg != nil {
+			usedPkgs[resolved.pkgPath] = resolved.pkg
+		}
 	}
+
+	// Build the file: package clause + import block (if any) + body.
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "package %s\n\n", targetPkg)
+	if len(usedPkgs) > 0 {
+		paths := make([]string, 0, len(usedPkgs))
+		for p := range usedPkgs {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		buf.WriteString("import (\n")
+		for _, p := range paths {
+			pkg := usedPkgs[p]
+			// Emit an alias when the package's declared name differs from
+			// the last path segment — otherwise the bare path resolves to
+			// the wrong selector.
+			lastSeg := p
+			if i := strings.LastIndex(p, "/"); i >= 0 {
+				lastSeg = p[i+1:]
+			}
+			if pkg.Name() != "" && pkg.Name() != lastSeg {
+				fmt.Fprintf(&buf, "\t%s %q\n", pkg.Name(), p)
+			} else {
+				fmt.Fprintf(&buf, "\t%q\n", p)
+			}
+		}
+		buf.WriteString(")\n\n")
+	}
+	buf.Write(body.Bytes())
 
 	dir := filepath.Dir(req.FilePath)
 	if err := h.fs.MkdirAll(ctx, dir); err != nil {
@@ -155,4 +201,19 @@ func buildMockResults(sig *types.Signature, qualifier types.Qualifier) string {
 	default:
 		return types.TypeString(results, qualifier)
 	}
+}
+
+// detectPackagePath returns the canonical import path for the directory
+// containing filePath, by shelling out to `go list`. Returns "" if the
+// directory does not yet belong to a Go module (e.g. a brand-new test fixture)
+// or `go list` fails for any reason.
+func (h *ExecutePlanHandler) detectPackagePath(ctx context.Context, filePath string) string {
+	dir := filepath.Dir(filePath)
+	cmd := exec.CommandContext(ctx, "go", "list", "-f", "{{.ImportPath}}", ".")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

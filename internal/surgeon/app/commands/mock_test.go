@@ -136,3 +136,34 @@ func TestMock_InvalidInterface(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve interface")
 }
+
+// TestMock_EmitsExplicitImports verifies that imports for every package
+// referenced in the interface's method signatures are emitted explicitly,
+// rather than being left for goimports to guess. Regression test for
+// issue #19: goimports could not resolve local-module package short names
+// (e.g. "domain"), and even for stdlib it sometimes picked the wrong path
+// (e.g. golang.org/x/perf/storage/app for an "app" alias).
+func TestMock_EmitsExplicitImports(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "mock.go")
+
+	fs := &mockFS{files: map[string][]byte{}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	req := domain.MockRequest{
+		Interface: "context.Context",
+		Receiver:  "MockContext",
+		FilePath:  filePath,
+	}
+
+	_, err := handler.Mock(context.Background(), req)
+	require.NoError(t, err)
+
+	content := string(fs.files[filePath])
+
+	// The mock signatures use both `context.Context` (in the compile-time
+	// assertion) and `time.Time` (via Deadline()). Both packages must
+	// appear in the generated import block, not be left to goimports.
+	assert.Contains(t, content, `"context"`, "expected explicit context import")
+	assert.Contains(t, content, `"time"`, "expected explicit time import")
+}
