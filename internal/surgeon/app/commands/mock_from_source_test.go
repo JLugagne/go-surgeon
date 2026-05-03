@@ -141,3 +141,82 @@ func TestMockFromSource_UnnamedParams(t *testing.T) {
 	assert.Contains(t, content, "p0 string, p1 int")
 	assert.Contains(t, content, "m.ConvertFunc(p0, p1)")
 }
+
+func TestMockFromSource_ResolvesImportsFromInterfaceFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	ifaceDir := filepath.Join(tmpDir, "repo")
+	mockDir := filepath.Join(tmpDir, "repotest")
+	ifaceFile := filepath.Join(ifaceDir, "repo.go")
+	mockFile := filepath.Join(mockDir, "mock.go")
+
+	// Interface file imports "context" and a domain package.
+	ifaceSrc := `package repo
+
+import (
+	"context"
+	"example.com/myapp/domain"
+)
+
+type BookRepository interface {
+	Get(ctx context.Context, id domain.BookID) (*domain.Book, error)
+}
+`
+	fs := &mockFS{files: map[string][]byte{ifaceFile: []byte(ifaceSrc)}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	src := `type BookRepository interface {
+	Get(ctx context.Context, id domain.BookID) (*domain.Book, error)
+}`
+
+	_, err := handler.MockFromSource(context.Background(), src, "MockBookRepository", mockFile, ifaceFile)
+	require.NoError(t, err)
+
+	content := string(fs.files[mockFile])
+	assert.Contains(t, content, `"context"`)
+	assert.Contains(t, content, `"example.com/myapp/domain"`)
+	assert.Contains(t, content, "domain.BookID")
+}
+
+func TestMockFromSource_PreservesSiblingMock(t *testing.T) {
+	tmpDir := t.TempDir()
+	ifaceDir := filepath.Join(tmpDir, "repo")
+	mockDir := filepath.Join(tmpDir, "repotest")
+	ifaceFile := filepath.Join(ifaceDir, "repo.go")
+	mockFile := filepath.Join(mockDir, "mock.go")
+
+	siblingMock := `package repotest
+
+type MockAuthorRepository struct {
+	FindFunc func() error
+}
+
+func (m *MockAuthorRepository) Find() error {
+	if m.FindFunc == nil {
+		panic("MockAuthorRepository.FindFunc not set")
+	}
+	return m.FindFunc()
+}
+
+var _ repo.AuthorRepository = (*MockAuthorRepository)(nil)
+`
+	fs := &mockFS{files: map[string][]byte{
+		ifaceFile: []byte("package repo\n"),
+		mockFile:  []byte(siblingMock),
+	}}
+	handler := commands.NewExecutePlanHandler(fs)
+
+	src := `type BookRepository interface {
+	Create(ctx context.Context, id string) error
+}`
+
+	_, err := handler.MockFromSource(context.Background(), src, "MockBookRepository", mockFile, ifaceFile)
+	require.NoError(t, err)
+
+	content := string(fs.files[mockFile])
+	// Sibling mock must be preserved.
+	assert.Contains(t, content, "MockAuthorRepository")
+	assert.Contains(t, content, "MockAuthorRepository.FindFunc not set")
+	// New mock must be present.
+	assert.Contains(t, content, "MockBookRepository")
+	assert.Contains(t, content, "CreateFunc")
+}
