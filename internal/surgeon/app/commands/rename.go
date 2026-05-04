@@ -395,10 +395,19 @@ func checkNoCollision(target types.Object, newName string) error {
 		// collision there will surface as a build error. Skip.
 		return nil
 	}
-	if existing := parent.Lookup(newName); existing != nil && existing != target {
-		return fmt.Errorf("cannot rename %q → %q: name %q already declared in the same scope", target.Name(), newName, newName)
+	existing := parent.Lookup(newName)
+	if existing == nil || existing == target {
+		return nil
 	}
-	return nil
+	// Methods live in their receiver's method set, not in the package
+	// scope. A method name does not conflict with a package-level
+	// type/func/var/const declaration.
+	if fn, ok := existing.(*types.Func); ok {
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("cannot rename %q → %q: name %q already declared in the same scope", target.Name(), newName, newName)
 }
 
 // isValidGoIdent reports whether s is a legal Go identifier: starts

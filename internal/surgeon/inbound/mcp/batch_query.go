@@ -19,7 +19,7 @@ const maxBatchQueries = 10
 // It accepts up to maxBatchQueries read-only sub-queries and returns
 // one result per item in the same order.
 type batchQueryInput struct {
-	Queries []batchQueryItem `json:"queries" jsonschema:"list of read-only queries to run; each result is returned in the same order (max 10)"`
+	Queries []batchQueryItem `json:"queries,omitempty" jsonschema:"list of read-only queries to run; each result is returned in the same order (max 10)"`
 }
 
 // batchQueryItem is one sub-query within a batch_query call.

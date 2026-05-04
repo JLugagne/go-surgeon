@@ -358,12 +358,11 @@ func replaceMockInFile(existingSrc []byte, mockFile, receiverName string, newBod
 		// If the file has no declarations at all, signal caller to overwrite.
 		hasDecls := false
 		for _, decl := range f.Decls {
-			switch decl.(type) {
+			switch decl := decl.(type) {
 			case *ast.FuncDecl:
 				hasDecls = true
 			case *ast.GenDecl:
-				gd := decl.(*ast.GenDecl)
-				if gd.Tok == token.TYPE || gd.Tok == token.VAR || gd.Tok == token.CONST {
+				if decl.Tok == token.TYPE || decl.Tok == token.VAR || decl.Tok == token.CONST {
 					hasDecls = true
 				}
 			}
