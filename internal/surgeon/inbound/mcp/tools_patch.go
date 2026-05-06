@@ -38,7 +38,7 @@ type filePatchOpInput struct {
 }
 
 type structPatchOpInput struct {
-	Op       string `json:"op" jsonschema:"operation: add_field, remove_field, rename_field, retype_field, set_tag, set_doc"`
+	Op       string `json:"op" jsonschema:"operation: add_field, remove_field, rename_field, retype_field, set_tag, set_doc, auto_tag"`
 	Name     string `json:"name,omitempty" jsonschema:"target field name (most ops); embed type literal (e.g. io.Reader) for embedded fields"`
 	From     string `json:"from,omitempty" jsonschema:"current field name (rename_field only)"`
 	To       string `json:"to,omitempty" jsonschema:"new field name (rename_field only)"`
@@ -48,6 +48,7 @@ type structPatchOpInput struct {
 	Before   string `json:"before,omitempty" jsonschema:"anchor: insert before this existing field (add_field only)"`
 	After    string `json:"after,omitempty" jsonschema:"anchor: insert after this existing field (add_field only)"`
 	Position string `json:"position,omitempty" jsonschema:"first or last (add_field only); default is last"`
+	Format   string `json:"format,omitempty" jsonschema:"auto_tag only: tag format to generate, e.g. 'json' or 'bson'"`
 }
 
 type interfacePatchOpInput struct {

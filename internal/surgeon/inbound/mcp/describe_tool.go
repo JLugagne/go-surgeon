@@ -54,7 +54,7 @@ var toolCatalog = []toolEntry{
 		"large struct-literal field insertion: inserting many fields into a big struct literal via op=replace is fragile — workaround: use 'update object=func' to rewrite the whole declaration that contains the literal",
 	}, Ops: patchOps},
 	{Name: "patch.function", Category: "edit", Summary: "ops for target=function: replace, insert_before, insert_after, delete, wrap, set_signature", Ops: patchFunctionOps},
-	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc", Ops: patchStructOps},
+	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc, auto_tag", Ops: patchStructOps},
 	{Name: "patch.interface", Category: "edit", Summary: "ops for target=interface: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed", Ops: patchInterfaceOps},
 	{Name: "patch.decl", Category: "edit", Summary: "ops for target=decl: replace, insert_before, insert_after, delete, wrap", Ops: patchDeclOps},
 	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch"},
@@ -72,7 +72,6 @@ var toolCatalog = []toolEntry{
 	{Name: "mock", Category: "codegen", Summary: "generate a standalone mock for an interface you don't own (stdlib/third-party)", Example: `{"file": "mock.go", "identifier": "io.Reader"}`, Related: "add_interface"},
 	{Name: "extract_interface", Category: "codegen", Summary: "derive an interface from an existing struct's exported methods", Example: `{"file": "foo.go", "struct": "FooService", "interface": "FooAPI"}`, Related: "add_interface"},
 	{Name: "test", Category: "codegen", Summary: "generate a table-driven test skeleton for a function or method", Example: `{"file": "foo.go", "identifier": "Foo"}`, Related: "test_run"},
-	{Name: "tag", Category: "codegen", Summary: "bulk-generate or set struct field tags (json, bson, …)", Example: `{"file": "foo.go", "identifier": "User", "tag": "json"}`, Related: "patch"},
 
 	// VALIDATE
 	{Name: "build_check", Category: "validate", Summary: "run go build and return structured compile diagnostics; affected_by=file narrows to that file's reverse-dep closure", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "test_run"},
@@ -99,9 +98,9 @@ var patchOps = map[string]toolOpEntry{
 		Example:     `{"target": "function", "items": [{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`,
 	},
 	"struct": {
-		Description: "Edit one or more structs' field lists (add/remove/rename/retype/set_tag/set_doc). N items applied atomically.",
+		Description: "Edit one or more structs' field lists (add/remove/rename/retype/set_tag/set_doc/auto_tag). Regular ops are atomic across items; auto_tag (bulk-generate snake_case tags for every exported field) is applied sequentially via TagStruct and cannot be combined with other ops in the same call.",
 		Required:    []string{"target=struct", "items[].file", "items[].identifier", "items[].patches"},
-		Example:     `{"target": "struct", "items": [{"file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}]}`,
+		Example:     `{"target": "struct", "items": [{"file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}]}`,
 	},
 	"interface": {
 		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed). N items applied sequentially (early failures leave earlier items written).",
@@ -183,6 +182,11 @@ var patchStructOps = map[string]toolOpEntry{
 		Description: "Set or clear the doc comment on a field (empty string clears).",
 		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].name", "patches[].doc"},
 		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "set_doc", "name": "Email", "doc": "Email is the primary contact address."}]}`,
+	},
+	"auto_tag": {
+		Description: "Bulk-generate snake_case struct tags for every exported field of the struct using the given format (e.g. 'json' or 'bson'). For a single field, use set_tag instead. Cannot be combined with other ops in the same patch call (split into two calls).",
+		Required:    []string{"file", "identifier", "patches[].op=auto_tag", "patches[].format"},
+		Example:     `{"target": "struct", "items": [{"file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}]}`,
 	},
 }
 
@@ -469,7 +473,7 @@ func canonicalOpOrder(ops map[string]toolOpEntry) []string {
 	orders := [][]string{
 		{"function", "struct", "interface", "file", "decl"},
 		{"replace", "insert_before", "insert_after", "delete", "wrap", "set_signature"},
-		{"add_field", "remove_field", "rename_field", "retype_field", "set_tag", "set_doc"},
+		{"add_field", "remove_field", "rename_field", "retype_field", "set_tag", "set_doc", "auto_tag"},
 		{"add_method", "remove_method", "rename_method", "retype_method", "set_doc", "embed", "remove_embed"},
 		{"replace", "insert_before", "insert_after", "delete", "wrap"},
 	}

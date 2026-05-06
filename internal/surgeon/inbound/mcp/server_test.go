@@ -194,7 +194,7 @@ func TestToolsList(t *testing.T) {
 		"create", "update", "delete",
 		"add_interface", "update_interface", "delete_interface",
 		"insert_call",
-		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
+		"execute_plan", "implement", "mock", "test", "extract_interface",
 		"patch",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
@@ -893,9 +893,9 @@ func TestTestGen_Error(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "function not found")
 }
 
-// --- Tag tool tests ---
+// --- patch target=struct op=auto_tag tests (migrated from the deleted `tag` tool) ---
 
-func TestTag_AutoJson(t *testing.T) {
+func TestPatchStruct_AutoTagJson(t *testing.T) {
 	commands := &mockCommands{
 		tagStructFn: func(_ context.Context, req domain.TagRequest) error {
 			assert.Equal(t, "book.go", req.FilePath)
@@ -906,36 +906,51 @@ func TestTag_AutoJson(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Book",
-		"auto":       "json",
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+				},
+			},
+		},
 	})
+	assert.False(t, result.IsError)
 	text := resultText(t, result)
-	assert.Contains(t, text, "SUCCESS")
-	assert.Contains(t, text, "Book")
+	assert.Contains(t, text, "OK")
 }
 
-func TestTag_SetField(t *testing.T) {
+func TestPatchStruct_SetTag_SingleField(t *testing.T) {
 	commands := &mockCommands{
-		tagStructFn: func(_ context.Context, req domain.TagRequest) error {
-			assert.Equal(t, "Title", req.FieldName)
-			assert.Equal(t, `json:"book_title"`, req.SetTag)
-			return nil
+		patchStructFn: func(_ context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error) {
+			require.Len(t, req.Patches, 1)
+			assert.Equal(t, domain.StructPatchOp("set_tag"), req.Patches[0].Op)
+			assert.Equal(t, "Title", req.Patches[0].Name)
+			assert.Equal(t, `json:"book_title"`, req.Patches[0].Tag)
+			return domain.PatchStructResult{Applied: 1}, nil
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Book",
-		"field":      "Title",
-		"set":        `json:"book_title"`,
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "set_tag", "name": "Title", "tag": `json:"book_title"`},
+				},
+			},
+		},
 	})
 	assert.False(t, result.IsError)
 }
 
-func TestTag_Error(t *testing.T) {
+func TestPatchStruct_AutoTag_Error(t *testing.T) {
 	commands := &mockCommands{
 		tagStructFn: func(_ context.Context, _ domain.TagRequest) error {
 			return errors.New("struct not found")
@@ -943,13 +958,59 @@ func TestTag_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Missing",
-		"auto":       "json",
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Missing",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+				},
+			},
+		},
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "struct not found")
+}
+
+func TestPatchStruct_AutoTag_RequiresFormat(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag"},
+				},
+			},
+		},
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "format")
+}
+
+func TestPatchStruct_AutoTag_RejectsMixedOps(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+					{"op": "remove_field", "name": "Foo"},
+				},
+			},
+		},
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "auto_tag")
 }
 
 // --- Extract interface tool tests ---

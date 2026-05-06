@@ -418,13 +418,6 @@ type testOutput struct {
 	Identifier string `json:"identifier"`
 }
 
-// tagOutput is the structured result for the tag tool.
-type tagOutput struct {
-	File       string `json:"file"`
-	Identifier string `json:"identifier"`
-	Field      string `json:"field,omitempty"`
-}
-
 // extractInterfaceOutput is the structured result for the extract_interface tool.
 type extractInterfaceOutput struct {
 	InterfaceName string `json:"interface_name"`

@@ -30,15 +30,6 @@ type testInput struct {
 	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the test file"`
 }
 
-type tagInput struct {
-	File       string `json:"file" jsonschema:"target Go file containing the struct"`
-	Identifier string `json:"identifier" jsonschema:"struct identifier"`
-	Field      string `json:"field,omitempty" jsonschema:"specific field name to update"`
-	Set        string `json:"set,omitempty" jsonschema:"exact tag string to set or append"`
-	Auto       string `json:"auto,omitempty" jsonschema:"auto-generate tags for exported fields, e.g. json or bson"`
-	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the file"`
-}
-
 type extractInterfaceInput struct {
 	File       string `json:"file" jsonschema:"target Go file containing the struct"`
 	Identifier string `json:"identifier" jsonschema:"struct identifier"`
@@ -174,44 +165,6 @@ func registerCodegenTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		res := textResult(msg)
 		res.StructuredContent = testOutput{TestFile: testFile, Identifier: in.Identifier}
-		return res, nil, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "tag",
-		Description: "Manage struct field tags. Bulk: auto='json'/'bson' generates snake_case tags on all exported fields. Targeted: field + set updates one field's tag. patch_struct set_tag is an alternative for single fields. preview=true returns a unified diff without writing.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in tagInput) (*mcp.CallToolResult, any, error) {
-		if err := validateGoFile(in.File); err != nil {
-			return err, nil, nil
-		}
-		reqDomain := domain.TagRequest{
-			FilePath:   in.File,
-			StructName: in.Identifier,
-			FieldName:  in.Field,
-			SetTag:     in.Set,
-			AutoFormat: in.Auto,
-		}
-		var diff string
-		var err error
-		if in.Preview {
-			diff, _, err = runPreview(ctx, commands, func(sc service.SurgeonCommands) error {
-				return sc.TagStruct(ctx, reqDomain)
-			})
-		} else {
-			err = commands.TagStruct(ctx, reqDomain)
-		}
-		if err != nil {
-			return errorResultWithCode(fmt.Sprintf("failed to update tags: %v", err), err), nil, nil
-		}
-		msg := fmt.Sprintf("SUCCESS: Updated tags for %s in %s", in.Identifier, in.File)
-		if in.Preview {
-			msg = fmt.Sprintf("PREVIEW (tag): %s in %s", in.Identifier, in.File)
-			if diff != "" {
-				msg += "\n\n" + diff
-			}
-		}
-		res := textResult(msg)
-		res.StructuredContent = tagOutput{File: in.File, Identifier: in.Identifier, Field: in.Field}
 		return res, nil, nil
 	})
 

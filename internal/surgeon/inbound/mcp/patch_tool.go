@@ -266,12 +266,48 @@ func renderSingleFunction(it patchItemInput, ops []patchOpInput, result domain.P
 }
 
 func handlePatchStruct(ctx context.Context, commands service.SurgeonCommands, in patchInput) (*mcp.CallToolResult, any, error) {
-	bulkItems := make([]domain.PatchStructBulkItem, len(in.Items))
+	// Pre-decode all items' ops so we can detect auto_tag and validate
+	// before dispatch. auto_tag is implemented at the MCP layer by
+	// delegating to commands.TagStruct, since the domain layer does not
+	// understand a struct-level "tag every exported field" op.
+	itemOps := make([][]structPatchOpInput, len(in.Items))
+	hasAutoTag := false
+	hasOther := false
 	for i, it := range in.Items {
 		ops, err := decodeStructOps(it.Patches)
 		if err != nil {
 			return errorResult(fmt.Sprintf("items[%d].patches must be an array of struct patch ops: %v", i, err)), nil, nil
 		}
+		itemOps[i] = ops
+		for _, p := range ops {
+			if p.Op == "auto_tag" {
+				hasAutoTag = true
+			} else {
+				hasOther = true
+			}
+		}
+	}
+	if hasAutoTag && hasOther {
+		return errorResult("auto_tag op cannot be combined with other struct ops in the same patch call; split into two patch calls"), nil, nil
+	}
+	if hasAutoTag {
+		// Validate auto_tag ops: format required, no foreign fields.
+		for i, ops := range itemOps {
+			for j, p := range ops {
+				if p.Format == "" {
+					return errorResult(fmt.Sprintf("items[%d].patches[%d]: auto_tag requires non-empty format (e.g. 'json' or 'bson')", i, j)), nil, nil
+				}
+				if p.Name != "" || p.Tag != "" || p.From != "" || p.To != "" || p.Type != "" || p.Doc != "" || p.Before != "" || p.After != "" || p.Position != "" {
+					return errorResult(fmt.Sprintf("items[%d].patches[%d]: auto_tag op only accepts 'format'; got extra fields", i, j)), nil, nil
+				}
+			}
+		}
+		return handlePatchStructAutoTag(ctx, commands, in, itemOps)
+	}
+
+	bulkItems := make([]domain.PatchStructBulkItem, len(in.Items))
+	for i, it := range in.Items {
+		ops := itemOps[i]
 		patches := make([]domain.StructPatch, len(ops))
 		for j, p := range ops {
 			patches[j] = domain.StructPatch{
@@ -347,6 +383,76 @@ func renderSingleStruct(it patchItemInput, result domain.PatchStructResult) *mcp
 	}
 	res.StructuredContent = out
 	return res
+}
+
+// handlePatchStructAutoTag dispatches auto_tag struct ops to
+// commands.TagStruct (one call per (item, op) pair) and aggregates the
+// results into the shared patchBulkOutput shape. Sequential, NOT
+// atomic across items — on failure of item K, items 0..K-1 remain
+// written. This matches the existing semantics for other non-bulk
+// targets (interface, file, decl).
+func handlePatchStructAutoTag(ctx context.Context, commands service.SurgeonCommands, in patchInput, itemOps [][]structPatchOpInput) (*mcp.CallToolResult, any, error) {
+	out := patchBulkOutput{Preview: in.Preview, Items: make([]patchOutput, 0, len(in.Items))}
+	var diffs []string
+	for i, it := range in.Items {
+		ops := itemOps[i]
+		// Compose: run each auto_tag op for this struct in sequence. In
+		// preview mode we harvest the diff once via runPreview that
+		// invokes every op against the same preview-scoped commands.
+		applied := 0
+		var diff string
+		var err error
+		runOps := func(sc service.SurgeonCommands) error {
+			for _, p := range ops {
+				if e := sc.TagStruct(ctx, domain.TagRequest{
+					FilePath:   it.File,
+					StructName: it.Identifier,
+					AutoFormat: p.Format,
+				}); e != nil {
+					return e
+				}
+				applied++
+			}
+			return nil
+		}
+		if in.Preview {
+			diff, _, err = runPreview(ctx, commands, runOps)
+		} else {
+			err = runOps(commands)
+		}
+		if err != nil {
+			return errorResultWithCode(fmt.Sprintf("ERROR (patch struct auto_tag item %d): %v", i, err), err), nil, nil
+		}
+		out.Items = append(out.Items, patchOutput{
+			File: it.File, Identifier: it.Identifier,
+			Applied: applied, Preview: in.Preview, Diff: diff,
+		})
+		out.Applied += applied
+		if diff != "" {
+			diffs = append(diffs, fmt.Sprintf("--- %s:%s ---\n%s", it.File, it.Identifier, diff))
+		}
+	}
+
+	if len(in.Items) == 1 {
+		item := out.Items[0]
+		prefix := fmt.Sprintf("OK: %d patch(es) applied", item.Applied)
+		if item.Preview {
+			prefix = fmt.Sprintf("PREVIEW: %d patch(es) (not written)", item.Applied)
+		}
+		out.Diff = item.Diff
+		var res *mcp.CallToolResult
+		if item.Diff != "" {
+			res = textResult(prefix + "\n\n" + item.Diff)
+		} else {
+			res = textResult(prefix)
+		}
+		res.StructuredContent = out
+		return res, nil, nil
+	}
+	out.Diff = strings.Join(diffs, "\n")
+	res := textResult(renderBulkText(len(in.Items), out.Applied, in.Preview, out.Diff))
+	res.StructuredContent = out
+	return res, nil, nil
 }
 
 func handlePatchInterface(ctx context.Context, commands service.SurgeonCommands, in patchInput) (*mcp.CallToolResult, any, error) {

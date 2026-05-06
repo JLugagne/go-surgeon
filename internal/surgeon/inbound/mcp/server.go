@@ -52,7 +52,7 @@ INTERFACE WORKFLOWS
 
 CODE GENERATION
 - test: generate a table-driven test skeleton for a function or method.
-- tag: bulk-generate or set struct field tags (json, bson, …).
+- struct tags: use patch target=struct op=auto_tag format=json|bson to bulk-generate snake_case tags on every exported field; use op=set_tag for a single field.
 
 VALIDATE (after editing, before declaring the task done)
 - test_run: run 'go test' scoped to a package/directory and get a compact pass/fail report with per-test timing and failure file:line references. Prefer this over shelling out to go test yourself. Pair with build_check for compile-time validation.
