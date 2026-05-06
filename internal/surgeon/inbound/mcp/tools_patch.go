@@ -24,7 +24,6 @@ type patchOpInput struct {
 
 func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	registerPatchTool(s, commands)
-	registerPatchBulkTools(s, commands)
 }
 
 // --- patch_file ---

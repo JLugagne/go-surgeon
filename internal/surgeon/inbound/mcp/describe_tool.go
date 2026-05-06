@@ -48,7 +48,7 @@ var toolCatalog = []toolEntry{
 	{Name: "rename_symbol", Category: "refs", Summary: "type-aware: rename a symbol and every reference; blocks export-status flips and in-scope collisions; preview=true for dry run", Example: `{"name": "OldName", "new_name": "NewName", "preview": true}`, Related: "find_references"},
 
 	// EDIT — narrowest first
-	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Limitations: []string{
+	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Always takes items: [{file, identifier, patches, ...}] — length 1 for single-target, length N for batch (function/struct items are atomic across the batch; interface/file/decl items are applied sequentially).", Example: `{"target": "function", "items": [{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "update, execute_plan", Limitations: []string{
 		"multi-line replacement: op=replace can mis-splice multi-line replacements (issues #3, #14) — patch validates results post-splice and refuses with PATCH_REPLACE_NOT_APPLIED or PATCH_DROPPED_CONTENT when content is dropped, leaving the file unchanged. Workaround: use 'update object=func' (or update object=file/struct) with the full new declaration",
 		"replacement containing tabs/escapes: literal tab characters and escape sequences inside a multi-line replace value can confuse the splice — workaround: use 'update object=func' which takes raw Go source verbatim",
 		"large struct-literal field insertion: inserting many fields into a big struct literal via op=replace is fragile — workaround: use 'update object=func' to rewrite the whole declaration that contains the literal",
@@ -81,9 +81,6 @@ var toolCatalog = []toolEntry{
 	// BATCH
 	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch", "file": "a.go", "identifier": "Foo", "target": "function", "patch_function_ops": [...]}]}`, Related: "patch, create"},
 	{Name: "batch_query", Category: "batch", Summary: "run up to 10 read-only queries (symbol/overview/find_references/find_definition) in one round-trip; fail-soft per item", Example: `{"queries": [{"op": "overview", "focus": "internal"}, {"op": "symbol", "query": "NewServer"}]}`, Related: "symbol, overview"},
-	{Name: "patch_struct_bulk", Category: "batch", Summary: "apply the same kind of struct patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "A", "patches": [{"op": "add_field", "name": "Preview", "type": "bool"}]}]}`, Related: "patch, execute_plan"},
-	{Name: "patch_function_bulk", Category: "batch", Summary: "apply the same kind of function-body patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch, execute_plan"},
-
 	// META
 	{Name: "describe_tool", Category: "meta", Summary: "query this catalog: no args → grouped list; name=X → detail; category=X → filtered list", Example: `{"name": "patch"}`},
 }
@@ -97,29 +94,29 @@ var toolCatalog = []toolEntry{
 // documents the target discriminator values rather than individual ops.
 var patchOps = map[string]toolOpEntry{
 	"function": {
-		Description: "Edit lines inside one function body (literal/regex match, at_line, set_signature, insert_*). See patch.function.replace, .insert_before, etc. for per-op detail.",
-		Required:    []string{"target=function", "file", "identifier", "patches"},
-		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
+		Description: "Edit lines inside one or more function bodies (literal/regex match, at_line, set_signature, insert_*). Pass one item for a single-target edit, N items for an atomic batch.",
+		Required:    []string{"target=function", "items[].file", "items[].identifier", "items[].patches"},
+		Example:     `{"target": "function", "items": [{"file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`,
 	},
 	"struct": {
-		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc).",
-		Required:    []string{"target=struct", "file", "identifier", "patches"},
-		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`,
+		Description: "Edit one or more structs' field lists (add/remove/rename/retype/set_tag/set_doc). N items applied atomically.",
+		Required:    []string{"target=struct", "items[].file", "items[].identifier", "items[].patches"},
+		Example:     `{"target": "struct", "items": [{"file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}]}`,
 	},
 	"interface": {
-		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed).",
-		Required:    []string{"target=interface", "file", "identifier", "patches"},
-		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`,
+		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed). N items applied sequentially (early failures leave earlier items written).",
+		Required:    []string{"target=interface", "items[].file", "items[].identifier", "items[].patches"},
+		Example:     `{"target": "interface", "items": [{"file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}]}`,
 	},
 	"file": {
-		Description: "Whole-file text substitution with AST safety; use for cross-function batch edits.",
-		Required:    []string{"target=file", "file", "patches"},
-		Example:     `{"target": "file", "file": "foo.go", "patches": [{"match": "oldName", "replace": "newName"}]}`,
+		Description: "Whole-file text substitution with AST safety; use for cross-function batch edits. N items applied sequentially.",
+		Required:    []string{"target=file", "items[].file", "items[].patches"},
+		Example:     `{"target": "file", "items": [{"file": "foo.go", "patches": [{"match": "oldName", "replace": "newName"}]}]}`,
 	},
 	"decl": {
-		Description: "Edit the value of a top-level const or var (multi-line strings, error vars, …).",
-		Required:    []string{"target=decl", "file", "identifier", "patches"},
-		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`,
+		Description: "Edit the value of a top-level const or var (multi-line strings, error vars, …). N items applied sequentially.",
+		Required:    []string{"target=decl", "items[].file", "items[].identifier", "items[].patches"},
+		Example:     `{"target": "decl", "items": [{"file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}]}`,
 	},
 }
 

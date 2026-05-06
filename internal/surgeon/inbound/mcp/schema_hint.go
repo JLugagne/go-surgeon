@@ -51,17 +51,44 @@ func schemaHintMiddleware() mcp.Middleware {
 
 // detectPatchesStringMismatch returns an actionable error message when the
 // 'patches' field of the raw arguments JSON is a string rather than an array.
-// Returns "" if no mismatch is detected, or if the arguments are not valid
-// JSON (the SDK's own validator will surface that separately).
+// The new patch tool nests patches under items[*].patches; for backward
+// compatibility with clients that still send a top-level 'patches' field
+// (or for the unwrapped middleware test path), this helper also probes the
+// top-level field. Returns "" when no mismatch is detected.
 func detectPatchesStringMismatch(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
 	}
-	// Decode only the 'patches' field, leaving others as json.RawMessage.
+	// First check the top-level 'patches' field (legacy / direct shape).
+	if msg := patchesStringMismatchFor(args); msg != "" {
+		return msg
+	}
+	// Then descend into items[*].patches.
+	var peek struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(args, &peek); err != nil {
+		return ""
+	}
+	for _, item := range peek.Items {
+		if msg := patchesStringMismatchFor(item); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// patchesStringMismatchFor reports the "patches is a string" error for one
+// JSON object (the top-level args, or one items[] entry). Returns "" when
+// there is no mismatch.
+func patchesStringMismatchFor(obj json.RawMessage) string {
+	if len(obj) == 0 {
+		return ""
+	}
 	var peek struct {
 		Patches json.RawMessage `json:"patches"`
 	}
-	if err := json.Unmarshal(args, &peek); err != nil {
+	if err := json.Unmarshal(obj, &peek); err != nil {
 		return ""
 	}
 	if len(peek.Patches) == 0 {
@@ -71,8 +98,6 @@ func detectPatchesStringMismatch(args json.RawMessage) string {
 	if len(trimmed) == 0 || trimmed[0] != '"' {
 		return ""
 	}
-	// Confirm the string payload is itself a JSON array (double-serialization),
-	// not just an unrelated string like "patches": "hello".
 	var inner string
 	if err := json.Unmarshal(peek.Patches, &inner); err != nil {
 		return ""
@@ -139,10 +164,35 @@ func detectPatchOpFieldTypeMismatch(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
 	}
+	// Check top-level 'patches' first for legacy shape.
+	if msg := patchOpFieldTypeMismatchFor(args); msg != "" {
+		return msg
+	}
+	var peek struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(args, &peek); err != nil {
+		return ""
+	}
+	for _, item := range peek.Items {
+		if msg := patchOpFieldTypeMismatchFor(item); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// patchOpFieldTypeMismatchFor inspects the 'patches' array on a single JSON
+// object (the top-level args, or one items[] entry) and reports the first
+// patch op that has a non-string value in a field documented as a string.
+func patchOpFieldTypeMismatchFor(obj json.RawMessage) string {
+	if len(obj) == 0 {
+		return ""
+	}
 	var peek struct {
 		Patches json.RawMessage `json:"patches"`
 	}
-	if err := json.Unmarshal(args, &peek); err != nil {
+	if err := json.Unmarshal(obj, &peek); err != nil {
 		return ""
 	}
 	if len(peek.Patches) == 0 {
@@ -150,8 +200,6 @@ func detectPatchOpFieldTypeMismatch(args json.RawMessage) string {
 	}
 	trimmed := skipJSONWhitespace(peek.Patches)
 	if len(trimmed) == 0 || trimmed[0] != '[' {
-		// Not an array — the dedicated patches-string detector handles that
-		// case. Avoid double-reporting here.
 		return ""
 	}
 	var ops []map[string]json.RawMessage
@@ -246,8 +294,46 @@ func recoverDoubleEncodedPatches(args json.RawMessage) (json.RawMessage, bool) {
 	if err := json.Unmarshal(args, &top); err != nil {
 		return nil, false
 	}
-	raw, present := top["patches"]
-	if !present || len(raw) == 0 {
+	changed := false
+	// Top-level 'patches' (legacy / direct shape).
+	if fixed, ok := tryDecodeStringEncodedArray(top["patches"]); ok {
+		top["patches"] = fixed
+		changed = true
+	}
+	// items[*].patches (new shape).
+	if rawItems, present := top["items"]; present && len(rawItems) > 0 {
+		var items []map[string]json.RawMessage
+		if err := json.Unmarshal(rawItems, &items); err == nil {
+			itemsChanged := false
+			for _, it := range items {
+				if fixed, ok := tryDecodeStringEncodedArray(it["patches"]); ok {
+					it["patches"] = fixed
+					itemsChanged = true
+				}
+			}
+			if itemsChanged {
+				if buf, err := json.Marshal(items); err == nil {
+					top["items"] = buf
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	rewritten, err := json.Marshal(top)
+	if err != nil {
+		return nil, false
+	}
+	return rewritten, true
+}
+
+// tryDecodeStringEncodedArray decodes a JSON value that is a string whose
+// contents parse as a JSON array, returning the inner array bytes and
+// ok=true. Used to recover double-encoded 'patches' fields.
+func tryDecodeStringEncodedArray(raw json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) == 0 {
 		return nil, false
 	}
 	trimmed := skipJSONWhitespace(raw)
@@ -266,10 +352,5 @@ func recoverDoubleEncodedPatches(args json.RawMessage) (json.RawMessage, bool) {
 	if err := json.Unmarshal([]byte(inner), &probe); err != nil {
 		return nil, false
 	}
-	top["patches"] = json.RawMessage(inner)
-	rewritten, err := json.Marshal(top)
-	if err != nil {
-		return nil, false
-	}
-	return rewritten, true
+	return json.RawMessage(inner), true
 }

@@ -26,11 +26,15 @@ func TestPatch_Function_ReplaceShorter_AddsHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "verylongmatchcontent", "replace": "x"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "verylongmatchcontent", "replace": "x"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -43,11 +47,14 @@ func TestPatch_Function_ReplaceShorter_AddsHint(t *testing.T) {
 	buf, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
 	var payload struct {
-		Hint string `json:"hint"`
+		Items []struct {
+			Hint string `json:"hint"`
+		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(buf, &payload))
-	assert.Contains(t, payload.Hint, "update object=func")
-	assert.Contains(t, payload.Hint, "shorter than input")
+	require.Len(t, payload.Items, 1)
+	assert.Contains(t, payload.Items[0].Hint, "update object=func")
+	assert.Contains(t, payload.Items[0].Hint, "shorter than input")
 }
 
 // TestPatch_Function_ReplaceSameOrLonger_NoHint asserts that the hint is
@@ -57,11 +64,15 @@ func TestPatch_Function_ReplaceSameOrLonger_NoHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "abc", "replace": "abcdef"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "abc", "replace": "abcdef"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -71,10 +82,13 @@ func TestPatch_Function_ReplaceSameOrLonger_NoHint(t *testing.T) {
 	buf, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
 	var payload struct {
-		Hint string `json:"hint"`
+		Items []struct {
+			Hint string `json:"hint"`
+		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(buf, &payload))
-	assert.Empty(t, payload.Hint)
+	require.Len(t, payload.Items, 1)
+	assert.Empty(t, payload.Items[0].Hint)
 }
 
 // TestPatch_Decl_ReplaceShorter_AddsHint mirrors the function-target test
@@ -84,11 +98,15 @@ func TestPatch_Decl_ReplaceShorter_AddsHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "decl",
-		"file":       "foo.go",
-		"identifier": "banner",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "longoriginalvalue", "replace": "tiny"},
+		"target": "decl",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "banner",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "longoriginalvalue", "replace": "tiny"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -103,9 +121,13 @@ func TestPatch_File_ReplaceShorter_AddsHint(t *testing.T) {
 
 	result := callTool(t, cs, "patch", map[string]any{
 		"target": "file",
-		"file":   "foo.go",
-		"patches": []map[string]any{
-			{"match": "longoldname", "replace": "x"},
+		"items": []map[string]any{
+			{
+				"file": "foo.go",
+				"patches": []map[string]any{
+					{"match": "longoldname", "replace": "x"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -121,11 +143,15 @@ func TestPatch_NonReplaceOp_NoHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "insert_before", "match": "anchor", "code": "log.Println()"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "insert_before", "match": "anchor", "code": "log.Println()"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))

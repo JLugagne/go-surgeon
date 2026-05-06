@@ -196,7 +196,6 @@ func TestToolsList(t *testing.T) {
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
 		"patch",
-		"patch_struct_bulk", "patch_function_bulk",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
 		"describe_tool",
@@ -1169,11 +1168,15 @@ func TestPatchDecl_ToolRoutesToHandler(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "decl",
-		"file":       "foo.go",
-		"identifier": "serverInstructions",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "hello", "replace": "hi"},
+		"target": "decl",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "serverInstructions",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "hello", "replace": "hi"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -1395,11 +1398,15 @@ func TestPatchFunction_AutoLiftBannerLeadsText(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "insert_before", "match": "anchor", "code": "log.Println(\"hi\")"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "insert_before", "match": "anchor", "code": "log.Println(\"hi\")"},
+				},
+			},
 		},
 	})
 
