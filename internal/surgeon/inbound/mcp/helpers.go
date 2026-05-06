@@ -351,7 +351,7 @@ type symbolEdit struct {
 }
 
 // editOutput is the structured result for all write tools (create, update,
-// delete, insert_call, execute_plan, add/update/delete_interface).
+// delete, insert_call, execute_plan, interface action=add|update|delete).
 type editOutput struct {
 	FilesModified []string     `json:"files_modified"`
 	Symbols       []symbolEdit `json:"symbols,omitempty"`

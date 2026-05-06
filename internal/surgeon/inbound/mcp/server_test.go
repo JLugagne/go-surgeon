@@ -192,7 +192,7 @@ func TestToolsList(t *testing.T) {
 	expected := []string{
 		"overview", "symbol", "build_check", "test_run",
 		"create", "update", "delete",
-		"add_interface", "update_interface", "delete_interface",
+		"interface",
 		"insert_call",
 		"execute_plan", "implement", "mock", "test", "extract_interface",
 		"patch",
@@ -692,7 +692,8 @@ func TestAddInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "add_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":    "add",
 		"file":      "internal/domain/repo.go",
 		"content":   "type Repository interface { FindByID(id string) (*Entity, error) }",
 		"mock_file": "internal/domain/repotest/mock.go",
@@ -715,7 +716,8 @@ func TestUpdateInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "update_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "update",
 		"file":       "repo.go",
 		"identifier": "Repository",
 		"content":    "type Repository interface { FindByID(id string) (*Entity, error); Delete(id string) error }",
@@ -732,7 +734,8 @@ func TestDeleteInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "delete_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "delete",
 		"file":       "repo.go",
 		"identifier": "Repository",
 	})
@@ -747,12 +750,97 @@ func TestAddInterface_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "add_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":  "add",
 		"file":    "repo.go",
 		"content": "type Repository interface {}",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "duplicate interface")
+}
+
+// --- Interface action discriminator validation ---
+
+func TestInterface_MissingAction(t *testing.T) {
+	// The schema marks action as required; sending it as an empty string
+	// bypasses the SDK pre-validation and exercises our handler-level guard.
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":  "",
+		"file":    "repo.go",
+		"content": "type Repository interface {}",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "action is required")
+}
+
+func TestInterface_UnknownAction(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action": "rename",
+		"file":   "repo.go",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown action")
+}
+
+func TestInterface_DeleteMockRequiresMockFileAndName(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":      "delete",
+		"file":        "repo.go",
+		"identifier":  "Repository",
+		"delete_mock": true,
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "delete_mock=true requires both mock_file and mock_name")
+}
+
+func TestInterface_DeleteMockRejectedOnAdd(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":      "add",
+		"file":        "repo.go",
+		"content":     "type Repository interface {}",
+		"delete_mock": true,
+		"mock_file":   "mock.go",
+		"mock_name":   "MockRepository",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "delete_mock is only valid with action=delete")
+}
+
+func TestInterface_StripDocRejectedOnDelete(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "delete",
+		"file":       "repo.go",
+		"identifier": "Repository",
+		"strip_doc":  true,
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "strip_doc is only valid with action=update")
+}
+
+func TestInterface_AddRequiresContent(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action": "add",
+		"file":   "repo.go",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "content is required for action=add")
+}
+
+func TestInterface_UpdateRequiresSomethingToUpdate(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "update",
+		"file":       "repo.go",
+		"identifier": "Repository",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "requires at least one of content, doc, or strip_doc")
 }
 
 // --- Implement tool tests ---

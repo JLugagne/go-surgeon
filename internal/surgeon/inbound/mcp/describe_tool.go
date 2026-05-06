@@ -60,17 +60,19 @@ var toolCatalog = []toolEntry{
 	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch"},
 	{Name: "create", Category: "edit", Summary: "add a new file, function, or struct (object=file|func|struct)", Example: `{"object": "func", "file": "foo.go", "content": "func Foo() {}"}`, Related: "update, execute_plan"},
 	{Name: "update", Category: "edit", Summary: "whole-declaration replacement (replace_file / update_func / update_struct); prefer patch when editing in place", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo", "content": "func Foo() {}"}`, Related: "patch, create"},
-	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "delete_interface"},
+	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "interface"},
 
-	// INTERFACE (composite ops: interface + mock in lockstep)
-	{Name: "add_interface", Category: "interface", Summary: "create an interface AND its mock atomically", Example: `{"file": "foo.go", "identifier": "Reader", "content": "Read(p []byte) (int, error)", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch, mock"},
-	{Name: "update_interface", Category: "interface", Summary: "replace an interface's full declaration AND keep its mock in sync", Example: `{"file": "foo.go", "identifier": "Reader", "content": "...", "mock_file": "mock_reader.go"}`, Related: "patch"},
-	{Name: "delete_interface", Category: "interface", Summary: "remove an interface and (optionally) its mock", Example: `{"file": "foo.go", "identifier": "Reader", "delete_mock": true}`, Related: "delete"},
+	// INTERFACE (composite ops: interface + mock in lockstep, action-discriminated)
+	{Name: "interface", Category: "interface", Summary: "manage interfaces and their mocks atomically (action=add|update|delete). add creates interface + mock; update replaces the declaration and keeps the mock in sync; delete removes the interface and optionally the mock.", Example: `{"action": "add", "file": "foo.go", "identifier": "Reader", "content": "type Reader interface { Read(p []byte) (int, error) }", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch, mock", Limitations: []string{
+		"action=add: requires file + content (mock_file + mock_name optional → also generates the mock). Example: {\"action\": \"add\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"content\": \"type Reader interface { Read(p []byte) (int, error) }\", \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+		"action=update: requires file + identifier; pass content to rewrite the body, doc to set the doc comment, or strip_doc=true to remove it. mock_file + mock_name regenerate the mock. Example: {\"action\": \"update\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"content\": \"type Reader interface { Read(p []byte) (int, error); Close() error }\", \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+		"action=delete: requires file + identifier; pass delete_mock=true with mock_file + mock_name to also remove the mock. Example: {\"action\": \"delete\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"delete_mock\": true, \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+	}},
 
 	// CODEGEN
-	{Name: "implement", Category: "codegen", Summary: "generate method stubs on a struct for an interface it doesn't yet satisfy", Example: `{"file": "foo.go", "receiver": "*Foo", "interface": "io.Reader"}`, Related: "add_interface"},
-	{Name: "mock", Category: "codegen", Summary: "generate a standalone mock for an interface you don't own (stdlib/third-party)", Example: `{"file": "mock.go", "identifier": "io.Reader"}`, Related: "add_interface"},
-	{Name: "extract_interface", Category: "codegen", Summary: "derive an interface from an existing struct's exported methods", Example: `{"file": "foo.go", "struct": "FooService", "interface": "FooAPI"}`, Related: "add_interface"},
+	{Name: "implement", Category: "codegen", Summary: "generate method stubs on a struct for an interface it doesn't yet satisfy", Example: `{"file": "foo.go", "receiver": "*Foo", "interface": "io.Reader"}`, Related: "interface"},
+	{Name: "mock", Category: "codegen", Summary: "generate a standalone mock for an interface you don't own (stdlib/third-party)", Example: `{"file": "mock.go", "identifier": "io.Reader"}`, Related: "interface"},
+	{Name: "extract_interface", Category: "codegen", Summary: "derive an interface from an existing struct's exported methods", Example: `{"file": "foo.go", "struct": "FooService", "interface": "FooAPI"}`, Related: "interface"},
 	{Name: "test", Category: "codegen", Summary: "generate a table-driven test skeleton for a function or method", Example: `{"file": "foo.go", "identifier": "Foo"}`, Related: "test_run"},
 
 	// VALIDATE

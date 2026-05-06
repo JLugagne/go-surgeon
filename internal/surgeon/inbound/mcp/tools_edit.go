@@ -189,7 +189,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete",
-		Description: "Remove a function, method, struct, or file. object='file' deletes the file from disk (no identifier needed); object='struct' also removes every method on the struct across the package. For interfaces, use delete_interface instead (handles mock cleanup). preview=true returns a unified diff without writing.",
+		Description: "Remove a function, method, struct, or file. object='file' deletes the file from disk (no identifier needed); object='struct' also removes every method on the struct across the package. For interfaces, use the interface tool with action=delete instead (handles mock cleanup). preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

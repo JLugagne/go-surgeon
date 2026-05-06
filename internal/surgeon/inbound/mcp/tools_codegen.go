@@ -99,7 +99,7 @@ func registerCodegenTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "mock",
-		Description: "Generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, use add_interface with mock_file instead. Interface must be fully qualified. preview=true returns a unified diff without writing.",
+		Description: "Generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, use the interface tool (action=add) with mock_file instead. Interface must be fully qualified. preview=true returns a unified diff without writing.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mockInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

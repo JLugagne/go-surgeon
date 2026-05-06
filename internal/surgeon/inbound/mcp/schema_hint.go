@@ -125,7 +125,7 @@ func formatPatchesMismatchError(doubleSerialized bool) string {
 		"Send 'patches' as a raw JSON array, not as a string containing JSON. " +
 		"(If your client did send a raw array, this may be a server-side false positive — please file an issue.)\n" +
 		"Workaround: retry the same call (some clients are intermittent), or fall back to " +
-		"update_interface / update_struct / update with the full declaration."
+		"interface action=update / update_struct / update with the full declaration."
 }
 
 // stringPatchFields lists the fields inside a single patch op that MUST

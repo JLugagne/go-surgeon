@@ -27,14 +27,14 @@ EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewr
 - Whole-declaration replacement (func/struct/file)   → update
 - Adding a brand-new declaration (func/struct/file)  → create
 - Removing a declaration                             → delete
-- Adding an interface WITH its mock in one step      → add_interface (set mock_file + mock_name)
-- Updating or deleting an interface                  → update_interface / delete_interface (keep the mock in sync via mock_file/mock_name/delete_mock)
+- Adding an interface WITH its mock in one step      → interface action=add (set mock_file + mock_name)
+- Updating or deleting an interface                  → interface action=update / action=delete (keep the mock in sync via mock_file/mock_name/delete_mock)
 - Several coordinated edits                          → execute_plan (atomic, up to 15 actions)
 
 WHEN TO BATCH WITH execute_plan
 Principle: if you're about to make 3+ related edits that must land together, use execute_plan — one atomic call with rollback on failure.
 - Example A (same change to two interfaces): bundle two patch_interface actions in one execute_plan (patch_interface actions carry their ops via patch_interface_ops). This is two round-trips as separate calls AND if the second fails the file is left with only one interface updated; the bundled form rolls both back on failure.
-- Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type.
+- Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type. (Inside execute_plan the action type is still 'add_interface'; the standalone tool is 'interface' with action=add.)
 When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch_* tools already preserve everything you didn't touch.
 
 Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_decl/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
@@ -44,10 +44,10 @@ VALIDATE (after you edit, to confirm the change is sound)
 - test_run: runs 'go test' for a package/directory and reports pass/fail plus failing test output.
 
 INTERFACE WORKFLOWS
-- To add ONE method to an existing interface: use patch_interface add_method. There is no add_interface_method tool, and update_interface is overkill here.
-- To restructure an interface significantly: update_interface with the complete new declaration.
+- To add ONE method to an existing interface: use patch target=interface op=add_method. There is no add_interface_method tool, and interface action=update is overkill here.
+- To restructure an interface significantly: interface action=update with the complete new declaration.
 - implement: generate method stubs on a struct for an interface it doesn't yet satisfy.
-- mock: generate a standalone mock for an interface you don't own (stdlib/third-party). For interfaces you own, prefer add_interface + mock_file.
+- mock: generate a standalone mock for an interface you don't own (stdlib/third-party). For interfaces you own, prefer interface action=add + mock_file.
 - extract_interface: derive an interface from an existing struct's exported methods.
 
 CODE GENERATION
@@ -58,7 +58,7 @@ VALIDATE (after editing, before declaring the task done)
 - test_run: run 'go test' scoped to a package/directory and get a compact pass/fail report with per-test timing and failure file:line references. Prefer this over shelling out to go test yourself. Pair with build_check for compile-time validation.
 
 ERROR HINTS
-- The patch_* tools ('patches' field) are guarded by a pre-validation hint. If a client accidentally sends 'patches' as a JSON-encoded string instead of an array, you'll get an explicit ERROR message naming the cause ('JSON-encoded string instead of an array', and 'serialized twice' when the inner string itself parses as an array) before the SDK's opaque schema error fires. When you see that message: resend 'patches' as a raw JSON array (not a stringified one), or fall back to update / update_interface / update_struct with the full replacement declaration.
+- The patch_* tools ('patches' field) are guarded by a pre-validation hint. If a client accidentally sends 'patches' as a JSON-encoded string instead of an array, you'll get an explicit ERROR message naming the cause ('JSON-encoded string instead of an array', and 'serialized twice' when the inner string itself parses as an array) before the SDK's opaque schema error fires. When you see that message: resend 'patches' as a raw JSON array (not a stringified one), or fall back to update / interface action=update / update_struct with the full replacement declaration.
 UNIVERSAL RULES
 - content is raw Go code: never include 'package ...' or 'import ...' blocks — goimports runs after every edit and manages imports.
 - Always read with symbol body=true before update/delete — it's cheap and it prevents the "I replaced the wrong thing" class of bug.
