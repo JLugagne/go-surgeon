@@ -123,7 +123,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace a whole function, method, struct, or file. For small changes inside a function body, prefer patch_function. content is the complete new declaration (signature + body). Doc comments are kept unless you set doc or strip_doc=true. preview=true returns a unified diff without writing. object='auto' infers from content (func ... → func, type ... struct → struct, else file).",
+		Description: "Replace a whole function, method, struct, or file. content is the complete new declaration. For small changes inside a function body, prefer patch target=function. object='auto' infers from content (func/type/file). Doc comments are kept unless doc or strip_doc=true. preview=true returns a diff.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil

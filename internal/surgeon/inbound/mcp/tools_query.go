@@ -101,7 +101,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "symbol",
-		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex). To resolve a file:line diagnostic directly, set file+at_line — returns the outermost named declaration that spans that line, no name lookup needed. body=true shows the implementation plus the file's package line and import block. In pattern mode, outline=true returns signature + first-sentence doc summary per match (middle ground between signature-only and body=true). When exploring an unfamiliar file, use context=file to also get an outline of every sibling declaration — saves 5+ follow-up calls. Works on dependencies via module='github.com/org/repo'. query, pattern, and at_line are mutually exclusive.",
+		Description: "Read one declaration (exact query='Name'/'Receiver.Method'/'pkg.Name') or list matches (pattern=regex) or resolve from a diagnostic (file+at_line — returns the outermost decl spanning that line). query/pattern/at_line are mutually exclusive. body=true returns the implementation plus the file's package + imports. In pattern mode, outline=true returns signature + first-sentence doc per match. context=file adds an outline of every sibling decl — saves follow-up calls. module='github.com/org/repo' reads from a dependency.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in symbolInput) (*mcp.CallToolResult, any, error) {
 		dir := in.Dir
 		if dir == "" {
@@ -185,7 +185,7 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "test_run",
-		Description: "Run `go test` scoped to a package/directory and return a compact pass/fail report with per-test timing and failure file:line references. Use after editing Go code to verify behavior in-loop. dir defaults to ./..., timeout defaults to 120s (max 600). Pass affected_by=path/to/file.go to run only the owning package plus its reverse-dependency closure (mutually exclusive with dir and symbols). Pass symbols=['pkg.MyFunc'] to auto-resolve the owning package and build a -run filter matching ^TestMyFunc — ideal when you only want tests related to specific functions you just edited; mutually exclusive with dir and affected_by. On success the verbatim raw_output stream is omitted from the structured payload (it bloats responses without adding signal); set include_raw_output=true to force it on a green run. verbosity controls payload size on large suites: 'summary' returns only success/summary/failed tests (~1k chars regardless of suite size — ideal for the 25k token tool-result budget); 'full' keeps everything; default auto picks 'summary' once the suite has more than 50 tests.",
+		Description: "Run `go test` and return a compact pass/fail report with per-test timing and failure file:line. SCOPE — pick at most one: dir (default ./...), affected_by=file.go (owning package + reverse-dep closure), or symbols=['pkg.Func'] (auto-resolves package, filters -run ^TestFunc). VERBOSITY: 'summary' (~1k chars, ideal for big suites) vs 'full'; default auto-picks 'summary' above 50 tests. raw_output stripped on success unless include_raw_output=true. timeout default 120s (max 600).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in testRunInput) (*mcp.CallToolResult, any, error) {
 		result, err := queries.TestRun(ctx, domain.TestRunRequest{
 			Dir:            in.Dir,
