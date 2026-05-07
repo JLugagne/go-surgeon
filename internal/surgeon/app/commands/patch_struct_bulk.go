@@ -10,8 +10,8 @@ import (
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 )
 
-// patchStructBulkMaxItems is the soft cap on the number of items a single
-// patch_struct_bulk call may contain. It keeps error messages manageable and
+// patchStructBulkMaxItems is the soft cap on the number of items items[] in a
+// patch target=struct call may contain. It keeps error messages manageable and
 // discourages callers from batching together unrelated work.
 const patchStructBulkMaxItems = 20
 
@@ -33,13 +33,13 @@ func (h *ExecutePlanHandler) PatchStructBulk(ctx context.Context, req domain.Pat
 	if len(req.Items) > patchStructBulkMaxItems {
 		return domain.PatchStructBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",
-			Message: fmt.Sprintf("patch_struct_bulk: max %d items per call, got %d", patchStructBulkMaxItems, len(req.Items)),
+			Message: fmt.Sprintf("patch (target=struct): max %d items per call in items[], got %d", patchStructBulkMaxItems, len(req.Items)),
 		}
 	}
 	if len(req.Items) == 0 {
 		return domain.PatchStructBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",
-			Message: "patch_struct_bulk: at least one item is required",
+			Message: "patch (target=struct): items[] requires at least one entry",
 		}
 	}
 
@@ -62,7 +62,7 @@ func (h *ExecutePlanHandler) PatchStructBulk(ctx context.Context, req domain.Pat
 			if perr != nil {
 				return &domain.Error{
 					Code:    domainErrorCode(perr),
-					Message: fmt.Sprintf("patch_struct_bulk: item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
+					Message: fmt.Sprintf("patch (target=struct): item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
 					Err:     perr,
 				}
 			}
@@ -104,7 +104,7 @@ func (h *ExecutePlanHandler) PatchStructBulk(ctx context.Context, req domain.Pat
 		if perr != nil {
 			return domain.PatchStructBulkResult{}, &domain.Error{
 				Code:    domainErrorCode(perr),
-				Message: fmt.Sprintf("patch_struct_bulk: item #%d (%s:%s) failed during write phase: %v", i+1, it.FilePath, it.Identifier, perr),
+				Message: fmt.Sprintf("patch (target=struct): item #%d (%s:%s) failed during write phase: %v", i+1, it.FilePath, it.Identifier, perr),
 				Err:     perr,
 			}
 		}

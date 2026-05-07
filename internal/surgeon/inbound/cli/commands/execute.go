@@ -22,6 +22,11 @@ func NewExecutePlanCommand(surgeon service.SurgeonCommands) *cobra.Command {
 		Short: "Execute a YAML plan file",
 		Long: `Reads a YAML plan file (or stdin) and executes all listed actions in order.
 
+Note: action names below are execute_plan-internal types. The standalone
+MCP tools have been merged: add_interface/update_interface/delete_interface
+are now reachable as the 'interface' tool (with action=add|update|delete).
+Inside this YAML the original action names remain valid.
+
 Plan file schema:
   actions:
     - action: create_file | replace_file
