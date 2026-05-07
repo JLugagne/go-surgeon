@@ -26,7 +26,7 @@ func registerPatchTools(s *mcp.Server, commands service.SurgeonCommands) {
 	registerPatchTool(s, commands)
 }
 
-// --- patch_file ---
+// --- ops for patch target=file ---
 
 type filePatchOpInput struct {
 	Match        string `json:"match,omitempty" jsonschema:"literal text; all occurrences are replaced. Mutually exclusive with match_regex."`

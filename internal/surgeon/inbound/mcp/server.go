@@ -17,12 +17,12 @@ EXPLORE (before you edit, to understand what's there)
 - Both accept module='github.com/org/repo' to look inside a dependency's source instead of the current project. Use this rather than find/cat inside $GOMODCACHE.
 
 EDIT (pick the narrowest tool that fits — bigger tools aren't safer, they rewrite more)
-- Changing a few lines inside one function body      → patch_function (op=replace/insert_before/insert_after/delete)
+- Changing a few lines inside one function body      → patch target=function (op=replace/insert_before/insert_after/delete)
 - Multi-line replacement OR restructuring a func     → update object=func (NOT patch op=replace — op=replace is fragile across line boundaries)
-- Same rename across many functions in one file      → patch_file (bulk text substitution with AST safety)
-- Editing the VALUE of a top-level const or var      → patch_decl (multi-line string const, error var, etc.)
-- Single field change on a struct                    → patch_struct
-- Single method change on an interface               → patch_interface (regenerates the mock too)
+- Same rename across many functions in one file      → patch target=file (bulk text substitution with AST safety)
+- Editing the VALUE of a top-level const or var      → patch target=decl (multi-line string const, error var, etc.)
+- Single field change on a struct                    → patch target=struct
+- Single method change on an interface               → patch target=interface (regenerates the mock too via mock_file+mock_name)
 - Inserting one statement at a fixed position        → insert_call
 - Whole-declaration replacement (func/struct/file)   → update
 - Adding a brand-new declaration (func/struct/file)  → create
@@ -37,7 +37,7 @@ Principle: if you're about to make 3+ related edits that must land together, use
 - Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type. (Inside execute_plan the action type is still 'add_interface'; the standalone tool is 'interface' with action=add.)
 When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch_* tools already preserve everything you didn't touch.
 
-Why the granular tools matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch_function/patch_decl/patch_struct/patch_interface edit in place and preserve everything you didn't explicitly change.
+Why the granular targets matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch target=function/decl/struct/interface edit in place and preserve everything you didn't explicitly change.
 
 VALIDATE (after you edit, to confirm the change is sound)
 - build_check: runs 'go build' scoped to a package or directory (default './...') and returns structured diagnostics (file, line, column, message) deduplicated per file. Call this after any edit that could affect compilation instead of asking the user to run 'go build' or shelling out. Set tests=true to also compile test files. timeout_seconds caps the run (default 60, max 600). 'go vet' is out of scope; use build_check only for compile errors.
