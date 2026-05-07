@@ -35,7 +35,7 @@ WHEN TO BATCH WITH execute_plan
 Principle: if you're about to make 3+ related edits that must land together, use execute_plan — one atomic call with rollback on failure.
 - Example A (same change to two interfaces): bundle two patch_interface actions in one execute_plan (patch_interface actions carry their ops via patch_interface_ops). This is two round-trips as separate calls AND if the second fails the file is left with only one interface updated; the bundled form rolls both back on failure.
 - Example B (new interface + implementation + test stub): one execute_plan with add_interface + add_struct (or create_file for the impl) + create_file for the _test.go lands the whole vertical slice atomically; a partial failure rolls back, so you never commit a half-wired type. (Inside execute_plan the action type is still 'add_interface'; the standalone tool is 'interface' with action=add.)
-When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch_* tools already preserve everything you didn't touch.
+When NOT to use it: single-object edits don't need it. Don't reach for execute_plan just to feel safer — the granular patch target=... form already preserves everything you didn't touch.
 
 Why the granular targets matter: re-emitting a whole function or struct via update forces you to reproduce the entire body, which is a common source of subtle drift (lost comments, reordered fields, missed branches). patch target=function/decl/struct/interface edit in place and preserve everything you didn't explicitly change.
 
