@@ -194,7 +194,7 @@ func TestToolsList(t *testing.T) {
 		"create", "update", "delete",
 		"interface",
 		"insert_call",
-		"execute_plan", "implement", "mock", "test", "extract_interface",
+		"execute_plan", "derive", "test",
 		"patch",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
@@ -862,10 +862,11 @@ func TestImplement_GeneratesStubs(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "io.Reader",
-		"receiver":  "*MyReader",
-		"file":      "reader.go",
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "io.Reader",
+		"target": "*MyReader",
+		"file":   "reader.go",
 	})
 
 	text := resultText(t, result)
@@ -881,10 +882,11 @@ func TestImplement_AllImplemented(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "io.Reader",
-		"receiver":  "*MyReader",
-		"file":      "reader.go",
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "io.Reader",
+		"target": "*MyReader",
+		"file":   "reader.go",
 	})
 	assert.Contains(t, resultText(t, result), "All methods are already implemented")
 }
@@ -897,10 +899,11 @@ func TestImplement_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "pkg.Missing",
-		"receiver":  "*MyStruct",
-		"file":      "file.go",
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "pkg.Missing",
+		"target": "*MyStruct",
+		"file":   "file.go",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "interface not found")
@@ -919,10 +922,11 @@ func TestMock_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "mock", map[string]any{
-		"interface": "io.Writer",
-		"mock_name": "MockWriter",
-		"file":      "mocks/writer.go",
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "mock_from_interface",
+		"source": "io.Writer",
+		"target": "MockWriter",
+		"file":   "mocks/writer.go",
 	})
 	assert.Contains(t, resultText(t, result), "MockWriter")
 }
@@ -935,10 +939,11 @@ func TestMock_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "mock", map[string]any{
-		"interface": "pkg.Missing",
-		"mock_name": "MockMissing",
-		"file":      "mock.go",
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "mock_from_interface",
+		"source": "pkg.Missing",
+		"target": "MockMissing",
+		"file":   "mock.go",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "cannot resolve interface")
@@ -1115,10 +1120,11 @@ func TestExtractInterface_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "extract_interface", map[string]any{
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
-		"name":       "ServiceInterface",
+		"target":     "ServiceInterface",
 		"out":        "iface.go",
 	})
 	text := resultText(t, result)
@@ -1135,10 +1141,11 @@ func TestExtractInterface_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "extract_interface", map[string]any{
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
-		"name":       "ServiceInterface",
+		"target":     "ServiceInterface",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "no exported methods")
@@ -1743,4 +1750,148 @@ func TestUpdate_Auto_FileContent(t *testing.T) {
 	assert.False(t, result.IsError)
 	require.Len(t, receivedPlan.Actions, 1)
 	assert.Equal(t, domain.ActionTypeReplaceFile, receivedPlan.Actions[0].Action)
+}
+
+// --- derive tool validation tests ---
+
+func TestDerive_MissingKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{"file": "f.go"})
+	require.True(t, result.IsError)
+	// Schema-level rejection mentions the missing 'kind' field; an empty
+	// kind passed explicitly would also be rejected by the runtime check
+	// with "kind is required".
+	assert.Contains(t, resultText(t, result), "kind")
+}
+
+func TestDerive_EmptyKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{"kind": "", "file": "f.go"})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "kind is required")
+}
+
+func TestDerive_UnknownKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{"kind": "bogus", "file": "f.go"})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown kind")
+}
+
+func TestDerive_InterfaceFromType_MissingIdentifier(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "interface_from_type",
+		"file":   "service.go",
+		"target": "ServiceAPI",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "identifier")
+}
+
+func TestDerive_InterfaceFromType_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_ImplFromInterface_MissingSource(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"target": "*Foo",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "source")
+}
+
+func TestDerive_ImplFromInterface_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"source": "io.Reader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_MockFromInterface_MissingSource(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "mock_from_interface",
+		"file":   "mock.go",
+		"target": "MockReader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "source")
+}
+
+func TestDerive_MockFromInterface_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "mock_from_interface",
+		"file":   "mock.go",
+		"source": "io.Reader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_ImplFromInterface_RejectsOut(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"source": "io.Reader",
+		"target": "*Foo",
+		"out":    "iface.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "out is not allowed")
+}
+
+func TestDerive_MockFromInterface_RejectsMockFile(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":      "mock_from_interface",
+		"file":      "mock.go",
+		"source":    "io.Reader",
+		"target":    "MockReader",
+		"mock_file": "other.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file")
+}
+
+func TestDerive_InterfaceFromType_MockFileWithoutMockName(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+		"target":     "ServiceAPI",
+		"mock_file":  "mock.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file and mock_name")
+}
+
+func TestDerive_InterfaceFromType_MockNameWithoutMockFile(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "derive", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+		"target":     "ServiceAPI",
+		"mock_name":  "MockService",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file and mock_name")
 }

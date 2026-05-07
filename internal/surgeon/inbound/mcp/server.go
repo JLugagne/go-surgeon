@@ -46,9 +46,9 @@ VALIDATE (after you edit, to confirm the change is sound)
 INTERFACE WORKFLOWS
 - To add ONE method to an existing interface: use patch target=interface op=add_method. There is no add_interface_method tool, and interface action=update is overkill here.
 - To restructure an interface significantly: interface action=update with the complete new declaration.
-- implement: generate method stubs on a struct for an interface it doesn't yet satisfy.
-- mock: generate a standalone mock for an interface you don't own (stdlib/third-party). For interfaces you own, prefer interface action=add + mock_file.
-- extract_interface: derive an interface from an existing struct's exported methods.
+- derive kind=impl_from_interface: generate method stubs on a struct for an interface it doesn't yet satisfy.
+- derive kind=mock_from_interface: generate a standalone mock for an interface you don't own (stdlib/third-party). For interfaces you own, prefer interface action=add + mock_file.
+- derive kind=interface_from_type: derive an interface from an existing struct's exported methods (optionally also generates a mock via mock_file + mock_name).
 
 CODE GENERATION
 - test: generate a table-driven test skeleton for a function or method.
