@@ -68,7 +68,7 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 ### 4. Interfaces and mocks stay in sync
 
-`interface action=add` and `interface action=update` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `derive kind=interface_from_type` pulls an interface out of an existing struct in one command.
+`interface action=add` and `interface action=update` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `scaffold kind=interface_from_type` pulls an interface out of an existing struct in one command.
 
 ### 5. Edits can be as granular as a single field or line
 
@@ -172,7 +172,7 @@ Tools over stdio, grouped by purpose:
 | `patch` with `items: [{...}]` | Apply many `patch` operations to many targets in a single atomic call — useful when one refactor touches dozens of functions or structs. |
 | `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`); auto-lifts out of nested scopes |
 | `interface` (`action=add\|update\|delete`) | Manage interfaces with auto-generated (and auto-deleted) mocks |
-| `derive` (`kind=impl_from_interface\|mock_from_interface\|interface_from_type`) | Generate stubs, standalone mocks, and extract interfaces from structs |
+| `scaffold` (`kind=impl_from_interface\|mock_from_interface\|interface_from_type`) | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
 | `build_check`, `test_run` | Compile-verify and run tests in-loop. Both accept `affected_by=<file>` to narrow to the file's reverse-dep closure; `test_run` also accepts `symbols=["pkg.MyFunc"]` to auto-resolve owning packages and build a `-run` filter, plus `verbosity=summary` for compact output on large suites. |
 | `execute_plan` | Run up to 15 edits atomically from a YAML/JSON plan — supports every action type including every `patch` target |

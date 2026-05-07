@@ -16,12 +16,12 @@ type testInput struct {
 	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return diff without writing the test file"`
 }
 
-// deriveInput is the unified shape for the derive tool. The kind field
+// deriveInput is the unified shape for the scaffold tool. The kind field
 // discriminates between three previously-separate tools (extract_interface,
 // implement, mock). Field semantics depend on kind — see the field tags
 // and the tool description.
 type deriveInput struct {
-	Kind string `json:"kind" jsonschema:"what to derive: interface_from_type | impl_from_interface | mock_from_interface"`
+	Kind string `json:"kind" jsonschema:"what to scaffold: interface_from_type | impl_from_interface | mock_from_interface"`
 	File string `json:"file" jsonschema:"target Go file (interface_from_type: file containing the source struct; impl_from_interface: file to append stubs to; mock_from_interface: file to write the mock to)"`
 
 	Identifier string `json:"identifier,omitempty" jsonschema:"interface_from_type only: source struct name"`
@@ -33,15 +33,15 @@ type deriveInput struct {
 	Preview    bool   `json:"preview,omitempty" jsonschema:"if true, return a unified diff without writing"`
 }
 
-const deriveDescription = `Generate code derived from an existing symbol. kind selects what to derive:
-- interface_from_type: derive an interface from a struct's exported methods. Required: file, identifier (struct), target (new interface name). Optional: out (interface output file), mock_file + mock_name (also generate a mock).
+const deriveDescription = `Generate code derived from an existing symbol. kind selects what to scaffold:
+- interface_from_type: scaffold an interface from a struct's exported methods. Required: file, identifier (struct), target (new interface name). Optional: out (interface output file), mock_file + mock_name (also generate a mock).
 - impl_from_interface: generate method stubs on a receiver to satisfy an interface (already-implemented methods are skipped, stubs marked '// TODO(go-surgeon): implement'). Required: file, source (fully-qualified interface, e.g. io.ReadCloser), target (receiver, e.g. *MyStruct).
 - mock_from_interface: generate a function-field mock for an interface you don't own (stdlib, third-party). For your own interfaces, prefer 'interface' action=add with mock_file. Required: file, source (fully-qualified interface), target (mock struct name, e.g. MockReader).
 preview=true returns a unified diff without writing.`
 
 func registerCodegenTools(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "derive",
+		Name:        "scaffold",
 		Description: deriveDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deriveInput) (*mcp.CallToolResult, any, error) {
 		switch in.Kind {
@@ -94,16 +94,16 @@ func registerCodegenTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 func runDeriveInterfaceFromType(ctx context.Context, commands service.SurgeonCommands, in deriveInput) (*mcp.CallToolResult, any, error) {
 	if in.Identifier == "" {
-		return errorResultWithCode("derive kind=interface_from_type: identifier (source struct name) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=interface_from_type: identifier (source struct name) is required", nil), nil, nil
 	}
 	if in.Target == "" {
-		return errorResultWithCode("derive kind=interface_from_type: target (new interface name) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=interface_from_type: target (new interface name) is required", nil), nil, nil
 	}
 	if in.Source != "" {
-		return errorResultWithCode("derive kind=interface_from_type: source is not allowed (use identifier for the source struct)", nil), nil, nil
+		return errorResultWithCode("scaffold kind=interface_from_type: source is not allowed (use identifier for the source struct)", nil), nil, nil
 	}
 	if (in.MockFile == "") != (in.MockName == "") {
-		return errorResultWithCode("derive kind=interface_from_type: mock_file and mock_name must be both set or both omitted", nil), nil, nil
+		return errorResultWithCode("scaffold kind=interface_from_type: mock_file and mock_name must be both set or both omitted", nil), nil, nil
 	}
 	if err := validateGoFile(in.File); err != nil {
 		return err, nil, nil
@@ -144,19 +144,19 @@ func runDeriveInterfaceFromType(ctx context.Context, commands service.SurgeonCom
 
 func runDeriveImplFromInterface(ctx context.Context, commands service.SurgeonCommands, in deriveInput) (*mcp.CallToolResult, any, error) {
 	if in.Source == "" {
-		return errorResultWithCode("derive kind=impl_from_interface: source (fully qualified interface name) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=impl_from_interface: source (fully qualified interface name) is required", nil), nil, nil
 	}
 	if in.Target == "" {
-		return errorResultWithCode("derive kind=impl_from_interface: target (receiver type, e.g. *MyStruct) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=impl_from_interface: target (receiver type, e.g. *MyStruct) is required", nil), nil, nil
 	}
 	if in.Identifier != "" {
-		return errorResultWithCode("derive kind=impl_from_interface: identifier is not allowed", nil), nil, nil
+		return errorResultWithCode("scaffold kind=impl_from_interface: identifier is not allowed", nil), nil, nil
 	}
 	if in.Out != "" {
-		return errorResultWithCode("derive kind=impl_from_interface: out is not allowed (interface_from_type only)", nil), nil, nil
+		return errorResultWithCode("scaffold kind=impl_from_interface: out is not allowed (interface_from_type only)", nil), nil, nil
 	}
 	if in.MockFile != "" || in.MockName != "" {
-		return errorResultWithCode("derive kind=impl_from_interface: mock_file/mock_name are not allowed (interface_from_type only)", nil), nil, nil
+		return errorResultWithCode("scaffold kind=impl_from_interface: mock_file/mock_name are not allowed (interface_from_type only)", nil), nil, nil
 	}
 	if err := validateGoFile(in.File); err != nil {
 		return err, nil, nil
@@ -212,19 +212,19 @@ func runDeriveImplFromInterface(ctx context.Context, commands service.SurgeonCom
 
 func runDeriveMockFromInterface(ctx context.Context, commands service.SurgeonCommands, in deriveInput) (*mcp.CallToolResult, any, error) {
 	if in.Source == "" {
-		return errorResultWithCode("derive kind=mock_from_interface: source (fully qualified interface name) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=mock_from_interface: source (fully qualified interface name) is required", nil), nil, nil
 	}
 	if in.Target == "" {
-		return errorResultWithCode("derive kind=mock_from_interface: target (mock struct name) is required", nil), nil, nil
+		return errorResultWithCode("scaffold kind=mock_from_interface: target (mock struct name) is required", nil), nil, nil
 	}
 	if in.Identifier != "" {
-		return errorResultWithCode("derive kind=mock_from_interface: identifier is not allowed", nil), nil, nil
+		return errorResultWithCode("scaffold kind=mock_from_interface: identifier is not allowed", nil), nil, nil
 	}
 	if in.Out != "" {
-		return errorResultWithCode("derive kind=mock_from_interface: out is not allowed (interface_from_type only)", nil), nil, nil
+		return errorResultWithCode("scaffold kind=mock_from_interface: out is not allowed (interface_from_type only)", nil), nil, nil
 	}
 	if in.MockFile != "" || in.MockName != "" {
-		return errorResultWithCode("derive kind=mock_from_interface: mock_file/mock_name are not allowed (interface_from_type only); use target for the mock struct name", nil), nil, nil
+		return errorResultWithCode("scaffold kind=mock_from_interface: mock_file/mock_name are not allowed (interface_from_type only); use target for the mock struct name", nil), nil, nil
 	}
 	if err := validateGoFile(in.File); err != nil {
 		return err, nil, nil

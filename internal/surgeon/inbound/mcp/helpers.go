@@ -385,7 +385,7 @@ type autoLiftJSON struct {
 	Context    string `json:"context,omitempty"`
 }
 
-// implementOutput is the structured result for derive kind=impl_from_interface.
+// implementOutput is the structured result for scaffold kind=impl_from_interface.
 type implementOutput struct {
 	File      string   `json:"file"`
 	Interface string   `json:"interface"`
@@ -393,7 +393,7 @@ type implementOutput struct {
 	Stubs     []string `json:"stubs_added"`
 }
 
-// mockOutput is the structured result for derive kind=mock_from_interface.
+// mockOutput is the structured result for scaffold kind=mock_from_interface.
 type mockOutput struct {
 	File      string `json:"file"`
 	Interface string `json:"interface"`
@@ -406,7 +406,7 @@ type testOutput struct {
 	Identifier string `json:"identifier"`
 }
 
-// extractInterfaceOutput is the structured result for derive kind=interface_from_type.
+// extractInterfaceOutput is the structured result for scaffold kind=interface_from_type.
 type extractInterfaceOutput struct {
 	InterfaceName string `json:"interface_name"`
 	InterfaceFile string `json:"interface_file"`

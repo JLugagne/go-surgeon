@@ -89,7 +89,7 @@ Starts an [MCP](https://modelcontextprotocol.io) server over stdio. The server a
 | [`patch`](#patch-tool) | Unified patch tool — `target=function/struct/interface/file/decl`, accepts a single edit or `items: [{...}]` for atomic bulk |
 | [`insert_call`](#insert_call-tool) | Insert a single statement; auto-lifts out of nested scopes |
 | [`interface`](#interface-tools) | Manage interfaces with auto-mocks (`action=add|update|delete`) |
-| [`derive`](#derive-tool) | Generate stubs, mocks, or extract interfaces (`kind=impl_from_interface|mock_from_interface|interface_from_type`) |
+| [`scaffold`](#scaffold-tool) | Generate stubs, mocks, or extract interfaces (`kind=impl_from_interface|mock_from_interface|interface_from_type`) |
 | [`test`](#test-tool) | Generate a table-driven test skeleton |
 | [`tag`](#tag-tool) | Add or update struct field tags |
 | [`build_check`](#build_check-tool) | `go build` with structured diagnostics; `affected_by=file` narrows scope |
@@ -385,15 +385,15 @@ The single **`interface`** tool manages interfaces together with their mocks. Us
 
 **Granular edits:** to add, rename, remove, or retype a single method, prefer [`patch target=interface`](#patch-tool) over `interface action=update` — it avoids re-sending the whole declaration and regenerates the mock the same way.
 
-#### `derive` tool
+#### `scaffold` tool
 
-The `derive` tool generates code from existing Go declarations. Use the `kind` discriminator:
+The `scaffold` tool generates code from existing Go declarations. Use the `kind` discriminator:
 
 - `kind: impl_from_interface` — generate missing method stubs on a struct that should satisfy an interface (replaces the old `implement` tool).
 - `kind: mock_from_interface` — generate a standalone mock for any interface without modifying the interface file (replaces the old `mock` tool).
 - `kind: interface_from_type` — extract an interface from an existing struct's exported methods (replaces the old `extract_interface` tool).
 
-**`derive kind=impl_from_interface`**
+**`scaffold kind=impl_from_interface`**
 
 | Parameter | Description |
 |---|---|
@@ -405,7 +405,7 @@ Resolves the interface via `go/packages`. Scans the package to avoid cross-file 
 
 Use for interfaces you **don't own**. For interfaces you own, prefer `interface action=add` (which creates the mock too).
 
-**`derive kind=mock_from_interface`**
+**`scaffold kind=mock_from_interface`**
 
 | Parameter | Description |
 |---|---|
@@ -415,7 +415,7 @@ Use for interfaces you **don't own**. For interfaces you own, prefer `interface 
 
 Uses the same function-field pattern as `interface action=add`. Use for third-party interfaces.
 
-**`derive kind=interface_from_type`**
+**`scaffold kind=interface_from_type`**
 
 Extract an interface from an existing struct's exported methods.
 

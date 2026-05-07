@@ -194,7 +194,7 @@ func TestToolsList(t *testing.T) {
 		"create", "update", "delete",
 		"interface",
 		"insert_call",
-		"execute_plan", "derive", "test",
+		"execute_plan", "scaffold", "test",
 		"patch",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
@@ -862,7 +862,7 @@ func TestImplement_GeneratesStubs(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"source": "io.Reader",
 		"target": "*MyReader",
@@ -882,7 +882,7 @@ func TestImplement_AllImplemented(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"source": "io.Reader",
 		"target": "*MyReader",
@@ -899,7 +899,7 @@ func TestImplement_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"source": "pkg.Missing",
 		"target": "*MyStruct",
@@ -922,7 +922,7 @@ func TestMock_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "mock_from_interface",
 		"source": "io.Writer",
 		"target": "MockWriter",
@@ -939,7 +939,7 @@ func TestMock_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "mock_from_interface",
 		"source": "pkg.Missing",
 		"target": "MockMissing",
@@ -1120,7 +1120,7 @@ func TestExtractInterface_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
@@ -1141,7 +1141,7 @@ func TestExtractInterface_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
@@ -1752,11 +1752,11 @@ func TestUpdate_Auto_FileContent(t *testing.T) {
 	assert.Equal(t, domain.ActionTypeReplaceFile, receivedPlan.Actions[0].Action)
 }
 
-// --- derive tool validation tests ---
+// --- scaffold tool validation tests ---
 
 func TestDerive_MissingKind(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{"file": "f.go"})
+	result := callTool(t, cs, "scaffold", map[string]any{"file": "f.go"})
 	require.True(t, result.IsError)
 	// Schema-level rejection mentions the missing 'kind' field; an empty
 	// kind passed explicitly would also be rejected by the runtime check
@@ -1766,21 +1766,21 @@ func TestDerive_MissingKind(t *testing.T) {
 
 func TestDerive_EmptyKind(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{"kind": "", "file": "f.go"})
+	result := callTool(t, cs, "scaffold", map[string]any{"kind": "", "file": "f.go"})
 	require.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "kind is required")
 }
 
 func TestDerive_UnknownKind(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{"kind": "bogus", "file": "f.go"})
+	result := callTool(t, cs, "scaffold", map[string]any{"kind": "bogus", "file": "f.go"})
 	require.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "unknown kind")
 }
 
 func TestDerive_InterfaceFromType_MissingIdentifier(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "interface_from_type",
 		"file":   "service.go",
 		"target": "ServiceAPI",
@@ -1791,7 +1791,7 @@ func TestDerive_InterfaceFromType_MissingIdentifier(t *testing.T) {
 
 func TestDerive_InterfaceFromType_MissingTarget(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
@@ -1802,7 +1802,7 @@ func TestDerive_InterfaceFromType_MissingTarget(t *testing.T) {
 
 func TestDerive_ImplFromInterface_MissingSource(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"file":   "f.go",
 		"target": "*Foo",
@@ -1813,7 +1813,7 @@ func TestDerive_ImplFromInterface_MissingSource(t *testing.T) {
 
 func TestDerive_ImplFromInterface_MissingTarget(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"file":   "f.go",
 		"source": "io.Reader",
@@ -1824,7 +1824,7 @@ func TestDerive_ImplFromInterface_MissingTarget(t *testing.T) {
 
 func TestDerive_MockFromInterface_MissingSource(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "mock_from_interface",
 		"file":   "mock.go",
 		"target": "MockReader",
@@ -1835,7 +1835,7 @@ func TestDerive_MockFromInterface_MissingSource(t *testing.T) {
 
 func TestDerive_MockFromInterface_MissingTarget(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "mock_from_interface",
 		"file":   "mock.go",
 		"source": "io.Reader",
@@ -1846,7 +1846,7 @@ func TestDerive_MockFromInterface_MissingTarget(t *testing.T) {
 
 func TestDerive_ImplFromInterface_RejectsOut(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":   "impl_from_interface",
 		"file":   "f.go",
 		"source": "io.Reader",
@@ -1859,7 +1859,7 @@ func TestDerive_ImplFromInterface_RejectsOut(t *testing.T) {
 
 func TestDerive_MockFromInterface_RejectsMockFile(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":      "mock_from_interface",
 		"file":      "mock.go",
 		"source":    "io.Reader",
@@ -1872,7 +1872,7 @@ func TestDerive_MockFromInterface_RejectsMockFile(t *testing.T) {
 
 func TestDerive_InterfaceFromType_MockFileWithoutMockName(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
@@ -1885,7 +1885,7 @@ func TestDerive_InterfaceFromType_MockFileWithoutMockName(t *testing.T) {
 
 func TestDerive_InterfaceFromType_MockNameWithoutMockFile(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result := callTool(t, cs, "derive", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
 		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
