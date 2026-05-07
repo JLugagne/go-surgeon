@@ -77,27 +77,14 @@ type patchBulkOutput struct {
 	Diff    string        `json:"diff,omitempty"`
 }
 
-const patchToolDescription = "Surgical AST-aware editor — one tool for all declaration kinds. " +
-	"SHAPE: pick one form per call. " +
-	"Single-target (common, ~80% of calls): set file + identifier + patches at the top level (plus include_nested for function, mock_file/mock_name for interface, scope for file). " +
-	"Bulk: set items: [{file, identifier, patches, ...}] for N targets. EXACTLY ONE shape per call — mixing top-level fields with items[] is rejected. " +
-	"Set target to select what kind of declaration is edited: " +
-	"'function' edits lines inside a func/method body; " +
-	"'struct' edits a struct's field list; " +
-	"'interface' edits an interface's method list (and regenerates the mock when mock_file+mock_name are set); " +
-	"'file' does whole-file text substitution for cross-function batch edits; " +
-	"'decl' edits a top-level const/var value. " +
-	"BATCH SEMANTICS (items[]): function and struct items are atomic across the batch (any failure rolls everything back); interface, file and decl items are applied sequentially — if item K fails, items before it remain written. " +
-	"file + patches always required; preview=true returns diff without writing. " +
-	"FUNCTION ops: replace, insert_before, insert_after, delete, wrap, set_signature. " +
-	"SIGNATURE: set_signature takes params (array of declarations without parens, e.g. [\"ctx context.Context\", \"x int\"]) and/or returns; at least one is required. " +
-	"LINE TARGETING (preferred for function/decl): at_line or from_line/to_line with file-absolute line numbers — faster and unambiguous than text match. " +
-	"TEXT MATCHING (fallback): match (whitespace-normalized) or match_regex (RE2); disambiguate with occurrence. " +
-	"STRUCT ops: add_field, remove_field, rename_field, retype_field, set_tag, set_doc. " +
-	"DOCS: doc on add_field/set_doc accepts multiline text using \\n. " +
-	"INTERFACE ops: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed. " +
-	"FILE patches apply sequentially within an item; scope: all (default), code_only, identifiers_only. " +
-	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically. WHEN TO USE update INSTEAD: op=replace is still a weak spot for multi-line replacements — for replacements that span multiple lines, contain tabs/escapes, or restructure a large struct literal, prefer 'update object=func' (or update object=struct/file) with the full new declaration. patch validates op=replace results post-splice (issues #3 and #14): replacements whose substring is missing or whose declarations were silently dropped are refused with PATCH_REPLACE_NOT_APPLIED / PATCH_DROPPED_CONTENT and the file is left unchanged. Call 'describe_tool name=patch' for the full Limitations list."
+const patchToolDescription = "Surgical AST-aware editor for one declaration kind at a time. " +
+	"SHAPE — pick exactly one per call: " +
+	"single-target (common) sets file + identifier + patches at the top level (also include_nested for function, mock_file/mock_name for interface, scope for file); " +
+	"bulk sets items: [{file, identifier, patches, ...}]. Mixing is rejected. " +
+	"target: function | struct | interface | file | decl. Each target accepts its own op set — call describe_tool name=patch for the ops, examples, and limitations. " +
+	"BATCH: function/struct items are atomic; interface/file/decl items run sequentially (failures leave earlier items written). " +
+	"For multi-line replacements or whole-declaration rewrites, prefer update — patch op=replace is fragile across line boundaries. " +
+	"preview=true returns diff without writing."
 
 // normalizePatchInput enforces the dual-shape union and returns a copy of
 // the input with items[] always populated (length >= 1). When the caller
