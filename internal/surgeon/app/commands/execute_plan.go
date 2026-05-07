@@ -306,7 +306,7 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			if _, isIface := findInterfaceOffset(fset, f, action.Identifier); isIface {
 				return nil, nil, &domain.Error{
 					Code:    "WRONG_OBJECT_TYPE",
-					Message: fmt.Sprintf("%q is an interface in %s; use update_interface (object='interface') instead of update_func (object='func')", action.Identifier, action.FilePath),
+					Message: fmt.Sprintf("%q is an interface in %s; for direct edits use the 'interface' tool with action=update, or inside execute_plan use action='update_interface'. update object='func' cannot update interfaces.", action.Identifier, action.FilePath),
 				}
 			}
 			// Fall back to add_func behavior

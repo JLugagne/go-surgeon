@@ -9,8 +9,8 @@ import (
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 )
 
-// patchFunctionBulkMaxItems is the soft cap on the number of items a single
-// patch_function_bulk call may contain. It keeps error messages manageable
+// patchFunctionBulkMaxItems is the soft cap on the number of items items[] in a
+// patch target=function call may contain. It keeps error messages manageable
 // and discourages callers from batching together unrelated work.
 const patchFunctionBulkMaxItems = 20
 
@@ -28,13 +28,13 @@ func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.P
 	if len(req.Items) > patchFunctionBulkMaxItems {
 		return domain.PatchFunctionBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",
-			Message: fmt.Sprintf("patch_function_bulk: max %d items per call, got %d", patchFunctionBulkMaxItems, len(req.Items)),
+			Message: fmt.Sprintf("patch (target=function): max %d items per call in items[], got %d", patchFunctionBulkMaxItems, len(req.Items)),
 		}
 	}
 	if len(req.Items) == 0 {
 		return domain.PatchFunctionBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",
-			Message: "patch_function_bulk: at least one item is required",
+			Message: "patch (target=function): items[] requires at least one entry",
 		}
 	}
 
@@ -51,7 +51,7 @@ func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.P
 			if perr != nil {
 				return &domain.Error{
 					Code:    domainErrorCode(perr),
-					Message: fmt.Sprintf("patch_function_bulk: item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
+					Message: fmt.Sprintf("patch (target=function): item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
 					Err:     perr,
 				}
 			}
@@ -89,7 +89,7 @@ func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.P
 		if perr != nil {
 			return domain.PatchFunctionBulkResult{}, &domain.Error{
 				Code:    domainErrorCode(perr),
-				Message: fmt.Sprintf("patch_function_bulk: item #%d (%s:%s) failed during write phase: %v", i+1, it.FilePath, it.Identifier, perr),
+				Message: fmt.Sprintf("patch (target=function): item #%d (%s:%s) failed during write phase: %v", i+1, it.FilePath, it.Identifier, perr),
 				Err:     perr,
 			}
 		}

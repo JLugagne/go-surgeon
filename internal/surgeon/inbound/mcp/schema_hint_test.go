@@ -29,10 +29,14 @@ func TestSchemaHint_PatchFunctionStringPatches(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "function",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+			"target": "function",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+				},
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -48,10 +52,14 @@ func TestSchemaHint_PatchStructStringPatches(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "struct",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches":    `[{"op":"add_field","name":"X","type":"int"}]`,
+			"target": "struct",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches":    `[{"op":"add_field","name":"X","type":"int"}]`,
+				},
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -65,10 +73,14 @@ func TestSchemaHint_PatchInterfaceStringPatches(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "interface",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches":    `[{"op":"add_method","signature":"Close() error"}]`,
+			"target": "interface",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches":    `[{"op":"add_method","signature":"Close() error"}]`,
+				},
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -82,10 +94,14 @@ func TestSchemaHint_PatchDeclStringPatches(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "decl",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+			"target": "decl",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+				},
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -109,11 +125,15 @@ func TestSchemaHint_ArrayPatchesPassThrough(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "function",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches": []map[string]any{
-				{"op": "replace", "match": "x", "replace": "y"},
+			"target": "function",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches": []map[string]any{
+						{"op": "replace", "match": "x", "replace": "y"},
+					},
+				},
 			},
 		},
 	})
@@ -229,10 +249,14 @@ func TestSchemaHint_RecoverDoubleEncodedPatches_Issue21(t *testing.T) {
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "patch",
 		Arguments: map[string]any{
-			"target":     "function",
-			"file":       "foo.go",
-			"identifier": "Foo",
-			"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+			"target": "function",
+			"items": []map[string]any{
+				{
+					"file":       "foo.go",
+					"identifier": "Foo",
+					"patches":    `[{"op":"replace","match":"x","replace":"y"}]`,
+				},
+			},
 		},
 	})
 	require.NoError(t, err)
