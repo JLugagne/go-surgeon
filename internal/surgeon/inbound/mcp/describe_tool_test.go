@@ -32,7 +32,7 @@ func TestDescribeTool_NoArgs_ListsAllCategories(t *testing.T) {
 		assert.Contains(t, text, header, "missing category header: %s", header)
 	}
 	// A sampling of tool names from different categories.
-	for _, name := range []string{"overview", "patch_function", "find_references", "build_check", "execute_plan", "describe_tool"} {
+	for _, name := range []string{"overview", "patch.function", "find_references", "build_check", "execute_plan", "describe_tool"} {
 		assert.Contains(t, text, name, "missing tool name: %s", name)
 	}
 }

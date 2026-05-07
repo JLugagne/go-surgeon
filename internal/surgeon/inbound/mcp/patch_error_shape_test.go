@@ -72,11 +72,15 @@ func TestPatchFunction_ErrorShape_Issue12(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "foo", "replace": "bar"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "foo", "replace": "bar"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "PATCH_FAILED")
@@ -95,11 +99,15 @@ func TestPatchStruct_ErrorShape_Issue12(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "struct",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "remove_field", "name": "X"},
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "remove_field", "name": "X"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "NOT_FOUND")
@@ -118,11 +126,15 @@ func TestPatchInterface_ErrorShape_Issue12(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "interface",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "remove_method", "name": "X"},
+		"target": "interface",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "remove_method", "name": "X"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "NODE_NOT_FOUND")
@@ -142,9 +154,13 @@ func TestPatchFile_ErrorShape_Issue12(t *testing.T) {
 
 	result := callTool(t, cs, "patch", map[string]any{
 		"target": "file",
-		"file":   "foo.go",
-		"patches": []map[string]any{
-			{"match": "foo", "replace": "bar"},
+		"items": []map[string]any{
+			{
+				"file": "foo.go",
+				"patches": []map[string]any{
+					{"match": "foo", "replace": "bar"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "PATCH_FAILED")
@@ -163,11 +179,15 @@ func TestPatchDecl_ErrorShape_Issue12(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "decl",
-		"file":       "foo.go",
-		"identifier": "foo",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "x", "replace": "y"},
+		"target": "decl",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "foo",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "x", "replace": "y"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "NODE_NOT_FOUND")
@@ -181,9 +201,13 @@ func TestPatch_PlainErrorPath_ErrorShape_Issue12(t *testing.T) {
 
 	result := callTool(t, cs, "patch", map[string]any{
 		"target": "bogus",
-		"file":   "foo.go",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "x", "replace": "y"},
+		"items": []map[string]any{
+			{
+				"file": "foo.go",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "x", "replace": "y"},
+				},
+			},
 		},
 	})
 	assertCanonicalErrorShape(t, result, "ERROR")
@@ -201,22 +225,32 @@ func TestPatch_SuccessShape_Unaffected_Issue12(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "foo", "replace": "bar"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "foo", "replace": "bar"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
 	require.NotNil(t, result.StructuredContent)
 	m, ok := result.StructuredContent.(map[string]any)
 	require.True(t, ok, "expected JSON object StructuredContent on success")
-	// Success payload uses patchOutput keys, NOT errorOutput keys.
+	// Success payload uses patchBulkOutput keys, NOT errorOutput keys.
 	_, hasCode := m["code"]
 	assert.False(t, hasCode, "success StructuredContent must not carry an error \"code\" field")
-	assert.Equal(t, "foo.go", m["file"])
 	assert.Equal(t, float64(1), m["applied"])
+	items, ok := m["items"].([]any)
+	require.True(t, ok, "expected items array in success payload; got %v", m["items"])
+	require.Len(t, items, 1)
+	first, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "foo.go", first["file"])
+	assert.Equal(t, float64(1), first["applied"])
 }
 
 // TestPatch_SchemaHintMiddlewarePath_ErrorShape_Issue12 covers the

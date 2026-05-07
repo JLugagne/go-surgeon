@@ -351,7 +351,7 @@ type symbolEdit struct {
 }
 
 // editOutput is the structured result for all write tools (create, update,
-// delete, insert_call, execute_plan, add/update/delete_interface).
+// delete, insert_call, execute_plan, interface action=add|update|delete).
 type editOutput struct {
 	FilesModified []string     `json:"files_modified"`
 	Symbols       []symbolEdit `json:"symbols,omitempty"`
@@ -359,18 +359,6 @@ type editOutput struct {
 	AddedImports  []string     `json:"added_imports,omitempty"`
 	Preview       bool         `json:"preview,omitempty"`
 	Diff          string       `json:"diff,omitempty"`
-}
-
-// patchFileOutput is the structured result for patch_file.
-type patchFileOutput struct {
-	File         string   `json:"file"`
-	Applied      int      `json:"applied"`
-	Hits         []int    `json:"hits,omitempty"`
-	Preview      bool     `json:"preview,omitempty"`
-	Diff         string   `json:"diff,omitempty"`
-	AddedImports []string `json:"added_imports,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
-	Hint         string   `json:"hint,omitempty"`
 }
 
 // patchOutput is the structured result for patch_function, patch_struct and patch_interface.
@@ -397,7 +385,7 @@ type autoLiftJSON struct {
 	Context    string `json:"context,omitempty"`
 }
 
-// implementOutput is the structured result for the implement tool.
+// implementOutput is the structured result for scaffold kind=impl_from_interface.
 type implementOutput struct {
 	File      string   `json:"file"`
 	Interface string   `json:"interface"`
@@ -405,7 +393,7 @@ type implementOutput struct {
 	Stubs     []string `json:"stubs_added"`
 }
 
-// mockOutput is the structured result for the mock tool.
+// mockOutput is the structured result for scaffold kind=mock_from_interface.
 type mockOutput struct {
 	File      string `json:"file"`
 	Interface string `json:"interface"`
@@ -418,14 +406,7 @@ type testOutput struct {
 	Identifier string `json:"identifier"`
 }
 
-// tagOutput is the structured result for the tag tool.
-type tagOutput struct {
-	File       string `json:"file"`
-	Identifier string `json:"identifier"`
-	Field      string `json:"field,omitempty"`
-}
-
-// extractInterfaceOutput is the structured result for the extract_interface tool.
+// extractInterfaceOutput is the structured result for scaffold kind=interface_from_type.
 type extractInterfaceOutput struct {
 	InterfaceName string `json:"interface_name"`
 	InterfaceFile string `json:"interface_file"`

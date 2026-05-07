@@ -68,7 +68,7 @@ Content is raw Go source — no package declaration, no imports, no indentation.
 
 ### 4. Interfaces and mocks stay in sync
 
-`add_interface` and `update_interface` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `extract_interface` pulls an interface out of an existing struct in one command.
+`interface action=add` and `interface action=update` regenerate a function-field mock atomically. The compile-time assertion (`var _ Repo = (*MockRepo)(nil)`) blocks drift. `scaffold kind=interface_from_type` pulls an interface out of an existing struct in one command.
 
 ### 5. Edits can be as granular as a single field or line
 
@@ -169,10 +169,10 @@ Tools over stdio, grouped by purpose:
 | `find_definition`, `find_references`, `rename_symbol` | Type-aware cross-package symbol lookup and rename — powered by `go/packages`. All three accept `module=` to resolve into a dependency. |
 | `create`, `update`, `delete` | Add, replace, or remove a file, function, or struct by AST identifier — **replaces Edit / Write**. `object="auto"` infers from the content; `delete object="file"` removes the file from disk. |
 | `patch` | Unified surgical editor — one tool, five targets (`function`, `struct`, `interface`, `file`, `decl`). Scoped in-place edits without re-emitting whole declarations. Function ops include `replace`, `insert_before`/`insert_after`, `delete`, `wrap`, and `set_signature` (rewrite params/returns without touching the body). |
-| `patch_function_bulk`, `patch_struct_bulk` | Apply many `patch` operations to many targets in a single atomic call — useful when one refactor touches dozens of functions or structs. |
+| `patch` with `items: [{...}]` | Apply many `patch` operations to many targets in a single atomic call — useful when one refactor touches dozens of functions or structs. |
 | `insert_call` | Insert a single statement into a function body (`before-return`, `end-of-body`, or `after:<marker>`); auto-lifts out of nested scopes |
-| `add_interface`, `update_interface`, `delete_interface` | Manage interfaces with auto-generated (and auto-deleted) mocks |
-| `implement`, `mock`, `extract_interface` | Generate stubs, standalone mocks, and extract interfaces from structs |
+| `interface` (`action=add\|update\|delete`) | Manage interfaces with auto-generated (and auto-deleted) mocks |
+| `scaffold` (`kind=impl_from_interface\|mock_from_interface\|interface_from_type`) | Generate stubs, standalone mocks, and extract interfaces from structs |
 | `test`, `tag` | Generate test skeletons and struct field tags |
 | `build_check`, `test_run` | Compile-verify and run tests in-loop. Both accept `affected_by=<file>` to narrow to the file's reverse-dep closure; `test_run` also accepts `symbols=["pkg.MyFunc"]` to auto-resolve owning packages and build a `-run` filter, plus `verbosity=summary` for compact output on large suites. |
 | `execute_plan` | Run up to 15 edits atomically from a YAML/JSON plan — supports every action type including every `patch` target |
@@ -317,9 +317,9 @@ patch(
 
 Other targets: `file` for cross-function batch substitutions, `decl` for const/var values. See [`USAGE.md`](USAGE.md) for the full operation catalog per target.
 
-### `patch_*_bulk` — fan one refactor across many declarations atomically
+### `patch items: [{...}]` — fan one refactor across many declarations atomically
 
-When the same shape of change has to land on dozens of structs or functions (e.g. add a `CreatedAt` field everywhere, or wrap every `return err` in a domain package), `patch_struct_bulk` and `patch_function_bulk` accept a list of `{file, identifier, patches}` items and apply all of them in one transaction. If any one item fails, nothing is written.
+When the same shape of change has to land on dozens of structs or functions (e.g. add a `CreatedAt` field everywhere, or wrap every `return err` in a domain package), `patch target=struct` and `patch target=function` accept an `items: [{file, identifier, patches}, ...]` list and apply all of them in one transaction. If any one item fails, nothing is written.
 
 ### `rename_symbol` — type-aware rename across the module
 
@@ -407,7 +407,7 @@ See [`USAGE.md`](USAGE.md) for the full CLI reference.
 - **Brace and body guards** — `patch` on `function` rejects edits with unbalanced braces or that would erase the entire function body, with hints pointing at the correct syntax
 - **Post-splice validation** — `patch` on `function`/`file` re-parses the result and refuses replacements whose substring went missing or that silently dropped declarations (`PATCH_REPLACE_NOT_APPLIED`, `PATCH_DROPPED_CONTENT`); the file is left untouched
 - **No silent fallbacks** — failed lookups produce explicit errors with hints (`Hint: use 'go-surgeon symbol X' to locate it`)
-- **Mocks stay in sync** — `delete_interface` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
+- **Mocks stay in sync** — `interface action=delete` with `delete_mock=true` also removes the mock struct, its methods, and the compile-time assertion. Without it, the broken assertion forces explicit cleanup by design
 
 **Performance note:** each MCP call adds ~200–500 ms overhead compared to a direct file edit. This cost is amortized when you're doing structural work (imports, renames, multi-step edits). For a single short tweak in a file you already know, a direct Edit is faster. See [When go-surgeon helps vs. when Edit is fine](#when-go-surgeon-helps-vs-when-edit-is-fine).
 

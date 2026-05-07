@@ -86,18 +86,10 @@ Starts an [MCP](https://modelcontextprotocol.io) server over stdio. The server a
 | [`create`](#create-update-delete-tools) | Add a file, function, or struct |
 | [`update`](#create-update-delete-tools) | Replace a file, function, or struct by AST identifier |
 | [`delete`](#create-update-delete-tools) | Remove a function or struct |
-| [`patch_function`](#patch_function-tool) | Text-match edits inside a single function body |
-| [`patch_struct`](#patch_struct-tool) | Granular field edits on a struct |
-| [`patch_interface`](#patch_interface-tool) | Granular method edits on an interface, with mock regeneration |
-| [`patch_file`](#patch_file-tool) | Whole-file text substitution with AST safety |
-| [`patch_decl`](#patch_decl-tool) | Edit the value of a top-level const or var |
+| [`patch`](#patch-tool) | Unified patch tool — `target=function/struct/interface/file/decl`, accepts a single edit or `items: [{...}]` for atomic bulk |
 | [`insert_call`](#insert_call-tool) | Insert a single statement; auto-lifts out of nested scopes |
-| [`add_interface`](#interface-tools) | Add an interface and auto-generate a mock |
-| [`update_interface`](#interface-tools) | Update an interface and regenerate its mock |
-| [`delete_interface`](#interface-tools) | Delete an interface, optionally its mock |
-| [`implement`](#implement-tool) | Generate stubs for an interface you don't own |
-| [`mock`](#mock-tool) | Generate a standalone mock for any interface |
-| [`extract_interface`](#extract_interface-tool) | Extract an interface from an existing struct |
+| [`interface`](#interface-tools) | Manage interfaces with auto-mocks (`action=add|update|delete`) |
+| [`scaffold`](#scaffold-tool) | Generate stubs, mocks, or extract interfaces (`kind=impl_from_interface|mock_from_interface|interface_from_type`) |
 | [`test`](#test-tool) | Generate a table-driven test skeleton |
 | [`tag`](#tag-tool) | Add or update struct field tags |
 | [`build_check`](#build_check-tool) | `go build` with structured diagnostics; `affected_by=file` narrows scope |
@@ -320,7 +312,7 @@ Make granular method edits on an interface, with automatic mock regeneration.
 
 Use `before`, `after`, or `position` (add_method / embed) for placement control.
 
-**This replaces the old "read + update_interface" workflow for adding a single method.** There is no `add_interface_method` tool — `patch_interface` with `add_method` is the equivalent.
+**This replaces the old "read + interface action=update" workflow for adding a single method.** There is no `add_interface_method` tool — `patch target=interface` with `add_method` is the equivalent.
 
 **Example:**
 
@@ -370,10 +362,15 @@ Idempotent: if the exact call already exists in the body, it is skipped with a w
 
 #### Interface tools
 
-**`add_interface`**, **`update_interface`**, **`delete_interface`** — manage interfaces together with their mocks.
+The single **`interface`** tool manages interfaces together with their mocks. Use the `action` discriminator to select the operation:
+
+- `action: add` — add an interface and auto-generate a mock
+- `action: update` — replace an interface and regenerate its mock
+- `action: delete` — delete an interface (optionally its mock)
 
 | Parameter | Description |
 |---|---|
+| `action` | `add` \| `update` \| `delete` (required) |
 | `file` | File containing the interface (required) |
 | `identifier` | Interface name (required for update/delete) |
 | `content` | Raw Go interface source (add/update) |
@@ -382,15 +379,21 @@ Idempotent: if the exact call already exists in the body, it is skipped with a w
 | `doc` / `strip_doc` | Doc comment handling (update only) |
 | `delete_mock` | (delete only) also remove the mock struct, its methods, and the compile-time assertion from `mock_file`; requires `mock_file` and `mock_name` |
 
-`add_interface` and `update_interface` regenerate the mock atomically when both `mock_file` and `mock_name` are set.
+`interface action=add` and `interface action=update` regenerate the mock atomically when both `mock_file` and `mock_name` are set.
 
-**`delete_interface` with `delete_mock=true`** cleans up the mock in the same call — the mock file itself is kept intact even if it becomes empty, so other mocks sharing the file are not disturbed. Without `delete_mock`, the compile-time assertion `var _ I = (*MockI)(nil)` will break `go build`, forcing explicit cleanup.
+**`interface action=delete` with `delete_mock=true`** cleans up the mock in the same call — the mock file itself is kept intact even if it becomes empty, so other mocks sharing the file are not disturbed. Without `delete_mock`, the compile-time assertion `var _ I = (*MockI)(nil)` will break `go build`, forcing explicit cleanup.
 
-**Granular edits:** to add, rename, remove, or retype a single method, prefer [`patch_interface`](#patch_interface-tool) over `update_interface` — it avoids re-sending the whole declaration and regenerates the mock the same way.
+**Granular edits:** to add, rename, remove, or retype a single method, prefer [`patch target=interface`](#patch-tool) over `interface action=update` — it avoids re-sending the whole declaration and regenerates the mock the same way.
 
-#### `implement` tool
+#### `scaffold` tool
 
-Generate missing method stubs on a struct for any interface.
+The `scaffold` tool generates code from existing Go declarations. Use the `kind` discriminator:
+
+- `kind: impl_from_interface` — generate missing method stubs on a struct that should satisfy an interface (replaces the old `implement` tool).
+- `kind: mock_from_interface` — generate a standalone mock for any interface without modifying the interface file (replaces the old `mock` tool).
+- `kind: interface_from_type` — extract an interface from an existing struct's exported methods (replaces the old `extract_interface` tool).
+
+**`scaffold kind=impl_from_interface`**
 
 | Parameter | Description |
 |---|---|
@@ -400,11 +403,9 @@ Generate missing method stubs on a struct for any interface.
 
 Resolves the interface via `go/packages`. Scans the package to avoid cross-file duplicates. Generated stubs contain `// TODO: implement` and `panic("not implemented")`.
 
-Use for interfaces you **don't own**. For interfaces you own, prefer `add_interface` (which creates the mock too).
+Use for interfaces you **don't own**. For interfaces you own, prefer `interface action=add` (which creates the mock too).
 
-#### `mock` tool
-
-Generate a standalone mock for any interface without modifying the interface file.
+**`scaffold kind=mock_from_interface`**
 
 | Parameter | Description |
 |---|---|
@@ -412,9 +413,9 @@ Generate a standalone mock for any interface without modifying the interface fil
 | `mock_name` | Name of the mock struct |
 | `file` | Target file to write the mock to |
 
-Uses the same function-field pattern as `add_interface`. Use for third-party interfaces.
+Uses the same function-field pattern as `interface action=add`. Use for third-party interfaces.
 
-#### `extract_interface` tool
+**`scaffold kind=interface_from_type`**
 
 Extract an interface from an existing struct's exported methods.
 
@@ -840,7 +841,7 @@ EOF
 go-surgeon delete-interface --file internal/catalog/domain/repositories/book/book.go --id BookRepository
 ```
 
-The CLI does **not** auto-delete the mock. The compile-time assertion `var _ BookRepository = (*MockBookRepository)(nil)` will break `go build`, forcing explicit cleanup of the mock and any dependent tests. (The MCP server exposes a `delete_mock=true` parameter that handles this automatically — see [`delete_interface`](#interface-tools) in the MCP reference.)
+The CLI does **not** auto-delete the mock. The compile-time assertion `var _ BookRepository = (*MockBookRepository)(nil)` will break `go build`, forcing explicit cleanup of the mock and any dependent tests. (The MCP server exposes a `delete_mock=true` parameter that handles this automatically — see [`interface action=delete`](#interface-tools) in the MCP reference.)
 
 **Generated mock pattern:**
 
@@ -998,6 +999,8 @@ cat plan.yaml | go-surgeon execute
 | `--keep` | `-k` | Retain plan files even on success (only with `--file`) |
 
 **YAML schema:**
+
+> Note: the action names below are `execute_plan`-internal types. The standalone MCP tools have been merged — `add_interface`/`update_interface`/`delete_interface` are now reachable as the `interface` tool (with `action=add|update|delete`). Inside `execute_plan` YAML the original action names remain valid.
 
 ```yaml
 actions:

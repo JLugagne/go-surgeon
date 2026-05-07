@@ -192,11 +192,10 @@ func TestToolsList(t *testing.T) {
 	expected := []string{
 		"overview", "symbol", "build_check", "test_run",
 		"create", "update", "delete",
-		"add_interface", "update_interface", "delete_interface",
+		"interface",
 		"insert_call",
-		"execute_plan", "implement", "mock", "test", "tag", "extract_interface",
+		"execute_plan", "scaffold", "test",
 		"patch",
-		"patch_struct_bulk", "patch_function_bulk",
 		"find_definition", "find_references", "rename_symbol",
 		"batch_query",
 		"describe_tool",
@@ -693,7 +692,8 @@ func TestAddInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "add_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":    "add",
 		"file":      "internal/domain/repo.go",
 		"content":   "type Repository interface { FindByID(id string) (*Entity, error) }",
 		"mock_file": "internal/domain/repotest/mock.go",
@@ -716,7 +716,8 @@ func TestUpdateInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "update_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "update",
 		"file":       "repo.go",
 		"identifier": "Repository",
 		"content":    "type Repository interface { FindByID(id string) (*Entity, error); Delete(id string) error }",
@@ -733,7 +734,8 @@ func TestDeleteInterface(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "delete_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "delete",
 		"file":       "repo.go",
 		"identifier": "Repository",
 	})
@@ -748,12 +750,97 @@ func TestAddInterface_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "add_interface", map[string]any{
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":  "add",
 		"file":    "repo.go",
 		"content": "type Repository interface {}",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "duplicate interface")
+}
+
+// --- Interface action discriminator validation ---
+
+func TestInterface_MissingAction(t *testing.T) {
+	// The schema marks action as required; sending it as an empty string
+	// bypasses the SDK pre-validation and exercises our handler-level guard.
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":  "",
+		"file":    "repo.go",
+		"content": "type Repository interface {}",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "action is required")
+}
+
+func TestInterface_UnknownAction(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action": "rename",
+		"file":   "repo.go",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown action")
+}
+
+func TestInterface_DeleteMockRequiresMockFileAndName(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":      "delete",
+		"file":        "repo.go",
+		"identifier":  "Repository",
+		"delete_mock": true,
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "delete_mock=true requires both mock_file and mock_name")
+}
+
+func TestInterface_DeleteMockRejectedOnAdd(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":      "add",
+		"file":        "repo.go",
+		"content":     "type Repository interface {}",
+		"delete_mock": true,
+		"mock_file":   "mock.go",
+		"mock_name":   "MockRepository",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "delete_mock is only valid with action=delete")
+}
+
+func TestInterface_StripDocRejectedOnDelete(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "delete",
+		"file":       "repo.go",
+		"identifier": "Repository",
+		"strip_doc":  true,
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "strip_doc is only valid with action=update")
+}
+
+func TestInterface_AddRequiresContent(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action": "add",
+		"file":   "repo.go",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "content is required for action=add")
+}
+
+func TestInterface_UpdateRequiresSomethingToUpdate(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "interface", map[string]any{
+		"action":     "update",
+		"file":       "repo.go",
+		"identifier": "Repository",
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "requires at least one of content, doc, or strip_doc")
 }
 
 // --- Implement tool tests ---
@@ -775,10 +862,11 @@ func TestImplement_GeneratesStubs(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "io.Reader",
-		"receiver":  "*MyReader",
-		"file":      "reader.go",
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "io.Reader",
+		"target": "*MyReader",
+		"file":   "reader.go",
 	})
 
 	text := resultText(t, result)
@@ -794,10 +882,11 @@ func TestImplement_AllImplemented(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "io.Reader",
-		"receiver":  "*MyReader",
-		"file":      "reader.go",
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "io.Reader",
+		"target": "*MyReader",
+		"file":   "reader.go",
 	})
 	assert.Contains(t, resultText(t, result), "All methods are already implemented")
 }
@@ -810,10 +899,11 @@ func TestImplement_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "implement", map[string]any{
-		"interface": "pkg.Missing",
-		"receiver":  "*MyStruct",
-		"file":      "file.go",
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"source": "pkg.Missing",
+		"target": "*MyStruct",
+		"file":   "file.go",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "interface not found")
@@ -832,10 +922,11 @@ func TestMock_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "mock", map[string]any{
-		"interface": "io.Writer",
-		"mock_name": "MockWriter",
-		"file":      "mocks/writer.go",
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "mock_from_interface",
+		"source": "io.Writer",
+		"target": "MockWriter",
+		"file":   "mocks/writer.go",
 	})
 	assert.Contains(t, resultText(t, result), "MockWriter")
 }
@@ -848,10 +939,11 @@ func TestMock_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "mock", map[string]any{
-		"interface": "pkg.Missing",
-		"mock_name": "MockMissing",
-		"file":      "mock.go",
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "mock_from_interface",
+		"source": "pkg.Missing",
+		"target": "MockMissing",
+		"file":   "mock.go",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "cannot resolve interface")
@@ -894,9 +986,9 @@ func TestTestGen_Error(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "function not found")
 }
 
-// --- Tag tool tests ---
+// --- patch target=struct op=auto_tag tests (migrated from the deleted `tag` tool) ---
 
-func TestTag_AutoJson(t *testing.T) {
+func TestPatchStruct_AutoTagJson(t *testing.T) {
 	commands := &mockCommands{
 		tagStructFn: func(_ context.Context, req domain.TagRequest) error {
 			assert.Equal(t, "book.go", req.FilePath)
@@ -907,36 +999,51 @@ func TestTag_AutoJson(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Book",
-		"auto":       "json",
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+				},
+			},
+		},
 	})
+	assert.False(t, result.IsError)
 	text := resultText(t, result)
-	assert.Contains(t, text, "SUCCESS")
-	assert.Contains(t, text, "Book")
+	assert.Contains(t, text, "OK")
 }
 
-func TestTag_SetField(t *testing.T) {
+func TestPatchStruct_SetTag_SingleField(t *testing.T) {
 	commands := &mockCommands{
-		tagStructFn: func(_ context.Context, req domain.TagRequest) error {
-			assert.Equal(t, "Title", req.FieldName)
-			assert.Equal(t, `json:"book_title"`, req.SetTag)
-			return nil
+		patchStructFn: func(_ context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error) {
+			require.Len(t, req.Patches, 1)
+			assert.Equal(t, domain.StructPatchOp("set_tag"), req.Patches[0].Op)
+			assert.Equal(t, "Title", req.Patches[0].Name)
+			assert.Equal(t, `json:"book_title"`, req.Patches[0].Tag)
+			return domain.PatchStructResult{Applied: 1}, nil
 		},
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Book",
-		"field":      "Title",
-		"set":        `json:"book_title"`,
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "set_tag", "name": "Title", "tag": `json:"book_title"`},
+				},
+			},
+		},
 	})
 	assert.False(t, result.IsError)
 }
 
-func TestTag_Error(t *testing.T) {
+func TestPatchStruct_AutoTag_Error(t *testing.T) {
 	commands := &mockCommands{
 		tagStructFn: func(_ context.Context, _ domain.TagRequest) error {
 			return errors.New("struct not found")
@@ -944,13 +1051,59 @@ func TestTag_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "tag", map[string]any{
-		"file":       "book.go",
-		"identifier": "Missing",
-		"auto":       "json",
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Missing",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+				},
+			},
+		},
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "struct not found")
+}
+
+func TestPatchStruct_AutoTag_RequiresFormat(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag"},
+				},
+			},
+		},
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "format")
+}
+
+func TestPatchStruct_AutoTag_RejectsMixedOps(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+
+	result := callTool(t, cs, "patch", map[string]any{
+		"target": "struct",
+		"items": []map[string]any{
+			{
+				"file":       "book.go",
+				"identifier": "Book",
+				"patches": []map[string]any{
+					{"op": "auto_tag", "format": "json"},
+					{"op": "remove_field", "name": "Foo"},
+				},
+			},
+		},
+	})
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "auto_tag")
 }
 
 // --- Extract interface tool tests ---
@@ -967,10 +1120,11 @@ func TestExtractInterface_Success(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "extract_interface", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
-		"name":       "ServiceInterface",
+		"target":     "ServiceInterface",
 		"out":        "iface.go",
 	})
 	text := resultText(t, result)
@@ -987,10 +1141,11 @@ func TestExtractInterface_Error(t *testing.T) {
 	}
 	cs := setupTest(t, commands, &mockQueries{})
 
-	result := callTool(t, cs, "extract_interface", map[string]any{
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":       "interface_from_type",
 		"file":       "service.go",
 		"identifier": "Service",
-		"name":       "ServiceInterface",
+		"target":     "ServiceInterface",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "no exported methods")
@@ -1169,11 +1324,15 @@ func TestPatchDecl_ToolRoutesToHandler(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "decl",
-		"file":       "foo.go",
-		"identifier": "serverInstructions",
-		"patches": []map[string]any{
-			{"op": "replace", "match": "hello", "replace": "hi"},
+		"target": "decl",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "serverInstructions",
+				"patches": []map[string]any{
+					{"op": "replace", "match": "hello", "replace": "hi"},
+				},
+			},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -1395,11 +1554,15 @@ func TestPatchFunction_AutoLiftBannerLeadsText(t *testing.T) {
 	cs := setupTest(t, commands, &mockQueries{})
 
 	result := callTool(t, cs, "patch", map[string]any{
-		"target":     "function",
-		"file":       "foo.go",
-		"identifier": "Foo",
-		"patches": []map[string]any{
-			{"op": "insert_before", "match": "anchor", "code": "log.Println(\"hi\")"},
+		"target": "function",
+		"items": []map[string]any{
+			{
+				"file":       "foo.go",
+				"identifier": "Foo",
+				"patches": []map[string]any{
+					{"op": "insert_before", "match": "anchor", "code": "log.Println(\"hi\")"},
+				},
+			},
 		},
 	})
 
@@ -1587,4 +1750,148 @@ func TestUpdate_Auto_FileContent(t *testing.T) {
 	assert.False(t, result.IsError)
 	require.Len(t, receivedPlan.Actions, 1)
 	assert.Equal(t, domain.ActionTypeReplaceFile, receivedPlan.Actions[0].Action)
+}
+
+// --- scaffold tool validation tests ---
+
+func TestDerive_MissingKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{"file": "f.go"})
+	require.True(t, result.IsError)
+	// Schema-level rejection mentions the missing 'kind' field; an empty
+	// kind passed explicitly would also be rejected by the runtime check
+	// with "kind is required".
+	assert.Contains(t, resultText(t, result), "kind")
+}
+
+func TestDerive_EmptyKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{"kind": "", "file": "f.go"})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "kind is required")
+}
+
+func TestDerive_UnknownKind(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{"kind": "bogus", "file": "f.go"})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown kind")
+}
+
+func TestDerive_InterfaceFromType_MissingIdentifier(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "interface_from_type",
+		"file":   "service.go",
+		"target": "ServiceAPI",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "identifier")
+}
+
+func TestDerive_InterfaceFromType_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_ImplFromInterface_MissingSource(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"target": "*Foo",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "source")
+}
+
+func TestDerive_ImplFromInterface_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"source": "io.Reader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_MockFromInterface_MissingSource(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "mock_from_interface",
+		"file":   "mock.go",
+		"target": "MockReader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "source")
+}
+
+func TestDerive_MockFromInterface_MissingTarget(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "mock_from_interface",
+		"file":   "mock.go",
+		"source": "io.Reader",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "target")
+}
+
+func TestDerive_ImplFromInterface_RejectsOut(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":   "impl_from_interface",
+		"file":   "f.go",
+		"source": "io.Reader",
+		"target": "*Foo",
+		"out":    "iface.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "out is not allowed")
+}
+
+func TestDerive_MockFromInterface_RejectsMockFile(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":      "mock_from_interface",
+		"file":      "mock.go",
+		"source":    "io.Reader",
+		"target":    "MockReader",
+		"mock_file": "other.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file")
+}
+
+func TestDerive_InterfaceFromType_MockFileWithoutMockName(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+		"target":     "ServiceAPI",
+		"mock_file":  "mock.go",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file and mock_name")
+}
+
+func TestDerive_InterfaceFromType_MockNameWithoutMockFile(t *testing.T) {
+	cs := setupTest(t, &mockCommands{}, &mockQueries{})
+	result := callTool(t, cs, "scaffold", map[string]any{
+		"kind":       "interface_from_type",
+		"file":       "service.go",
+		"identifier": "Service",
+		"target":     "ServiceAPI",
+		"mock_name":  "MockService",
+	})
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mock_file and mock_name")
 }

@@ -48,31 +48,34 @@ var toolCatalog = []toolEntry{
 	{Name: "rename_symbol", Category: "refs", Summary: "type-aware: rename a symbol and every reference; blocks export-status flips and in-scope collisions; preview=true for dry run", Example: `{"name": "OldName", "new_name": "NewName", "preview": true}`, Related: "find_references"},
 
 	// EDIT — narrowest first
-	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Set target= to select.", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, patch_function_bulk, patch_struct_bulk", Limitations: []string{
+	{Name: "patch", Category: "edit", Summary: "edit Go source by target: function (body lines), struct (fields), interface (methods+mock), file (whole-file substitution), decl (const/var values). Dual shape: single-target (top-level file+identifier+patches) for one declaration, or items: [{file, identifier, patches, ...}] for batch (function/struct atomic; interface/file/decl sequential).", Example: `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`, Related: "update, execute_plan", Limitations: []string{
 		"multi-line replacement: op=replace can mis-splice multi-line replacements (issues #3, #14) — patch validates results post-splice and refuses with PATCH_REPLACE_NOT_APPLIED or PATCH_DROPPED_CONTENT when content is dropped, leaving the file unchanged. Workaround: use 'update object=func' (or update object=file/struct) with the full new declaration",
 		"replacement containing tabs/escapes: literal tab characters and escape sequences inside a multi-line replace value can confuse the splice — workaround: use 'update object=func' which takes raw Go source verbatim",
 		"large struct-literal field insertion: inserting many fields into a big struct literal via op=replace is fragile — workaround: use 'update object=func' to rewrite the whole declaration that contains the literal",
 	}, Ops: patchOps},
 	{Name: "patch.function", Category: "edit", Summary: "ops for target=function: replace, insert_before, insert_after, delete, wrap, set_signature", Ops: patchFunctionOps},
-	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc", Ops: patchStructOps},
+	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc, auto_tag", Ops: patchStructOps},
 	{Name: "patch.interface", Category: "edit", Summary: "ops for target=interface: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed", Ops: patchInterfaceOps},
 	{Name: "patch.decl", Category: "edit", Summary: "ops for target=decl: replace, insert_before, insert_after, delete, wrap", Ops: patchDeclOps},
 	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch"},
 	{Name: "create", Category: "edit", Summary: "add a new file, function, or struct (object=file|func|struct)", Example: `{"object": "func", "file": "foo.go", "content": "func Foo() {}"}`, Related: "update, execute_plan"},
 	{Name: "update", Category: "edit", Summary: "whole-declaration replacement (replace_file / update_func / update_struct); prefer patch when editing in place", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo", "content": "func Foo() {}"}`, Related: "patch, create"},
-	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "delete_interface"},
+	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "interface"},
 
-	// INTERFACE (composite ops: interface + mock in lockstep)
-	{Name: "add_interface", Category: "interface", Summary: "create an interface AND its mock atomically", Example: `{"file": "foo.go", "identifier": "Reader", "content": "Read(p []byte) (int, error)", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch, mock"},
-	{Name: "update_interface", Category: "interface", Summary: "replace an interface's full declaration AND keep its mock in sync", Example: `{"file": "foo.go", "identifier": "Reader", "content": "...", "mock_file": "mock_reader.go"}`, Related: "patch"},
-	{Name: "delete_interface", Category: "interface", Summary: "remove an interface and (optionally) its mock", Example: `{"file": "foo.go", "identifier": "Reader", "delete_mock": true}`, Related: "delete"},
+	// INTERFACE (composite ops: interface + mock in lockstep, action-discriminated)
+	{Name: "interface", Category: "interface", Summary: "manage interfaces and their mocks atomically (action=add|update|delete). add creates interface + mock; update replaces the declaration and keeps the mock in sync; delete removes the interface and optionally the mock.", Example: `{"action": "add", "file": "foo.go", "identifier": "Reader", "content": "type Reader interface { Read(p []byte) (int, error) }", "mock_file": "mock_reader.go", "mock_name": "MockReader"}`, Related: "patch, scaffold", Limitations: []string{
+		"action=add: requires file + content (mock_file + mock_name optional → also generates the mock). Example: {\"action\": \"add\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"content\": \"type Reader interface { Read(p []byte) (int, error) }\", \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+		"action=update: requires file + identifier; pass content to rewrite the body, doc to set the doc comment, or strip_doc=true to remove it. mock_file + mock_name regenerate the mock. Example: {\"action\": \"update\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"content\": \"type Reader interface { Read(p []byte) (int, error); Close() error }\", \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+		"action=delete: requires file + identifier; pass delete_mock=true with mock_file + mock_name to also remove the mock. Example: {\"action\": \"delete\", \"file\": \"foo.go\", \"identifier\": \"Reader\", \"delete_mock\": true, \"mock_file\": \"mock_reader.go\", \"mock_name\": \"MockReader\"}",
+	}},
 
 	// CODEGEN
-	{Name: "implement", Category: "codegen", Summary: "generate method stubs on a struct for an interface it doesn't yet satisfy", Example: `{"file": "foo.go", "receiver": "*Foo", "interface": "io.Reader"}`, Related: "add_interface"},
-	{Name: "mock", Category: "codegen", Summary: "generate a standalone mock for an interface you don't own (stdlib/third-party)", Example: `{"file": "mock.go", "identifier": "io.Reader"}`, Related: "add_interface"},
-	{Name: "extract_interface", Category: "codegen", Summary: "derive an interface from an existing struct's exported methods", Example: `{"file": "foo.go", "struct": "FooService", "interface": "FooAPI"}`, Related: "add_interface"},
+	{Name: "scaffold", Category: "codegen", Summary: "generate code derived from an existing symbol; kind selects the operation: interface_from_type | impl_from_interface | mock_from_interface", Example: `{"kind": "impl_from_interface", "file": "foo.go", "source": "io.Reader", "target": "*Foo"}`, Related: "interface", Limitations: []string{
+		"kind=interface_from_type: scaffold an interface from a struct's exported methods. Required: file, identifier (struct), target (new interface name). Optional: out, mock_file + mock_name (also generate a mock). Example: {\"kind\": \"interface_from_type\", \"file\": \"service.go\", \"identifier\": \"Service\", \"target\": \"ServiceAPI\", \"out\": \"iface.go\"}",
+		"kind=impl_from_interface: generate method stubs on a receiver to satisfy an interface. Required: file, source (FQN interface), target (receiver, e.g. *MyStruct). Example: {\"kind\": \"impl_from_interface\", \"file\": \"reader.go\", \"source\": \"io.Reader\", \"target\": \"*MyReader\"}",
+		"kind=mock_from_interface: generate a function-field mock for an interface you don't own. Required: file, source (FQN interface), target (mock struct name). Example: {\"kind\": \"mock_from_interface\", \"file\": \"mocks/writer.go\", \"source\": \"io.Writer\", \"target\": \"MockWriter\"}",
+	}},
 	{Name: "test", Category: "codegen", Summary: "generate a table-driven test skeleton for a function or method", Example: `{"file": "foo.go", "identifier": "Foo"}`, Related: "test_run"},
-	{Name: "tag", Category: "codegen", Summary: "bulk-generate or set struct field tags (json, bson, …)", Example: `{"file": "foo.go", "identifier": "User", "tag": "json"}`, Related: "patch"},
 
 	// VALIDATE
 	{Name: "build_check", Category: "validate", Summary: "run go build and return structured compile diagnostics; affected_by=file narrows to that file's reverse-dep closure", Example: `{"affected_by": "internal/foo/bar.go"}`, Related: "test_run"},
@@ -81,9 +84,6 @@ var toolCatalog = []toolEntry{
 	// BATCH
 	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch", "file": "a.go", "identifier": "Foo", "target": "function", "patch_function_ops": [...]}]}`, Related: "patch, create"},
 	{Name: "batch_query", Category: "batch", Summary: "run up to 10 read-only queries (symbol/overview/find_references/find_definition) in one round-trip; fail-soft per item", Example: `{"queries": [{"op": "overview", "focus": "internal"}, {"op": "symbol", "query": "NewServer"}]}`, Related: "symbol, overview"},
-	{Name: "patch_struct_bulk", Category: "batch", Summary: "apply the same kind of struct patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "A", "patches": [{"op": "add_field", "name": "Preview", "type": "bool"}]}]}`, Related: "patch, execute_plan"},
-	{Name: "patch_function_bulk", Category: "batch", Summary: "apply the same kind of function-body patches to many (file, identifier, patches) items in one call; atomic rollback; soft cap 20 items", Example: `{"items": [{"file": "a.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch, execute_plan"},
-
 	// META
 	{Name: "describe_tool", Category: "meta", Summary: "query this catalog: no args → grouped list; name=X → detail; category=X → filtered list", Example: `{"name": "patch"}`},
 }
@@ -97,27 +97,27 @@ var toolCatalog = []toolEntry{
 // documents the target discriminator values rather than individual ops.
 var patchOps = map[string]toolOpEntry{
 	"function": {
-		Description: "Edit lines inside one function body (literal/regex match, at_line, set_signature, insert_*). See patch.function.replace, .insert_before, etc. for per-op detail.",
+		Description: "Edit lines inside a function body (literal/regex match, at_line, set_signature, insert_*). Single-target shape shown; wrap multiple in items: [{...}] for an atomic batch.",
 		Required:    []string{"target=function", "file", "identifier", "patches"},
 		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
 	},
 	"struct": {
-		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc).",
+		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc/auto_tag). Single-target shape shown; wrap multiple in items: [{...}] for an atomic batch. auto_tag (bulk-generate snake_case tags for every exported field) cannot be combined with other ops in the same call.",
 		Required:    []string{"target=struct", "file", "identifier", "patches"},
-		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "add_field", "name": "ID", "type": "string"}]}`,
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}`,
 	},
 	"interface": {
-		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed).",
+		Description: "Edit an interface's method set and regenerate its mock; atomic ops (add/remove/rename/retype/set_doc/embed). Single-target shape shown; wrap multiple in items: [{...}] for sequential batch.",
 		Required:    []string{"target=interface", "file", "identifier", "patches"},
 		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "add_method", "signature": "Close() error"}]}`,
 	},
 	"file": {
-		Description: "Whole-file text substitution with AST safety; use for cross-function batch edits.",
+		Description: "Whole-file text substitution with AST safety; use for cross-function batch edits. Single-target shape shown; wrap multiple in items: [{...}] for sequential batch.",
 		Required:    []string{"target=file", "file", "patches"},
 		Example:     `{"target": "file", "file": "foo.go", "patches": [{"match": "oldName", "replace": "newName"}]}`,
 	},
 	"decl": {
-		Description: "Edit the value of a top-level const or var (multi-line strings, error vars, …).",
+		Description: "Edit the value of a top-level const or var (multi-line strings, error vars, …). Single-target shape shown; wrap multiple in items: [{...}] for sequential batch.",
 		Required:    []string{"target=decl", "file", "identifier", "patches"},
 		Example:     `{"target": "decl", "file": "foo.go", "identifier": "banner", "patches": [{"op": "replace", "match": "v1", "replace": "v2"}]}`,
 	},
@@ -186,6 +186,11 @@ var patchStructOps = map[string]toolOpEntry{
 		Description: "Set or clear the doc comment on a field (empty string clears).",
 		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].name", "patches[].doc"},
 		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "set_doc", "name": "Email", "doc": "Email is the primary contact address."}]}`,
+	},
+	"auto_tag": {
+		Description: "Bulk-generate snake_case struct tags for every exported field of the struct using the given format (e.g. 'json' or 'bson'). For a single field, use set_tag instead. Cannot be combined with other ops in the same patch call (split into two calls).",
+		Required:    []string{"file", "identifier", "patches[].op=auto_tag", "patches[].format"},
+		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}`,
 	},
 }
 
@@ -472,7 +477,7 @@ func canonicalOpOrder(ops map[string]toolOpEntry) []string {
 	orders := [][]string{
 		{"function", "struct", "interface", "file", "decl"},
 		{"replace", "insert_before", "insert_after", "delete", "wrap", "set_signature"},
-		{"add_field", "remove_field", "rename_field", "retype_field", "set_tag", "set_doc"},
+		{"add_field", "remove_field", "rename_field", "retype_field", "set_tag", "set_doc", "auto_tag"},
 		{"add_method", "remove_method", "rename_method", "retype_method", "set_doc", "embed", "remove_embed"},
 		{"replace", "insert_before", "insert_after", "delete", "wrap"},
 	}
