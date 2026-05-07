@@ -57,6 +57,9 @@ CODE GENERATION
 VALIDATE (after editing, before declaring the task done)
 - test_run: run 'go test' scoped to a package/directory and get a compact pass/fail report with per-test timing and failure file:line references. Prefer this over shelling out to go test yourself. Pair with build_check for compile-time validation.
 
+PATCH SHAPE
+- patch accepts both shapes: single-target (top-level file + identifier + patches) for one declaration — the common case; or items: [{file, identifier, patches, ...}] for batch edits across N targets. Pick exactly one per call; mixing the two is rejected.
+
 ERROR HINTS
 - The patch_* tools ('patches' field) are guarded by a pre-validation hint. If a client accidentally sends 'patches' as a JSON-encoded string instead of an array, you'll get an explicit ERROR message naming the cause ('JSON-encoded string instead of an array', and 'serialized twice' when the inner string itself parses as an array) before the SDK's opaque schema error fires. When you see that message: resend 'patches' as a raw JSON array (not a stringified one), or fall back to update / interface action=update / update_struct with the full replacement declaration.
 UNIVERSAL RULES

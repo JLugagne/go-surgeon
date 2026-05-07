@@ -25,16 +25,13 @@ func newShortReplaceCommands() *mockCommands {
 func TestPatch_Function_ReplaceShorter_AddsHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
+	// Single-target shape — exercises the top-level fields.
 	result := callTool(t, cs, "patch", map[string]any{
-		"target": "function",
-		"items": []map[string]any{
-			{
-				"file":       "foo.go",
-				"identifier": "Foo",
-				"patches": []map[string]any{
-					{"op": "replace", "match": "verylongmatchcontent", "replace": "x"},
-				},
-			},
+		"target":     "function",
+		"file":       "foo.go",
+		"identifier": "Foo",
+		"patches": []map[string]any{
+			{"op": "replace", "match": "verylongmatchcontent", "replace": "x"},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -97,16 +94,13 @@ func TestPatch_Function_ReplaceSameOrLonger_NoHint(t *testing.T) {
 func TestPatch_Decl_ReplaceShorter_AddsHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
+	// Single-target shape: top-level file + identifier + patches.
 	result := callTool(t, cs, "patch", map[string]any{
-		"target": "decl",
-		"items": []map[string]any{
-			{
-				"file":       "foo.go",
-				"identifier": "banner",
-				"patches": []map[string]any{
-					{"op": "replace", "match": "longoriginalvalue", "replace": "tiny"},
-				},
-			},
+		"target":     "decl",
+		"file":       "foo.go",
+		"identifier": "banner",
+		"patches": []map[string]any{
+			{"op": "replace", "match": "longoriginalvalue", "replace": "tiny"},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))
@@ -119,15 +113,12 @@ func TestPatch_Decl_ReplaceShorter_AddsHint(t *testing.T) {
 func TestPatch_File_ReplaceShorter_AddsHint(t *testing.T) {
 	cs := setupTest(t, newShortReplaceCommands(), &mockQueries{})
 
+	// Single-target shape on target=file: top-level file + patches (no identifier).
 	result := callTool(t, cs, "patch", map[string]any{
 		"target": "file",
-		"items": []map[string]any{
-			{
-				"file": "foo.go",
-				"patches": []map[string]any{
-					{"match": "longoldname", "replace": "x"},
-				},
-			},
+		"file":   "foo.go",
+		"patches": []map[string]any{
+			{"match": "longoldname", "replace": "x"},
 		},
 	})
 	require.False(t, result.IsError, resultText(t, result))

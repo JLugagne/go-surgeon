@@ -11,21 +11,41 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// patchInput is the unified input for the merged patch tool. The patch tool
-// always takes a list of items: length 1 for single-target edits, length N
-// for batch edits.
+// patchInput is the unified input for the patch tool. It accepts a
+// dual-shape union:
 //
-//   - target=function and target=struct: items are dispatched as one atomic
-//     bulk call to the domain layer (commands.PatchFunctionBulk /
-//     commands.PatchStructBulk). Any item failure rolls back the whole batch.
+//   - Single-target shape (the common case): set top-level file +
+//     identifier + patches (and any per-target fields like
+//     include_nested / mock_file / mock_name / scope). items[] is empty.
+//   - Bulk shape: set items: [{file, identifier, patches, ...}] for N
+//     targets. The top-level file/identifier/patches/per-target fields
+//     must be empty.
+//
+// EXACTLY ONE shape per call. Mixing both top-level fields and items[]
+// is rejected up front.
+//
+// Dispatch semantics (after normalisation into items[]):
+//   - target=function and target=struct: items are dispatched as one
+//     atomic bulk call (PatchFunctionBulk / PatchStructBulk). Any item
+//     failure rolls the whole batch back.
 //   - target=interface, target=file and target=decl: items are applied
-//     sequentially using the per-item domain command. There is NO atomicity
-//     across items for these targets — if item K fails, items 0..K-1 remain
-//     written and the call returns the error from item K.
+//     sequentially; if item K fails, items 0..K-1 remain written.
 type patchInput struct {
-	Target  string           `json:"target" jsonschema:"which declaration to patch: function, struct, interface, file, or decl"`
-	Items   []patchItemInput `json:"items" jsonschema:"list of (file, identifier, patches) targets to patch in this call; length 1 for single-target, length N for batch. function/struct items are atomic across the batch; interface/file/decl items are applied sequentially (an early failure leaves earlier items written)."`
-	Preview bool             `json:"preview,omitempty" jsonschema:"if true, return diff without writing any file"`
+	Target string `json:"target" jsonschema:"which declaration to patch: function, struct, interface, file, or decl"`
+
+	// Single-target shape (mutually exclusive with items[]).
+	File          string           `json:"file,omitempty" jsonschema:"single-target shape: target Go file path"`
+	Identifier    string           `json:"identifier,omitempty" jsonschema:"single-target shape: declaration name (FuncName, Receiver.Method, StructName, InterfaceName, or const/var name); not used for target=file"`
+	Patches       []map[string]any `json:"patches,omitempty" jsonschema:"single-target shape: ordered list of patch operations; shape depends on target"`
+	IncludeNested bool             `json:"include_nested,omitempty" jsonschema:"single-target shape, function only: also match inside nested closures"`
+	MockFile      string           `json:"mock_file,omitempty" jsonschema:"single-target shape, interface only: regenerate this mock file when the method set changes"`
+	MockName      string           `json:"mock_name,omitempty" jsonschema:"single-target shape, interface only: name of the mock struct to regenerate"`
+	Scope         string           `json:"scope,omitempty" jsonschema:"single-target shape, file only: all (default), code_only, or identifiers_only"`
+
+	// Bulk shape (mutually exclusive with single-target fields).
+	Items []patchItemInput `json:"items,omitempty" jsonschema:"bulk shape: list of (file, identifier, patches) targets to patch atomically (function/struct) or sequentially (interface/file/decl). Use the single-target top-level fields for one target."`
+
+	Preview bool `json:"preview,omitempty" jsonschema:"if true, return diff without writing any file"`
 }
 
 // patchItemInput is one (file, identifier, patches) target inside the items
@@ -58,16 +78,17 @@ type patchBulkOutput struct {
 }
 
 const patchToolDescription = "Surgical AST-aware editor — one tool for all declaration kinds. " +
-	"ALWAYS takes items: [{file, identifier, patches, ...}]; length 1 for a single edit, length N for a batch. " +
-	"Set target to select what kind of declaration each item edits: " +
+	"SHAPE: pick one form per call. " +
+	"Single-target (common, ~80% of calls): set file + identifier + patches at the top level (plus include_nested for function, mock_file/mock_name for interface, scope for file). " +
+	"Bulk: set items: [{file, identifier, patches, ...}] for N targets. EXACTLY ONE shape per call — mixing top-level fields with items[] is rejected. " +
+	"Set target to select what kind of declaration is edited: " +
 	"'function' edits lines inside a func/method body; " +
 	"'struct' edits a struct's field list; " +
 	"'interface' edits an interface's method list (and regenerates the mock when mock_file+mock_name are set); " +
 	"'file' does whole-file text substitution for cross-function batch edits; " +
 	"'decl' edits a top-level const/var value. " +
-	"BATCH SEMANTICS: function and struct items are atomic across the batch (any failure rolls everything back). " +
-	"interface, file and decl items are applied sequentially — if item K fails, items before it remain written. " +
-	"All targets: each item's file + patches required; preview=true returns diff without writing. " +
+	"BATCH SEMANTICS (items[]): function and struct items are atomic across the batch (any failure rolls everything back); interface, file and decl items are applied sequentially — if item K fails, items before it remain written. " +
+	"file + patches always required; preview=true returns diff without writing. " +
 	"FUNCTION ops: replace, insert_before, insert_after, delete, wrap, set_signature. " +
 	"SIGNATURE: set_signature takes params (array of declarations without parens, e.g. [\"ctx context.Context\", \"x int\"]) and/or returns; at least one is required. " +
 	"LINE TARGETING (preferred for function/decl): at_line or from_line/to_line with file-absolute line numbers — faster and unambiguous than text match. " +
@@ -78,14 +99,56 @@ const patchToolDescription = "Surgical AST-aware editor — one tool for all dec
 	"FILE patches apply sequentially within an item; scope: all (default), code_only, identifiers_only. " +
 	"DECL targets the value expression of a named const/var; string literal delimiters are preserved automatically. WHEN TO USE update INSTEAD: op=replace is still a weak spot for multi-line replacements — for replacements that span multiple lines, contain tabs/escapes, or restructure a large struct literal, prefer 'update object=func' (or update object=struct/file) with the full new declaration. patch validates op=replace results post-splice (issues #3 and #14): replacements whose substring is missing or whose declarations were silently dropped are refused with PATCH_REPLACE_NOT_APPLIED / PATCH_DROPPED_CONTENT and the file is left unchanged. Call 'describe_tool name=patch' for the full Limitations list."
 
+// normalizePatchInput enforces the dual-shape union and returns a copy of
+// the input with items[] always populated (length >= 1). When the caller
+// uses the single-target shape, a one-element items slice is synthesized
+// from the top-level fields. When both shapes are mixed, or neither is
+// present, an error CallToolResult is returned and the input copy is the
+// zero value.
+func normalizePatchInput(in patchInput) (patchInput, *mcp.CallToolResult) {
+	hasTopLevel := in.File != "" || in.Identifier != "" || len(in.Patches) > 0 ||
+		in.IncludeNested || in.MockFile != "" || in.MockName != "" || in.Scope != ""
+	hasItems := len(in.Items) > 0
+
+	if hasTopLevel && hasItems {
+		return patchInput{}, errorResult("cannot mix top-level (file/identifier/patches/...) with items[]; use one shape or the other")
+	}
+	if !hasTopLevel && !hasItems {
+		return patchInput{}, errorResult("either set items[] for bulk, or file+patches (and identifier for non-file targets) for single-target")
+	}
+
+	if hasItems {
+		// Bulk shape — already in canonical form.
+		return in, nil
+	}
+
+	// Single-target shape: synthesize a one-element items slice.
+	out := patchInput{
+		Target:  in.Target,
+		Preview: in.Preview,
+		Items: []patchItemInput{{
+			File:          in.File,
+			Identifier:    in.Identifier,
+			Patches:       in.Patches,
+			IncludeNested: in.IncludeNested,
+			MockFile:      in.MockFile,
+			MockName:      in.MockName,
+			Scope:         in.Scope,
+		}},
+	}
+	return out, nil
+}
+
 func registerPatchTool(s *mcp.Server, commands service.SurgeonCommands) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "patch",
 		Description: patchToolDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, any, error) {
-		if len(in.Items) == 0 {
-			return errorResult("items is required: provide at least one {file, identifier, patches} target"), nil, nil
+		normalized, errResult := normalizePatchInput(in)
+		if errResult != nil {
+			return errResult, nil, nil
 		}
+		in = normalized
 		for _, it := range in.Items {
 			if err := validateGoFile(it.File); err != nil {
 				return err, nil, nil
