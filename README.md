@@ -177,7 +177,7 @@ Tools over stdio, grouped by purpose:
 | `build_check`, `test_run` | Compile-verify and run tests in-loop. Both accept `affected_by=<file>` to narrow to the file's reverse-dep closure; `test_run` also accepts `symbols=["pkg.MyFunc"]` to auto-resolve owning packages and build a `-run` filter, plus `verbosity=summary` for compact output on large suites. |
 | `execute_plan` | Run up to 15 edits atomically from a YAML/JSON plan — supports every action type including every `patch` target |
 | `batch_query` | Run up to 10 read-only queries (`symbol` / `overview` / `find_definition` / `find_references`) in one round-trip |
-| `describe_tool` | Queryable catalog of every tool — no args for the grouped list, `name=X` for detail |
+| (none — discovery is CLI-only) | Run `go-surgeon discovery` for the grouped catalog, `go-surgeon discovery <tool>` for detail. Run `go-surgeon skill --out .claude/skills/go-surgeon/` to install go-surgeon as a Claude skill. |
 
 Every write tool supports `preview=true` to return a unified diff without writing. Errors carry a structured `{code, message}` in StructuredContent so agents can retry on `CONFLICT`, `NOT_FOUND`, `PATCH_FAILED`, `PATCH_REPLACE_NOT_APPLIED`, `PATCH_DROPPED_CONTENT`, `PATCH_PRODUCES_INVALID_GO`, etc. without string-matching.
 

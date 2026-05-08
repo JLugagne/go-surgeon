@@ -97,6 +97,8 @@ func Setup(version string) Runner {
 			clicommands.NewExtractInterfaceCommand(executePlanHandler),
 			clicommands.NewExecutePlanCommand(executePlanHandler),
 			clicommands.NewUpgradeCommand(version),
+			clicommands.NewDiscoveryCommand(),
+			clicommands.NewSkillCommand(),
 		)
 
 		// MCP stdio server
