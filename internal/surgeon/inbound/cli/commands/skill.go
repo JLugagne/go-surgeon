@@ -34,7 +34,9 @@ Examples:
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return fmt.Errorf("write %s: %w", path, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path); err != nil {
+				return fmt.Errorf("write stdout: %w", err)
+			}
 			return nil
 		},
 	}
