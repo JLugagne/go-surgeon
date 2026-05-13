@@ -3,10 +3,8 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,53 +147,10 @@ func TestPatch_NonReplaceOp_NoHint(t *testing.T) {
 	assert.NotContains(t, resultText(t, result), "HINT:")
 }
 
-// TestDescribeTool_Patch_ListsLimitations asserts that 'describe_tool name=patch'
-// surfaces a Limitations section in text mode covering the three known
-// edge cases (multi-line replacement, tabs/escapes, struct-literal field
-// insertion) along with the recommended workaround.
-func TestDescribeTool_Patch_ListsLimitations(t *testing.T) {
-	cs := setupTest(t, &mockCommands{}, &mockQueries{})
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "describe_tool",
-		Arguments: map[string]any{"name": "patch"},
-	})
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-
-	text := resultText(t, result)
-	assert.Contains(t, text, "limitations:")
-	assert.Contains(t, text, "multi-line replacement")
-	assert.Contains(t, text, "tabs/escapes")
-	assert.Contains(t, text, "struct-literal")
-	assert.Contains(t, text, "update object=func")
-
-	// JSON form must also expose the limitations array so non-text clients
-	// can branch on it programmatically.
-	jsonResult, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "describe_tool",
-		Arguments: map[string]any{"name": "patch", "format": "json"},
-	})
-	require.NoError(t, err)
-	require.False(t, jsonResult.IsError)
-	require.NotNil(t, jsonResult.StructuredContent)
-	buf, err := json.Marshal(jsonResult.StructuredContent)
-	require.NoError(t, err)
-	var payload struct {
-		Tool struct {
-			Limitations []string `json:"limitations"`
-		} `json:"tool"`
-	}
-	require.NoError(t, json.Unmarshal(buf, &payload))
-	require.GreaterOrEqual(t, len(payload.Tool.Limitations), 3)
-	joined := strings.Join(payload.Tool.Limitations, "\n")
-	assert.Contains(t, joined, "multi-line replacement")
-	assert.Contains(t, joined, "update object=func")
-}
-
 // TestPatchToolDescription_MentionsUpdateFallback asserts the tool's
 // description string itself surfaces the "use update for multi-line edits"
 // guidance — agents that read the tool catalog from listTools() should see
-// it without having to call describe_tool.
+// it without having to shell out to `go-surgeon discovery patch`.
 func TestPatchToolDescription_MentionsUpdateFallback(t *testing.T) {
 	cs := setupTest(t, &mockCommands{}, &mockQueries{})
 	listed, err := cs.ListTools(context.Background(), nil)

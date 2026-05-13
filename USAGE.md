@@ -96,7 +96,7 @@ Starts an [MCP](https://modelcontextprotocol.io) server over stdio. The server a
 | [`test_run`](#test_run-tool) | `go test` with compact pass/fail report; `affected_by=file` narrows scope |
 | [`execute_plan`](#execute_plan-tool) | Run up to 15 edits atomically — includes every `patch_*` action |
 | [`batch_query`](#batch_query-tool) | Up to 10 read-only queries in one round-trip |
-| [`describe_tool`](#describe_tool-tool) | Queryable catalog of every tool |
+| (none — CLI-only) | `go-surgeon discovery [tool]` for the catalog, `go-surgeon skill --out <dir>` to install as a Claude skill |
 
 #### `overview` tool
 
@@ -497,16 +497,23 @@ Run up to 10 read-only queries in a single round-trip. Useful when exploration w
 
 Fail-soft: if one sub-query errors, the others still return. Shares the project's packages loader cache — N `find_references` calls in one batch cost roughly one `packages.Load`.
 
-#### `describe_tool` tool
+#### Discovery (CLI-only)
 
-Queryable catalog of every go-surgeon tool. Prefer this over reading the full server instructions blob when you just need "what should I use for X".
+The catalog used to live behind the `describe_tool` MCP tool; it now lives in the CLI to keep the server's instructions short and limit context bloat in agent sessions.
 
-| Parameter | Description |
-|---|---|
-| `name` | Single tool detail (summary, example, related tools). Mutually exclusive with `category`. |
-| `category` | Filter to one group: `explore`, `refs`, `edit`, `interface`, `codegen`, `validate`, `batch`, `meta` |
+```
+go-surgeon discovery               # grouped list of every tool
+go-surgeon discovery <tool>        # detail (summary, example, ops, limitations)
+go-surgeon discovery <tool>.<op>   # op-level detail (e.g. patch.function, patch.struct.auto_tag)
+go-surgeon discovery --category edit
+```
 
-With no args, returns the full grouped list.
+To install go-surgeon as a Claude skill in the current project:
+
+```
+go-surgeon skill                                      # SKILL.md to stdout
+go-surgeon skill --out .claude/skills/go-surgeon/     # write SKILL.md into the directory
+```
 
 #### Error shape
 
