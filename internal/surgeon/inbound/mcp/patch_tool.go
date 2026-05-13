@@ -81,7 +81,7 @@ const patchToolDescription = "Surgical AST-aware editor for one declaration kind
 	"SHAPE — pick exactly one per call: " +
 	"single-target (common) sets file + identifier + patches at the top level (also include_nested for function, mock_file/mock_name for interface, scope for file); " +
 	"bulk sets items: [{file, identifier, patches, ...}]. Mixing is rejected. " +
-	"target: function | struct | interface | file | decl. Each target accepts its own op set — call describe_tool name=patch for the ops, examples, and limitations. " +
+	"target: function | struct | interface | file | decl. Each target accepts its own op set — run `go-surgeon discovery patch` (or `patch.<target>`) for the ops, examples, and limitations. " +
 	"BATCH: function/struct items are atomic; interface/file/decl items run sequentially (failures leave earlier items written). " +
 	"For multi-line replacements or whole-declaration rewrites, prefer update — patch op=replace is fragile across line boundaries. " +
 	"preview=true returns diff without writing."
@@ -868,7 +868,7 @@ func replaceShorterHint(ops []patchOpInput) string {
 			continue
 		}
 		if len(p.Replace) < len(p.Match) {
-			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (see describe_tool name=patch for the full Limitations list)"
+			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (run `go-surgeon discovery patch` for the full Limitations list)"
 		}
 	}
 	return ""
@@ -883,7 +883,7 @@ func replaceShorterHintFile(ops []filePatchOpInput) string {
 			continue
 		}
 		if len(p.Replace) < len(p.Match) {
-			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (see describe_tool name=patch for the full Limitations list)"
+			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (run `go-surgeon discovery patch` for the full Limitations list)"
 		}
 	}
 	return ""
