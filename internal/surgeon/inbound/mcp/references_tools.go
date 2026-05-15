@@ -76,7 +76,7 @@ type renameOutput struct {
 func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "find_definition",
-		Description: "Locate the declaration of a Go symbol (function, method, type, var, const, or struct field). Resolution is type-aware via go/packages — works across packages, including when the same name exists in multiple packages. Returns file:line:column of the defining identifier. Pair name with receiver/package/file+line when ambiguous. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
+		Description: "Locate the declaration of a Go symbol (function, method, type, var, const, or struct field). Key parameter: 'name' (not 'query') — the exact symbol name. Resolution is type-aware via go/packages — works across packages, including when the same name exists in multiple packages. Returns file:line:column of the defining identifier. Pair name with receiver/package/file+line when ambiguous. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in referencesInput) (*mcp.CallToolResult, any, error) {
 		if in.Name == "" {
 			return errorResult("find_definition: name is required"), nil, nil
@@ -106,7 +106,7 @@ func registerReferencesTools(s *mcp.Server, queries service.SurgeonQueries) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "find_references",
-		Description: "Find every reference to a Go symbol across the module, using go/packages type information. Returns file:line:column for each use, deduplicated and sorted. Set include_definition=true to also get the declaration site in one call. Use this before a rename to preview impact. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
+		Description: "Find every reference to a Go symbol across the module, using go/packages type information. Key parameter: 'name' (not 'query') — the exact symbol name. Returns file:line:column for each use, deduplicated and sorted. Set include_definition=true to also get the declaration site in one call. Use this before a rename to preview impact. Works on dependencies via module='github.com/org/repo' — paths are returned relative to the module root.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in referencesInput) (*mcp.CallToolResult, any, error) {
 		if in.Name == "" {
 			return errorResult("find_references: name is required"), nil, nil
