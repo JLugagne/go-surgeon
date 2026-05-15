@@ -24,7 +24,9 @@ To install go-surgeon as a Claude skill in this project:
 Universal rules:
 - ` + "`content`" + ` is raw Go: never include 'package ...' or 'import (...)' blocks — goimports runs after every edit.
 - Always read with symbol body=true before update/delete.
-- identifier forms: 'FuncName', 'Receiver.Method', 'StructName'/'InterfaceName', 'pkg.Name'.`
+- identifier forms: 'FuncName', 'Receiver.Method', 'StructName'/'InterfaceName', 'pkg.Name'.
+- symbol uses 'query' for lookup; find_references and find_definition use 'name' — they are different parameters.
+- update: 'object' is optional and defaults to 'auto' (inferred from content).`
 
 // NewServer creates an MCP server with all go-surgeon tools registered.
 func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries) *mcp.Server {

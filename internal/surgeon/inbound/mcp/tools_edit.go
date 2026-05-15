@@ -22,7 +22,7 @@ type createInput struct {
 }
 
 type updateInput struct {
-	Object     string `json:"object" jsonschema:"what to update: file, func, or struct"`
+	Object     string `json:"object,omitempty" jsonschema:"what to update: file, func, struct, or auto (default); auto infers from content"`
 	File       string `json:"file" jsonschema:"target file path"`
 	Identifier string `json:"identifier,omitempty" jsonschema:"AST identifier, e.g. FuncName or Receiver.Method, required for func and struct"`
 	Content    string `json:"content" jsonschema:"raw Go source code, no package declaration or imports"`
@@ -123,10 +123,13 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update",
-		Description: "Replace a whole function, method, struct, or file. content is the complete new declaration. For small changes inside a function body, prefer patch target=function. object='auto' infers from content (func/type/file). Doc comments are kept unless doc or strip_doc=true. preview=true returns a diff.",
+		Description: "Replace a whole function, method, struct, or file. content is the complete new declaration. For small changes inside a function body, prefer patch target=function. object defaults to 'auto', which infers from content (func/type/file). Doc comments are kept unless doc or strip_doc=true. preview=true returns a diff.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, any, error) {
 		if err := validateGoFile(in.File); err != nil {
 			return err, nil, nil
+		}
+		if in.Object == "" {
+			in.Object = "auto"
 		}
 		var actionType domain.ActionType
 		if in.Object == "auto" {
