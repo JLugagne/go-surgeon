@@ -49,10 +49,18 @@ func validateNoDroppedDecls(filePath, replacement string, postSrc []byte) error 
 	if !strings.Contains(replacement, "\n") {
 		return nil
 	}
+
+	// Check top-level declaration names
 	replNames, ok := parseReplacementDeclNames(replacement)
-	if !ok || len(replNames) == 0 {
+
+	// Check import statements
+	replImports, importsOk := parseReplacementImports(replacement)
+
+	// If neither declarations nor imports found, skip validation
+	if (!ok || len(replNames) == 0) && (!importsOk || len(replImports) == 0) {
 		return nil
 	}
+
 	postNames, ok := parseFileDeclNames(filePath, postSrc)
 	if !ok {
 		// If the post-source no longer parses, downstream validators (gofmt,
@@ -60,14 +68,33 @@ func validateNoDroppedDecls(filePath, replacement string, postSrc []byte) error 
 		// what is really a parse failure.
 		return nil
 	}
-	missing := missingNames(replNames, postNames)
-	if len(missing) == 0 {
-		return nil
+
+	// Check for missing declarations
+	if ok && len(replNames) > 0 {
+		missing := missingNames(replNames, postNames)
+		if len(missing) > 0 {
+			return &domain.Error{
+				Code:    droppedContentCode,
+				Message: formatDroppedDeclsMessage(missing, replacement),
+			}
+		}
 	}
-	return &domain.Error{
-		Code:    droppedContentCode,
-		Message: formatDroppedDeclsMessage(missing, replacement),
+
+	// Check for missing imports
+	if importsOk && len(replImports) > 0 {
+		postImports, ok := parseFileImports(filePath, postSrc)
+		if ok {
+			missingImports := missingNames(replImports, postImports)
+			if len(missingImports) > 0 {
+				return &domain.Error{
+					Code:    droppedContentCode,
+					Message: formatDroppedImportsMessage(missingImports, replacement),
+				}
+			}
+		}
 	}
+
+	return nil
 }
 
 // validateNoDroppedStmts is the function-body counterpart of
@@ -261,4 +288,64 @@ func parseStmtCount(body string) (count int, ok bool) {
 		return 0, false
 	}
 	return len(fn.Body.List), true
+}
+
+// parseReplacementImports parses `replacement` as the body of a Go file
+// (a synthetic `package _` is prepended) and returns the slice of
+// import paths. Returns ok=false when the replacement does not parse as Go
+// or contains no imports.
+func parseReplacementImports(replacement string) (imports []string, ok bool) {
+	src := "package _\n" + replacement
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "replacement.go", src, parser.ParseComments)
+	if err != nil {
+		return nil, false
+	}
+	if len(f.Imports) == 0 {
+		return nil, false
+	}
+	imports = make([]string, 0, len(f.Imports))
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		imports = append(imports, path)
+	}
+	return imports, true
+}
+
+// parseFileImports parses `src` as a Go file and returns the slice of
+// import paths. Returns ok=false on parse failure.
+func parseFileImports(filePath string, src []byte) (imports []string, ok bool) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filePath, src, parser.ParseComments)
+	if err != nil {
+		return nil, false
+	}
+	if len(f.Imports) == 0 {
+		return nil, true // No imports is valid
+	}
+	imports = make([]string, 0, len(f.Imports))
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		imports = append(imports, path)
+	}
+	return imports, true
+}
+
+// formatDroppedImportsMessage builds the agent-facing error text shown when
+// one or more import paths from the replacement failed to land in the
+// resulting file.
+func formatDroppedImportsMessage(missing []string, replacement string) string {
+	preview := truncateReplacementPreview(replacement, 120)
+	plural := "import"
+	if len(missing) > 1 {
+		plural = "imports"
+	}
+	return fmt.Sprintf(
+		"patch (replace): replacement %s %s missing from result file — write rolled back to prevent silent data loss. "+
+			"Expected the result to contain import(s) %s but it does not. "+
+			"This is the multi-line shrinking-replace bug (issue #14): the match swallowed surrounding code that the replacement did not re-insert. "+
+			"Use update object=file with the full new file content for whole-file rewrites. "+
+			"Replacement preview: %q",
+		plural, strings.Join(missing, ", "), strings.Join(missing, ", "), preview,
+	)
 }
