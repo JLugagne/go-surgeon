@@ -230,3 +230,35 @@ func TestPatchFile_Issue14_DroppedContentErrorCode_StructureCheck(t *testing.T) 
 		t.Fatal("contract drift: error code must contain DROPPED_CONTENT")
 	}
 }
+
+// TestPatchFile_Issue14_ImportBlockReplacement_HappyPath: replacing an
+// import block with new imports. When the splice works correctly the new
+// imports land in the file and the validator must NOT fire.
+func TestPatchFile_Issue14_ImportBlockReplacement_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	h, fs := newPatchHandler()
+	original := `package p
+
+import "fmt"
+
+func F() { fmt.Println("hello") }
+`
+	setFile(fs, "p.go", original)
+
+	matchText := "import \"fmt\""
+	res, err := h.PatchFile(ctx, domain.PatchFileRequest{
+		FilePath: "p.go",
+		Patches: []domain.FilePatch{
+			{Match: matchText, Replace: `import (
+	"fmt"
+	"os"
+)`},
+		},
+	})
+	require.NoError(t, err, "import block replacement must succeed")
+	assert.Equal(t, 1, res.Applied)
+	got := getFile(fs, "p.go")
+	assert.Contains(t, got, `import (`)
+	assert.Contains(t, got, `"fmt"`)
+	assert.Contains(t, got, `"os"`)
+}
