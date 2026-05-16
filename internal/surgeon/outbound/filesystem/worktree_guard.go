@@ -25,6 +25,14 @@ const rootEnvVar = "GO_SURGEON_ROOT"
 //  3. Empty string when no worktree is detectable (temp dirs, non-git
 //     checkouts); callers fall through to plain os.* semantics.
 func resolveRoot() string {
+	// MCP_WORKTREE_ROOT takes priority (set by Claude Code harness)
+	if env := strings.TrimSpace(os.Getenv("MCP_WORKTREE_ROOT")); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return canonical(abs)
+		}
+		return canonical(env)
+	}
+	// GO_SURGEON_ROOT is the legacy variable
 	if env := strings.TrimSpace(os.Getenv(rootEnvVar)); env != "" {
 		if abs, err := filepath.Abs(env); err == nil {
 			return canonical(abs)
@@ -76,6 +84,23 @@ func normalizePath(root, path string) (string, string, error) {
 	real := resolveRealPath(abs)
 
 	if hasPathPrefix(real, root) {
+		// real is under our worktree root. Rewrite abs to use root as the
+		// prefix so that writes land inside the worktree even when abs
+		// came in via a symlink (e.g. /go/<module> -> ~/dev/.../<mod>).
+		rel, err := filepath.Rel(root, real)
+		if err != nil {
+			// Should not happen if hasPathPrefix(real, root) is true, but
+			// fall through to the original path on error.
+			return abs, "", nil
+		}
+		if rel != "" && !strings.HasPrefix(rel, "..") {
+			rewritten := filepath.Join(root, rel)
+			if rewritten != abs {
+				warn := fmt.Sprintf("path %q resolved to %q via symlink; rewrote to %q (root=%q)", abs, real, rewritten, root)
+				return rewritten, warn, nil
+			}
+			return abs, "", nil
+		}
 		return abs, "", nil
 	}
 
@@ -91,7 +116,10 @@ func normalizePath(root, path string) (string, string, error) {
 
 	if !sameDir(siblingRoot, root) {
 		rel, err := filepath.Rel(siblingRoot, real)
-		if err == nil && !strings.HasPrefix(rel, "..") {
+		if err != nil {
+			return abs, "", nil
+		}
+		if !strings.HasPrefix(rel, "..") {
 			rewritten := filepath.Join(root, rel)
 			warn := fmt.Sprintf("path %q resolved to sibling worktree %q; rewrote to %q (root=%q)", path, real, rewritten, root)
 			return rewritten, warn, nil
