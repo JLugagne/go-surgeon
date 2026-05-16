@@ -246,3 +246,131 @@ func TestCollectDeclNames_MethodWithReceiver(t *testing.T) {
 		t.Errorf("expected 'Handler.Serve', got %q", names[0])
 	}
 }
+
+// TestParseReplacementImports_HappyPath: valid import block in replacement
+func TestParseReplacementImports_HappyPath(t *testing.T) {
+	repl := `import (
+	"fmt"
+	"os"
+)`
+	imports, ok := parseReplacementImports(repl)
+	if !ok {
+		t.Fatal("expected ok=true for valid import block")
+	}
+	if len(imports) != 2 {
+		t.Fatalf("expected 2 imports, got %d: %v", len(imports), imports)
+	}
+	// Order may vary, so check set membership
+	importSet := make(map[string]bool)
+	for _, imp := range imports {
+		importSet[imp] = true
+	}
+	if !importSet["fmt"] || !importSet["os"] {
+		t.Errorf("expected fmt and os in imports, got: %v", imports)
+	}
+}
+
+// TestParseReplacementImports_NoImports: replacement without imports returns ok=false
+func TestParseReplacementImports_NoImports(t *testing.T) {
+	repl := "func F() {}"
+	_, ok := parseReplacementImports(repl)
+	if ok {
+		t.Error("expected ok=false for replacement without imports")
+	}
+}
+
+// TestParseReplacementImports_InvalidGo: invalid Go code returns ok=false
+func TestParseReplacementImports_InvalidGo(t *testing.T) {
+	repl := "import \"fmt\"\n_ = fmt.Sprintf" // invalid top-level
+	_, ok := parseReplacementImports(repl)
+	if ok {
+		t.Error("expected ok=false for invalid Go code")
+	}
+}
+
+// TestParseFileImports_HappyPath: valid file with imports
+func TestParseFileImports_HappyPath(t *testing.T) {
+	src := []byte(`package p
+
+import (
+	"fmt"
+	"os"
+)
+
+func F() {}
+`)
+	imports, ok := parseFileImports("f.go", src)
+	if !ok {
+		t.Fatal("expected ok=true for valid file")
+	}
+	if len(imports) != 2 {
+		t.Fatalf("expected 2 imports, got %d: %v", len(imports), imports)
+	}
+	importSet := make(map[string]bool)
+	for _, imp := range imports {
+		importSet[imp] = true
+	}
+	if !importSet["fmt"] || !importSet["os"] {
+		t.Errorf("expected fmt and os in imports, got: %v", imports)
+	}
+}
+
+// TestParseFileImports_NoImports: file without imports returns empty slice with ok=true
+func TestParseFileImports_NoImports(t *testing.T) {
+	src := []byte("package p\n\nfunc F() {}\n")
+	imports, ok := parseFileImports("f.go", src)
+	if !ok {
+		t.Error("expected ok=true for valid file without imports")
+	}
+	if len(imports) != 0 {
+		t.Errorf("expected 0 imports, got %d: %v", len(imports), imports)
+	}
+}
+
+// TestValidateNoDroppedDecls_ImportBlockHappyPath: replacement with import
+// block that lands correctly in post-source passes validation.
+func TestValidateNoDroppedDecls_ImportBlockHappyPath(t *testing.T) {
+	postSrc := []byte(`package p
+
+import (
+	"fmt"
+	"os"
+)
+
+func F() {}
+`)
+	repl := `import (
+	"fmt"
+	"os"
+)
+`
+	if err := validateNoDroppedDecls("f.go", repl, postSrc); err != nil {
+		t.Fatalf("expected nil for valid import replacement, got: %v", err)
+	}
+}
+
+// TestValidateNoDroppedDecls_ImportBlockMissingImports: replacement with
+// import block but post-source is missing some imports triggers error.
+func TestValidateNoDroppedDecls_ImportBlockMissingImports(t *testing.T) {
+	postSrc := []byte(`package p
+
+import "fmt"
+
+func F() {}
+`)
+	repl := `import (
+	"fmt"
+	"os"
+)
+`
+	err := validateNoDroppedDecls("f.go", repl, postSrc)
+	if err == nil {
+		t.Fatal("expected error for missing imports, got nil")
+	}
+	if !strings.Contains(err.Error(), "PATCH_DROPPED_CONTENT") {
+		t.Errorf("expected PATCH_DROPPED_CONTENT error, got: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "os") {
+		t.Errorf("expected error to name missing import 'os', got: %s", err.Error())
+	}
+}
