@@ -706,3 +706,86 @@ func Baz() string { return "baz" } // Baz greets
 		assert.Contains(t, content, "// Baz greets", "sibling func inline comment lost")
 	})
 }
+
+func TestUpdateDecl_ConstReplacesOnlyConst(t *testing.T) {
+	ctx := context.Background()
+
+	src := `package library
+
+import "fmt"
+
+const BookTitle = "The Library"
+
+func ListBooks() { fmt.Println("Listing books") }
+
+func FindBook(id string) string { return "Book" }
+`
+
+	t.Run("update_decl replaces only the const, preserves functions and imports", func(t *testing.T) {
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", src)
+		_, err := h.Handle(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateDecl,
+			FilePath:   "f.go",
+			Identifier: "BookTitle",
+			Content:    "const BookTitle = \"Updated Library\"",
+		}}})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, `const BookTitle = "Updated Library"`, "const should be updated")
+		assert.Contains(t, content, `import "fmt"`, "imports should be preserved")
+		assert.Contains(t, content, "func ListBooks()", "sibling func should be preserved")
+		assert.Contains(t, content, "func FindBook(id string) string", "sibling func should be preserved")
+		assert.NotContains(t, content, `const BookTitle = "The Library"`, "old const value should not remain")
+	})
+
+	t.Run("update_decl replaces only the const, preserves struct", func(t *testing.T) {
+		srcWithStruct := `package library
+
+const Version = "1.0"
+
+type Book struct {
+	Title string
+}
+
+func NewBook(title string) *Book { return &Book{Title: title} }
+`
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", srcWithStruct)
+		_, err := h.Handle(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateDecl,
+			FilePath:   "f.go",
+			Identifier: "Version",
+			Content:    "const Version = \"2.0\"",
+		}}})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, `const Version = "2.0"`, "const should be updated")
+		assert.Contains(t, content, "type Book struct {", "struct should be preserved")
+		assert.Contains(t, content, "func NewBook(title string) *Book", "sibling func should be preserved")
+	})
+
+	t.Run("update_decl with var replaces only the var", func(t *testing.T) {
+		srcWithVar := `package library
+
+import "errors"
+
+var ErrNotFound = errors.New("not found")
+
+func FindBook(id string) (string, error) { return "", ErrNotFound }
+`
+		h, fs := newPatchHandler()
+		setFile(fs, "f.go", srcWithVar)
+		_, err := h.Handle(ctx, domain.Plan{Actions: []domain.Action{{
+			Action:     domain.ActionTypeUpdateDecl,
+			FilePath:   "f.go",
+			Identifier: "ErrNotFound",
+			Content:    "var ErrNotFound = errors.New(\"book not found\")",
+		}}})
+		require.NoError(t, err)
+		content := getFile(fs, "f.go")
+		assert.Contains(t, content, `var ErrNotFound = errors.New("book not found")`, "var should be updated")
+		assert.Contains(t, content, `import "errors"`, "imports should be preserved")
+		assert.Contains(t, content, "func FindBook(id string) (string, error)", "sibling func should be preserved")
+	})
+}
