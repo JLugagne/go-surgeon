@@ -273,7 +273,7 @@ func DeleteFile(path string) error {
 			},
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "erase the entire body")
+		assert.Contains(t, err.Error(), "replace field is empty", "empty replace should be caught by validation")
 		assert.Equal(t, src, getFile(fs, "f.go"), "file must not be modified")
 	})
 

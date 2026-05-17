@@ -184,6 +184,10 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 
 		switch p.Op {
 		case domain.PatchOpReplace:
+			if p.Replace == "" {
+				errs = append(errs, fmt.Sprintf("patch #%d (replace): replace field is empty — did you mean to use op:delete, or did you misspell the field name (replace, not replacement)?", i+1))
+				continue
+			}
 			repl := p.Replace
 			if repl != "" && !startsWithWhitespace(repl) {
 				if indent := lineIndent(origBody, hit[0]); indent != "" && hit[0] == lineStartOffset(origBody, hit[0]) {
