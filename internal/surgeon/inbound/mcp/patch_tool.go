@@ -525,7 +525,7 @@ func handlePatchInterface(ctx context.Context, commands service.SurgeonCommands,
 				Type:      p.Type,
 				Doc:       p.Doc,
 				Before:    p.Before,
-				After:    p.After,
+				After:     p.After,
 				Position:  p.Position,
 			}
 		}
@@ -867,7 +867,7 @@ func replaceShorterHint(ops []patchOpInput) string {
 		if p.Match == "" {
 			continue
 		}
-		if len(p.Replace) < len(p.Match) {
+		if p.Replace != "" && len(p.Replace) < len(p.Match) {
 			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (run `go-surgeon discovery patch` for the full Limitations list)"
 		}
 	}
@@ -882,7 +882,7 @@ func replaceShorterHintFile(ops []filePatchOpInput) string {
 		if p.Match == "" {
 			continue
 		}
-		if len(p.Replace) < len(p.Match) {
+		if p.Replace != "" && len(p.Replace) < len(p.Match) {
 			return "replacement applied but result is shorter than input — try update object=func for whole-declaration rewrites (run `go-surgeon discovery patch` for the full Limitations list)"
 		}
 	}

@@ -418,6 +418,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 
 		switch p.Op {
 		case domain.PatchOpReplace:
+			if p.Replace == "" {
+				errs = append(errs, fmt.Sprintf("patch #%d (replace): replace field is empty — did you mean to use op:delete, or did you misspell the field name (replace, not replacement)?", i+1))
+				continue
+			}
 			if replaceEndsWithBareClosingBrace(p.Replace) {
 				errs = append(errs, fmt.Sprintf("patch #%d (replace): replacement has more closing braces than opening ones — it would consume the function's own '}'. Ensure braces in the replacement are balanced.", i+1))
 				continue
