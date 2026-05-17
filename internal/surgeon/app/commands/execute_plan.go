@@ -123,7 +123,7 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 	case domain.ActionTypeReplaceFile:
 		imps, err := h.handleReplaceFile(ctx, action)
 		return nil, imps, err
-	case domain.ActionTypeUpdateFunc, domain.ActionTypeAddFunc, domain.ActionTypeUpdateStruct, domain.ActionTypeAddStruct, domain.ActionTypeDeleteFunc, domain.ActionTypeDeleteStruct, domain.ActionTypeInsertCall:
+	case domain.ActionTypeUpdateFunc, domain.ActionTypeAddFunc, domain.ActionTypeUpdateStruct, domain.ActionTypeAddStruct, domain.ActionTypeDeleteFunc, domain.ActionTypeDeleteStruct, domain.ActionTypeInsertCall, domain.ActionTypeUpdateDecl:
 		return h.handleASTAction(ctx, action)
 	case domain.ActionTypeAddInterface:
 		req := domain.InterfaceActionRequest{
@@ -409,6 +409,23 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			updatedSrc = deleteRanges(src, ranges)
 			updated = true
 		}
+	case domain.ActionTypeUpdateDecl:
+		offsets, ok := findDeclOffsets(fset, f, action.Identifier)
+		if ok {
+			updatedSrc = append([]byte(nil), src[:offsets.DocStart]...)
+			updatedSrc = append(updatedSrc, []byte(action.Content)...)
+			updatedSrc = append(updatedSrc, src[offsets.End:]...)
+			updated = true
+		} else {
+			// Fall back to add behavior: append the declaration
+			updatedSrc = append([]byte(nil), src...)
+			if len(updatedSrc) > 0 && updatedSrc[len(updatedSrc)-1] != '\n' {
+				updatedSrc = append(updatedSrc, '\n')
+			}
+			updatedSrc = append(updatedSrc, []byte("\n"+action.Content+"\n")...)
+			updated = true
+			warnings = append(warnings, fmt.Sprintf("update_decl: identifier %q not found in %s, appended declaration", action.Identifier, action.FilePath))
+		}
 	}
 
 	if !updated {
@@ -578,6 +595,41 @@ func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier st
 		}
 	}
 	return ranges
+}
+
+// findDeclOffsets locates a top-level const/var declaration by name and
+// returns the byte offsets (including doc comment if present) for replacement.
+func findDeclOffsets(fset *token.FileSet, f *ast.File, name string) (nodeOffsets, bool) {
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		if gen.Tok != token.CONST && gen.Tok != token.VAR {
+			continue
+		}
+		for _, sp := range gen.Specs {
+			vs, ok := sp.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, id := range vs.Names {
+				if id.Name == name {
+					docStart := fset.Position(gen.Pos()).Offset
+					if gen.Doc != nil {
+						docStart = fset.Position(gen.Doc.Pos()).Offset
+					}
+					return nodeOffsets{
+						DocStart:  docStart,
+						NodeStart: fset.Position(gen.Pos()).Offset,
+						End:       fset.Position(gen.End()).Offset,
+						HasDoc:    gen.Doc != nil,
+					}, true
+				}
+			}
+		}
+	}
+	return nodeOffsets{}, false
 }
 
 func deleteRanges(src []byte, ranges [][2]int) []byte {

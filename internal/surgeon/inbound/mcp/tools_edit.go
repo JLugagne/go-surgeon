@@ -138,6 +138,8 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 				actionType = domain.ActionTypeUpdateFunc
 			} else if strings.Contains(trimmed, "type ") && strings.Contains(trimmed, "struct {") {
 				actionType = domain.ActionTypeUpdateStruct
+			} else if strings.HasPrefix(trimmed, "const ") || strings.HasPrefix(trimmed, "var ") {
+				actionType = domain.ActionTypeUpdateDecl
 			} else {
 				actionType = domain.ActionTypeReplaceFile
 			}

@@ -1730,6 +1730,52 @@ func TestUpdate_Auto_StructContent(t *testing.T) {
 	assert.Equal(t, domain.ActionTypeUpdateStruct, receivedPlan.Actions[0].Action)
 }
 
+func TestUpdate_Auto_ConstContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "update", map[string]any{
+		"object":     "auto",
+		"file":       "internal/domain/book.go",
+		"identifier": "BookTitle",
+		"content":    "const BookTitle = \"Updated Library\"",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeUpdateDecl, receivedPlan.Actions[0].Action)
+	assert.Equal(t, "BookTitle", receivedPlan.Actions[0].Identifier)
+}
+
+func TestUpdate_Auto_VarContent(t *testing.T) {
+	var receivedPlan domain.Plan
+	commands := &mockCommands{
+		executePlanFn: func(_ context.Context, plan domain.Plan) (domain.PlanResult, error) {
+			receivedPlan = plan
+			return domain.PlanResult{FilesModified: 1}, nil
+		},
+	}
+	cs := setupTest(t, commands, &mockQueries{})
+
+	result := callTool(t, cs, "update", map[string]any{
+		"object":     "auto",
+		"file":       "internal/domain/book.go",
+		"identifier": "ErrNotFound",
+		"content":    "var ErrNotFound = errors.New(\"updated not found\")",
+	})
+
+	assert.False(t, result.IsError)
+	require.Len(t, receivedPlan.Actions, 1)
+	assert.Equal(t, domain.ActionTypeUpdateDecl, receivedPlan.Actions[0].Action)
+	assert.Equal(t, "ErrNotFound", receivedPlan.Actions[0].Identifier)
+}
+
 func TestUpdate_Auto_FileContent(t *testing.T) {
 	var receivedPlan domain.Plan
 	commands := &mockCommands{
