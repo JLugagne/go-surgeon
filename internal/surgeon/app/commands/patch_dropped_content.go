@@ -113,11 +113,11 @@ func validateNoDroppedStmts(replacement, matched, preBody, postBody string) erro
 	if !strings.Contains(replacement, "\n") {
 		return nil
 	}
-	replCount, ok := parseStmtCount(replacement)
+	replCount, ok := parseRecursiveStmtCount(replacement)
 	if !ok || replCount < 2 {
 		return nil
 	}
-	matchedCount, ok := parseStmtCount(matched)
+	matchedCount, ok := parseRecursiveStmtCount(matched)
 	if !ok {
 		// If the match doesn't parse as a statement list (e.g. it is an
 		// expression or part of one), we cannot compute the expected delta —
@@ -125,11 +125,11 @@ func validateNoDroppedStmts(replacement, matched, preBody, postBody string) erro
 		// presence test.
 		return nil
 	}
-	preCount, ok := parseStmtCount(preBody)
+	preCount, ok := parseRecursiveStmtCount(preBody)
 	if !ok {
 		return nil
 	}
-	postCount, ok := parseStmtCount(postBody)
+	postCount, ok := parseRecursiveStmtCount(postBody)
 	if !ok {
 		return nil
 	}
@@ -140,7 +140,7 @@ func validateNoDroppedStmts(replacement, matched, preBody, postBody string) erro
 	return &domain.Error{
 		Code: droppedContentCode,
 		Message: fmt.Sprintf(
-			"patch (replace): function body has %d top-level statements after splice but %d were expected (pre=%d, matched=%d, replacement=%d) — write rolled back to prevent silent data loss. "+
+			"patch (replace): function body has %d statements after splice but %d were expected (pre=%d, matched=%d, replacement=%d) — write rolled back to prevent silent data loss. "+
 				"This is the multi-line shrinking-replace bug (issue #14): the match consumed more statements than the replacement re-inserted. "+
 				"Use update object=func with the full new body for multi-line edits.",
 			postCount, expected, preCount, matchedCount, replCount,
@@ -348,4 +348,58 @@ func formatDroppedImportsMessage(missing []string, replacement string) string {
 			"Replacement preview: %q",
 		plural, strings.Join(missing, ", "), strings.Join(missing, ", "), preview,
 	)
+}
+
+func parseRecursiveStmtCount(body string) (count int, ok bool) {
+	src := "package _\nfunc _() {\n" + body + "\n}\n"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "stmt_count.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return 0, false
+	}
+	if len(f.Decls) == 0 {
+		return 0, false
+	}
+	fn, fnOk := f.Decls[0].(*ast.FuncDecl)
+	if !fnOk || fn.Body == nil {
+		return 0, false
+	}
+	return countAllStmts(fn.Body.List), true
+}
+
+func countAllStmts(stmts []ast.Stmt) int {
+	n := len(stmts)
+	for _, s := range stmts {
+		switch s := s.(type) {
+		case *ast.BlockStmt:
+			n += countAllStmts(s.List)
+		case *ast.IfStmt:
+			if s.Body != nil {
+				n += countAllStmts(s.Body.List)
+			}
+			if s.Else != nil {
+				n += countAllStmts([]ast.Stmt{s.Else})
+			}
+		case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			var body *ast.BlockStmt
+			switch x := s.(type) {
+			case *ast.ForStmt:
+				body = x.Body
+			case *ast.RangeStmt:
+				body = x.Body
+			case *ast.SwitchStmt:
+				body = x.Body
+			case *ast.TypeSwitchStmt:
+				body = x.Body
+			case *ast.SelectStmt:
+				body = x.Body
+			}
+			if body != nil {
+				n += countAllStmts(body.List)
+			}
+		case *ast.LabeledStmt:
+			n += countAllStmts([]ast.Stmt{s.Stmt})
+		}
+	}
+	return n
 }

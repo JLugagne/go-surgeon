@@ -374,3 +374,62 @@ func F() {}
 		t.Errorf("expected error to name missing import 'os', got: %s", err.Error())
 	}
 }
+
+func TestValidateNoDroppedStmts_NestedInLoop_FalsePositive(t *testing.T) {
+	preBody := `a()
+for _, x := range xs {
+	diffs, err := doDiff(x)
+	if err != nil {
+		continue
+	}
+	affected := findAffected(diffs)
+	if _, ok := affected[x]; !ok {
+		continue
+	}
+	process(x, affected)
+}
+z()`
+
+	matched := `diffs, err := doDiff(x)
+if err != nil {
+	continue
+}
+affected := findAffected(diffs)
+if _, ok := affected[x]; !ok {
+	continue
+}`
+
+	repl := `diffs, err := doDiff(x)
+var affected map[int]*domain.InstalledPackage
+if err == nil {
+	affected = findAffected(diffs)
+}
+_, hasUpstreamChange := affected[x]
+shouldProcess := hasUpstreamChange
+var hasLocalDrift bool
+if !shouldProcess {
+	continue
+}`
+
+	postBody := `a()
+for _, x := range xs {
+	diffs, err := doDiff(x)
+	var affected map[int]*domain.InstalledPackage
+	if err == nil {
+		affected = findAffected(diffs)
+	}
+	_, hasUpstreamChange := affected[x]
+	shouldProcess := hasUpstreamChange
+	var hasLocalDrift bool
+	if !shouldProcess {
+		continue
+	}
+	process(x, affected)
+}
+z()`
+
+	err := validateNoDroppedStmts(repl, matched, preBody, postBody)
+	if err != nil {
+		t.Fatalf("false positive: nested match inside for-loop must NOT trigger PATCH_DROPPED_CONTENT, got: %v", err)
+	}
+}
