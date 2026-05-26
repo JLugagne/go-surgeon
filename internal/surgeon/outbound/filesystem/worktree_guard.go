@@ -56,12 +56,12 @@ func resolveRoot() string {
 //     agent worktree once root is set.
 //   - GOMODCACHE targets: passed through unchanged (read-only by
 //     convention; module cache paths are symlinks by design).
-//   - Absolute path that resolves into a sibling git worktree: rewritten
-//     to <root>/<relpath-inside-sibling>, with a warning describing the
-//     rewrite so callers can surface it to the agent.
-//   - Absolute path under root or outside any worktree: passed through
-//     so legitimate writes to /tmp test fixtures and unrelated trees
-//     keep working.
+//   - Absolute path that resolves into root (possibly through a
+//     symlink): rewritten to use the canonical root prefix with a
+//     warning describing the rewrite so callers can surface it to the
+//     agent.
+//   - Absolute path under root or in a sibling worktree: passed through
+//     unchanged so the caller's explicit absolute path is honored.
 func normalizePath(root, path string) (string, string, error) {
 	if path == "" {
 		return path, "", nil
@@ -84,13 +84,8 @@ func normalizePath(root, path string) (string, string, error) {
 	real := resolveRealPath(abs)
 
 	if hasPathPrefix(real, root) {
-		// real is under our worktree root. Rewrite abs to use root as the
-		// prefix so that writes land inside the worktree even when abs
-		// came in via a symlink (e.g. /go/<module> -> ~/dev/.../<mod>).
 		rel, err := filepath.Rel(root, real)
 		if err != nil {
-			// Should not happen if hasPathPrefix(real, root) is true, but
-			// fall through to the original path on error.
 			return abs, "", nil
 		}
 		if rel != "" && !strings.HasPrefix(rel, "..") {
@@ -106,24 +101,11 @@ func normalizePath(root, path string) (string, string, error) {
 
 	siblingRoot := findGitWorktreeRoot(real)
 	if siblingRoot == "" {
-		// Target is outside any git worktree (temp dir, /tmp test
-		// fixture, etc.). The cross-worktree symlink failure mode
-		// cannot apply here, so allow the write. This preserves the
-		// pre-fix behavior for tests that write into t.TempDir() while
-		// the server's captured root is the repo.
 		return abs, "", nil
 	}
 
 	if !sameDir(siblingRoot, root) {
-		rel, err := filepath.Rel(siblingRoot, real)
-		if err != nil {
-			return abs, "", nil
-		}
-		if !strings.HasPrefix(rel, "..") {
-			rewritten := filepath.Join(root, rel)
-			warn := fmt.Sprintf("path %q resolved to sibling worktree %q; rewrote to %q (root=%q)", path, real, rewritten, root)
-			return rewritten, warn, nil
-		}
+		return abs, "", nil
 	}
 
 	return abs, "", nil
