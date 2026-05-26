@@ -29,10 +29,9 @@ func TestNormalizePath_AllowsSameWorktree(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "pkg", "file.go"), resolved)
 }
 
-// TestNormalizePath_RewritesSymlinkIntoSiblingWorktree is the headline
-// behavior change: a path that resolves through a symlink into a
-// sibling worktree no longer errors — it is rewritten to land inside
-// our root, with a warning describing the rewrite.
+// TestNormalizePath_RewritesSymlinkIntoSiblingWorktree verifies that a
+// path through a symlink pointing to a sibling worktree is passed
+// through unchanged, honoring the caller's intent.
 func TestNormalizePath_RewritesSymlinkIntoSiblingWorktree(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
@@ -54,9 +53,8 @@ func TestNormalizePath_RewritesSymlinkIntoSiblingWorktree(t *testing.T) {
 	target := filepath.Join(symlink, "pkg", "file.go")
 	resolved, warn, err := normalizePath(canonical(worktree), target)
 	require.NoError(t, err)
-	assert.NotEmpty(t, warn, "expected a warning describing the rewrite")
-	assert.Equal(t, filepath.Join(canonical(worktree), "pkg", "file.go"), resolved)
-	assert.Contains(t, warn, "rewrote")
+	assert.Empty(t, warn)
+	assert.Equal(t, target, resolved)
 }
 
 func TestNormalizePath_EmptyRootIsBestEffort(t *testing.T) {
@@ -127,10 +125,9 @@ func TestNewFileSystem_CapturesRootAtConstruction(t *testing.T) {
 	assert.Equal(t, canonical(tmp), fs.root)
 }
 
-// TestFileSystem_WriteFile_RewritesCrossWorktreeSymlinkWrite verifies
-// the end-to-end behavior change: a write call with a sibling-worktree
-// path actually creates the file inside our root, never in the parent
-// checkout.
+// TestFileSystem_WriteFile_HonorsSymlinkWrite verifies
+// the end-to-end behavior: a write call with a symlink path pointing
+// to a sibling worktree writes through the symlink to the target file.
 func TestFileSystem_WriteFile_RewritesCrossWorktreeSymlinkWrite(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
@@ -140,7 +137,7 @@ func TestFileSystem_WriteFile_RewritesCrossWorktreeSymlinkWrite(t *testing.T) {
 	main := filepath.Join(base, "main")
 	worktree := filepath.Join(base, "worktree")
 	require.NoError(t, os.MkdirAll(filepath.Join(main, "shared"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(worktree, "shared"), 0755))
+	require.NoError(t, os.MkdirAll(worktree, 0755))
 	initGitRoot(t, main)
 	initGitRoot(t, worktree)
 
@@ -153,16 +150,14 @@ func TestFileSystem_WriteFile_RewritesCrossWorktreeSymlinkWrite(t *testing.T) {
 	fs := NewFileSystem()
 
 	_, err := fs.WriteFile(context.Background(), filepath.Join(symlink, "shared", "file.go"), []byte("package p\n\nvar X = 1\n"))
-	require.NoError(t, err, "WriteFile should succeed by rewriting into worktree, not error")
+	require.NoError(t, err, "WriteFile should succeed by writing through the symlink")
 
-	rewrittenPath := filepath.Join(canonical(worktree), "shared", "file.go")
-	got, err := os.ReadFile(rewrittenPath)
+	got, err := os.ReadFile(filepath.Join(main, "shared", "file.go"))
 	require.NoError(t, err)
 	assert.Contains(t, string(got), "var X = 1")
 
-	mainContent, err := os.ReadFile(filepath.Join(main, "shared", "file.go"))
-	require.NoError(t, err)
-	assert.Equal(t, "package p\n", string(mainContent), "parent checkout file must remain untouched")
+	_, err = os.Stat(filepath.Join(worktree, "shared", "file.go"))
+	assert.True(t, os.IsNotExist(err), "worktree file must not be created")
 }
 
 func TestFileSystem_WriteFile_AllowsInCapturedWorktree(t *testing.T) {
@@ -179,10 +174,10 @@ func TestFileSystem_WriteFile_AllowsInCapturedWorktree(t *testing.T) {
 	assert.True(t, strings.HasPrefix(string(content), "package p"))
 }
 
-// TestFileSystem_MkdirAll_RewritesCrossWorktree mirrors the WriteFile
-// behavior for directory creation: a sibling-worktree path is rewritten
-// into our root rather than refused.
-func TestFileSystem_MkdirAll_RewritesCrossWorktree(t *testing.T) {
+// TestFileSystem_MkdirAll_HonorsSymlink verifies the end-to-end
+// behavior for directory creation: a symlink path to a sibling
+// worktree creates the directory through the symlink.
+func TestFileSystem_MkdirAll_HonorsSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -203,12 +198,32 @@ func TestFileSystem_MkdirAll_RewritesCrossWorktree(t *testing.T) {
 
 	require.NoError(t, fs.MkdirAll(context.Background(), filepath.Join(symlink, "shared", "new")))
 
-	worktreeDir := filepath.Join(canonical(worktree), "shared", "new")
-	info, err := os.Stat(worktreeDir)
+	mainNew := filepath.Join(main, "shared", "new")
+	info, err := os.Stat(mainNew)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 
-	mainNew := filepath.Join(main, "shared", "new")
-	_, err = os.Stat(mainNew)
-	assert.True(t, os.IsNotExist(err), "directory must not have been created in parent checkout")
+	worktreeDir := filepath.Join(canonical(worktree), "shared", "new")
+	_, err = os.Stat(worktreeDir)
+	assert.True(t, os.IsNotExist(err), "directory must not have been created in worktree")
+}
+
+func TestNormalizePath_SiblingWorktreeAbsolutePathIsPassedThrough(t *testing.T) {
+	base := t.TempDir()
+
+	worktreeA := filepath.Join(base, "worktree-a")
+	worktreeB := filepath.Join(base, "worktree-b")
+	require.NoError(t, os.MkdirAll(filepath.Join(worktreeA, "pkg"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(worktreeB, "pkg"), 0755))
+	initGitRoot(t, worktreeA)
+	initGitRoot(t, worktreeB)
+
+	target := filepath.Join(worktreeB, "pkg", "file.go")
+
+	resolved, _, err := normalizePath(canonical(worktreeA), target)
+	require.NoError(t, err)
+	assert.NotEqual(t, filepath.Join(worktreeA, "pkg", "file.go"), resolved,
+		"must NOT rewrite a plain absolute path in a sibling worktree to root")
+	assert.Equal(t, target, resolved,
+		"must honor the caller's absolute path")
 }
