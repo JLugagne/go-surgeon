@@ -253,7 +253,7 @@ func formatSymbolResults(results []domain.SymbolResult, showBody bool, queryStr 
 		fmt.Fprintf(&sb, "Doc:\n%s\n", res.Doc)
 	}
 	if showBody {
-		fmt.Fprintf(&sb, "Code (Empty lines stripped; line numbers are file-absolute):\n%s\n", res.Code)
+		fmt.Fprintf(&sb, "Code (line numbers are file-absolute):\n%s\n", res.Code)
 	} else {
 		fmt.Fprintf(&sb, "Signature:\n%s\n", res.Signature)
 	}

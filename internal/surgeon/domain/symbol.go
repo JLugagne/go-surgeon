@@ -41,7 +41,7 @@ type SymbolResult struct {
 	Receiver    string
 	Signature   string
 	Doc         string
-	Code        string // Empty lines stripped
+	Code        string // Empty lines preserved
 }
 
 // OutlineEntry is one declaration's summary inside FileOutline: what

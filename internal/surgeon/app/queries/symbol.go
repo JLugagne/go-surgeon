@@ -207,9 +207,7 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 	var buf bytes.Buffer
 	currentLine := startPos.Line
 	for _, line := range codeLines {
-		if strings.TrimSpace(line) != "" {
-			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
-		}
+		fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		currentLine++
 	}
 
@@ -249,9 +247,7 @@ func (h *SurgeonQueriesHandler) extractStructResult(fset *token.FileSet, src []b
 	var buf bytes.Buffer
 	currentLine := startPos.Line
 	for _, line := range codeLines {
-		if strings.TrimSpace(line) != "" {
-			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
-		}
+		fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		currentLine++
 	}
 
@@ -436,9 +432,7 @@ func (h *SurgeonQueriesHandler) extractValueResult(fset *token.FileSet, src []by
 	var buf bytes.Buffer
 	currentLine := startPos.Line
 	for _, line := range codeLines {
-		if strings.TrimSpace(line) != "" {
-			fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
-		}
+		fmt.Fprintf(&buf, "%d: %s\n", currentLine, line)
 		currentLine++
 	}
 
