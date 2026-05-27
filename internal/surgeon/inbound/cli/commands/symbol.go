@@ -28,7 +28,7 @@ Query forms:
   "Name"           matches any function or struct named Name
   "Receiver.Name"  matches a method Name on receiver type Receiver
 
-With --body, the full source code is printed with line numbers (empty lines stripped).
+With --body, the full source code is printed with line numbers (empty lines preserved).
 Without --body, only the declaration signature is shown.
 
 With --module IMPORTPATH, search inside a third-party dependency instead of the current
@@ -103,7 +103,7 @@ Run this before editing a function — read the current body first.`,
 					fmt.Printf("Doc:\n%s\n", res.Doc)
 				}
 				if showBody {
-					fmt.Printf("Code (Empty lines stripped):\n%s\n", res.Code)
+					fmt.Printf("Code:\n%s\n", res.Code)
 				} else {
 					fmt.Printf("Signature:\n%s\n", res.Signature)
 				}
@@ -226,7 +226,7 @@ Run this before editing a function — read the current body first.`,
 				fmt.Printf("Doc:\n%s\n", res.Doc)
 			}
 			if showBody {
-				fmt.Printf("Code (Empty lines stripped):\n%s\n", res.Code)
+				fmt.Printf("Code:\n%s\n", res.Code)
 			} else {
 				fmt.Printf("Signature:\n%s\n", res.Signature)
 			}

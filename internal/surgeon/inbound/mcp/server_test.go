@@ -305,7 +305,7 @@ func TestSymbol_ShowsBody(t *testing.T) {
 
 	result := callTool(t, cs, "symbol", map[string]any{"query": "NewBook", "body": true})
 	text := resultText(t, result)
-	assert.Contains(t, text, "Code (Empty lines stripped; line numbers are file-absolute):")
+	assert.Contains(t, text, "Code (line numbers are file-absolute):")
 	assert.Contains(t, text, "return &Book{Title: title}")
 }
 

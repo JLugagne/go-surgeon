@@ -86,10 +86,11 @@ func FreeFunc() {
 		assert.Contains(t, res[0].Signature, "func (m *MyStruct) DoWork() error")
 		assert.Equal(t, 9, res[0].LineStart)
 		assert.Equal(t, 12, res[0].LineEnd)
-		// Empty line should be stripped
-		assert.NotContains(t, res[0].Code, "10: \n")
+		// Empty lines should be preserved
+		assert.Contains(t, res[0].Code, "10:")
 		assert.Contains(t, res[0].Code, "9: func (m *MyStruct) DoWork() error {")
 		assert.Contains(t, res[0].Code, "11: \treturn nil")
+		assert.Contains(t, res[0].Code, "12: }")
 	})
 
 	t.Run("Find Function", func(t *testing.T) {
