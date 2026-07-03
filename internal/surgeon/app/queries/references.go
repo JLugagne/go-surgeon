@@ -148,6 +148,20 @@ func findObject(loaded *loadedPackages, ref domain.SymbolRef) (types.Object, *pa
 		pkg *packages.Package
 	}
 	var candidates []candidate
+	// Dedup by declaration position + name, not object identity: with
+	// Tests=true the loader returns the same package twice (pkg and
+	// pkg [pkg.test]) and each universe carries its own types.Object
+	// for the same declaration. Pointer comparison would report every
+	// symbol as "ambiguous (2 matches)".
+	seen := make(map[string]struct{})
+	addCandidate := func(obj types.Object, p *packages.Package) {
+		key := objectPosKey(loaded.fset, obj)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, candidate{obj, p})
+	}
 
 	for _, p := range loaded.pkgs {
 		if p.Types == nil || p.TypesInfo == nil {
@@ -161,7 +175,7 @@ func findObject(loaded *loadedPackages, ref domain.SymbolRef) (types.Object, *pa
 		// package-level vars/consts.
 		if obj := p.Types.Scope().Lookup(ref.Name); obj != nil {
 			if ref.Receiver == "" && matchesFileLine(loaded.fset, obj.Pos(), ref) {
-				candidates = append(candidates, candidate{obj, p})
+				addCandidate(obj, p)
 			}
 		}
 
@@ -188,18 +202,9 @@ func findObject(loaded *loadedPackages, ref domain.SymbolRef) (types.Object, *pa
 					continue
 				}
 			}
-			// Skip duplicates (package-scope lookup above may already
-			// have added the same object).
-			dup := false
-			for _, c := range candidates {
-				if c.obj == obj {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				candidates = append(candidates, candidate{obj, p})
-			}
+			// addCandidate skips duplicates (package-scope lookup above
+			// or another package universe may already have added it).
+			addCandidate(obj, p)
 		}
 	}
 
@@ -299,7 +304,7 @@ func collectReferences(target types.Object, loaded *loadedPackages) []domain.Loc
 			continue
 		}
 		for id, obj := range p.TypesInfo.Uses {
-			if !sameObject(obj, target) {
+			if !sameObject(loaded.fset, obj, target) {
 				continue
 			}
 			loc := identLocation(loaded.fset, id, fileSrc)
@@ -313,14 +318,34 @@ func collectReferences(target types.Object, loaded *loadedPackages) []domain.Loc
 	return dedupLocations(locations)
 }
 
-// sameObject handles the embedded-field / interface-method-satisfaction
-// corner cases go/types models as distinct Objects that nevertheless
-// refer to the same declared symbol.
-func sameObject(a, b types.Object) bool {
+// sameObject handles two corner cases where go/types models the same
+// declared symbol as distinct Objects: embedded-field /
+// interface-method-satisfaction aliases, and the duplicate package
+// universes produced by Tests=true (pkg vs pkg [pkg.test], whose
+// *types.Package pointers differ). Declaration position in the shared
+// fset plus name identifies the underlying declaration across all of
+// them.
+func sameObject(fset *token.FileSet, a, b types.Object) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a == b || a.Pos() == b.Pos() && a.Name() == b.Name() && a.Pkg() == b.Pkg()
+	if a == b {
+		return true
+	}
+	if a.Name() != b.Name() || !a.Pos().IsValid() || !b.Pos().IsValid() {
+		return false
+	}
+	pa := fset.Position(a.Pos())
+	pb := fset.Position(b.Pos())
+	return pa.Filename != "" && pa.Filename == pb.Filename && pa.Offset == pb.Offset
+}
+
+// objectPosKey builds a dedup key from an object's declaration position
+// and name — stable across the duplicate package universes Tests=true
+// produces, unlike the *types.Object pointer.
+func objectPosKey(fset *token.FileSet, obj types.Object) string {
+	pos := fset.Position(obj.Pos())
+	return fmt.Sprintf("%s:%d:%s", pos.Filename, pos.Offset, obj.Name())
 }
 
 // identLocation turns an *ast.Ident into a domain.Location, lazily

@@ -200,6 +200,11 @@ func extractParams(src []byte, fset *token.FileSet, ft *ast.FuncType) (string, s
 	for i, field := range ft.Params.List {
 		typeSrc := nodeSource(src, fset, field.Type)
 		isVariadic := isVariadicField(field, ft, i)
+		if isVariadic {
+			// *ast.Ellipsis source already reads "...T"; strip the prefix so
+			// the single "..." added below isn't doubled.
+			typeSrc = strings.TrimPrefix(typeSrc, "...")
+		}
 
 		if len(field.Names) == 0 {
 			// Unnamed parameter
@@ -207,7 +212,7 @@ func extractParams(src []byte, fset *token.FileSet, ft *ast.FuncType) (string, s
 			unnamed++
 			if isVariadic {
 				// variadic: type is "[]T" in source as "...T"
-				paramParts = append(paramParts, fmt.Sprintf("%s ...%s", name, strings.TrimPrefix(typeSrc, "[]")))
+				paramParts = append(paramParts, fmt.Sprintf("%s ...%s", name, typeSrc))
 				argParts = append(argParts, name+"...")
 			} else {
 				paramParts = append(paramParts, fmt.Sprintf("%s %s", name, typeSrc))
@@ -217,7 +222,7 @@ func extractParams(src []byte, fset *token.FileSet, ft *ast.FuncType) (string, s
 			for _, ident := range field.Names {
 				name := ident.Name
 				if isVariadic {
-					paramParts = append(paramParts, fmt.Sprintf("%s ...%s", name, strings.TrimPrefix(typeSrc, "[]")))
+					paramParts = append(paramParts, fmt.Sprintf("%s ...%s", name, typeSrc))
 					argParts = append(argParts, name+"...")
 				} else {
 					paramParts = append(paramParts, fmt.Sprintf("%s %s", name, typeSrc))

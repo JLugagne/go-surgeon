@@ -148,6 +148,68 @@ func validateNoDroppedStmts(replacement, matched, preBody, postBody string) erro
 	}
 }
 
+// validateNoDroppedStmtsBatch is the multi-replace form of
+// validateNoDroppedStmts. When one request applies several shrinking replaces
+// — or an occurrence:-1 replace lands the same shrink on every hit — the
+// single-application math (pre - matched + repl) under-counts, because postBody
+// reflects EVERY replace while each per-check expected count only backs out one
+// match. That false-positives with PATCH_DROPPED_CONTENT (backlog item 11).
+//
+// This version sums matched/replacement statement counts across all multiline
+// replace checks and compares once against postBody. All checks are expected to
+// share the same pre-body (patch_function resolves against a single origBody);
+// checks whose replacement is single-line or whose match/replacement is not a
+// statement list are skipped, matching validateNoDroppedStmts.
+func validateNoDroppedStmtsBatch(checks []replaceValidation, postBody string) error {
+	var preBody string
+	totalMatched, totalRepl := 0, 0
+	any := false
+	for _, rv := range checks {
+		if rv.Match == "" || rv.PreBody == "" {
+			continue
+		}
+		if !strings.Contains(rv.Replacement, "\n") {
+			continue
+		}
+		replCount, ok := parseRecursiveStmtCount(rv.Replacement)
+		if !ok || replCount < 2 {
+			continue
+		}
+		matchedCount, ok := parseRecursiveStmtCount(rv.Match)
+		if !ok {
+			continue
+		}
+		preBody = rv.PreBody
+		totalMatched += matchedCount
+		totalRepl += replCount
+		any = true
+	}
+	if !any {
+		return nil
+	}
+	preCount, ok := parseRecursiveStmtCount(preBody)
+	if !ok {
+		return nil
+	}
+	postCount, ok := parseRecursiveStmtCount(postBody)
+	if !ok {
+		return nil
+	}
+	expected := preCount - totalMatched + totalRepl
+	if postCount >= expected {
+		return nil
+	}
+	return &domain.Error{
+		Code: droppedContentCode,
+		Message: fmt.Sprintf(
+			"patch (replace): function body has %d statements after splice but %d were expected (pre=%d, matched=%d, replacement=%d across all replaces) — write rolled back to prevent silent data loss. "+
+				"This is the multi-line shrinking-replace bug (issue #14): a match consumed more statements than its replacement re-inserted. "+
+				"Use update object=func with the full new body for multi-line edits.",
+			postCount, expected, preCount, totalMatched, totalRepl,
+		),
+	}
+}
+
 // parseReplacementDeclNames parses `replacement` as the body of a Go file
 // (a synthetic `package _` is prepended) and returns the slice of
 // top-level declaration names — function names, type names, and var/const

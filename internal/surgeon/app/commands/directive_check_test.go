@@ -9,7 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDirective_PatchFile_InsertCommentBetweenEmbedAndVar_Rejected(t *testing.T) {
+// TestDirective_PatchFile_InsertCommentBetweenEmbedAndVar_Accepted: per the
+// go:embed spec, "only blank lines and other comment lines are allowed
+// between the directive and the declaration" — a comment keeps the directive
+// attached (same comment group), so the patch must be accepted. The previous
+// stricter rule ("directive must be the last comment in its group") also
+// rejected idiomatic stacked //go:embed directives, blocking every patch to
+// such files.
+func TestDirective_PatchFile_InsertCommentBetweenEmbedAndVar_Accepted(t *testing.T) {
 	ctx := context.Background()
 	h, fs := newPatchHandler()
 	setFile(fs, "f.go", `package p
@@ -26,11 +33,10 @@ var migrationsFS embed.FS
 			{Match: "//go:embed *.sql\nvar", Replace: "//go:embed *.sql\n//nolint:unused\nvar"},
 		},
 	})
-	require.Error(t, err)
-	var domErr *domain.Error
-	require.ErrorAs(t, err, &domErr)
-	assert.Equal(t, "PATCH_BREAKS_DIRECTIVE", domErr.Code)
-	assert.Contains(t, domErr.Message, "//go:embed")
+	require.NoError(t, err)
+	content, err := fs.ReadFile(ctx, "f.go")
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "//go:embed *.sql\n//nolint:unused\nvar migrationsFS embed.FS")
 }
 
 func TestDirective_PatchFile_InsertAfterTarget_Accepted(t *testing.T) {

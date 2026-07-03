@@ -56,11 +56,7 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 
 	var warnings []string
 	// Phase 1: resolve all patches against the original body.
-	type resolvedEdit struct {
-		start, end  int
-		replacement string
-	}
-	edits := make([]resolvedEdit, len(req.Patches))
+	edits := make([]resolvedEdit, 0, len(req.Patches))
 	var errs []string
 	// Issue #3: track resolved replacements so we can verify post-splice that
 	// each op=replace's text actually landed in the new file.
@@ -98,7 +94,7 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 				continue
 			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
-			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			edits = append(edits, resolvedEdit{start: ls, end: le, replacement: lrepl, patch: i + 1})
 			if p.Op == domain.PatchOpReplace {
 				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl})
 			}
@@ -180,56 +176,73 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 				}
 			}
 		}
-		hit := hits[idx]
 
-		switch p.Op {
-		case domain.PatchOpReplace:
-			if p.Replace == "" {
-				errs = append(errs, fmt.Sprintf("patch #%d (replace): replace field is empty — did you mean to use op:delete, or did you misspell the field name (replace, not replacement)?", i+1))
-				continue
-			}
-			repl := p.Replace
-			if repl != "" && !startsWithWhitespace(repl) {
-				if indent := lineIndent(origBody, hit[0]); indent != "" && hit[0] == lineStartOffset(origBody, hit[0]) {
-					repl = reIndentReplacement(repl, indent)
+		if p.Op == domain.PatchOpReplace && p.Replace == "" {
+			errs = append(errs, fmt.Sprintf("patch #%d (replace): replace field is empty — did you mean to use op:delete, or did you misspell the field name (replace, not replacement)?", i+1))
+			continue
+		}
+
+		// occurrence: -1 applies the op to every hit; anything else targets
+		// the single selected hit.
+		targetHits := hits[idx : idx+1]
+		if p.Occurrence == -1 {
+			targetHits = hits
+		}
+
+		unknownOp := false
+		for _, hit := range targetHits {
+			switch p.Op {
+			case domain.PatchOpReplace:
+				repl := p.Replace
+				if p.MatchRegex != "" {
+					repl = expandRegexReplace(p.MatchRegex, origBody[hit[0]:hit[1]], repl)
 				}
+				if repl != "" && !startsWithWhitespace(repl) {
+					if indent := lineIndent(origBody, hit[0]); indent != "" && hit[0] == lineStartOffset(origBody, hit[0]) {
+						repl = reIndentReplacement(repl, indent)
+					}
+				}
+				edits = append(edits, resolvedEdit{start: hit[0], end: hit[1], replacement: repl, patch: i + 1})
+				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
+
+			case domain.PatchOpInsertBefore:
+				indent := lineIndent(origBody, hit[0])
+				line := indent + strings.TrimSpace(p.Code) + "\n"
+				lineStart := lineStartOffset(origBody, hit[0])
+				edits = append(edits, resolvedEdit{start: lineStart, end: lineStart, replacement: line, patch: i + 1})
+
+			case domain.PatchOpInsertAfter:
+				indent := lineIndent(origBody, hit[0])
+				line := indent + strings.TrimSpace(p.Code) + "\n"
+				lineEnd := lineEndOffset(origBody, hit[0])
+				edits = append(edits, resolvedEdit{start: lineEnd, end: lineEnd, replacement: line, patch: i + 1})
+
+			case domain.PatchOpDelete:
+				start, end := deletionRange(origBody, hit[0], hit[1])
+				edits = append(edits, resolvedEdit{start: start, end: end, replacement: "", patch: i + 1})
+
+			case domain.PatchOpWrap:
+				// validateStmt=false: the wrapped text is inside a const/var
+				// value, not a function body — it might be a partial expression
+				// fragment that isn't a valid Go statement on its own. The final
+				// validateGoSource pass below still rejects anything that breaks
+				// the file.
+				ws, we, wrepl, _ := buildWrapEdit(origBody, p.Wrap, hit, false)
+				edits = append(edits, resolvedEdit{start: ws, end: we, replacement: wrepl, patch: i + 1})
+
+			default:
+				errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap)", i+1, p.Op))
+				unknownOp = true
 			}
-			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
-			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl})
-
-		case domain.PatchOpInsertBefore:
-			indent := lineIndent(origBody, hit[0])
-			line := indent + strings.TrimSpace(p.Code) + "\n"
-			lineStart := lineStartOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineStart, end: lineStart, replacement: line}
-
-		case domain.PatchOpInsertAfter:
-			indent := lineIndent(origBody, hit[0])
-			line := indent + strings.TrimSpace(p.Code) + "\n"
-			lineEnd := lineEndOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineEnd, end: lineEnd, replacement: line}
-
-		case domain.PatchOpDelete:
-			start, end := deletionRange(origBody, hit[0], hit[1])
-			edits[i] = resolvedEdit{start: start, end: end, replacement: ""}
-
-		case domain.PatchOpWrap:
-			indent := lineIndent(origBody, hit[0])
-			trimmedMatch := strings.TrimSpace(origBody[hit[0]:hit[1]])
-			replacement := indent + fmt.Sprintf(p.Wrap, trimmedMatch)
-			// Note: we deliberately do NOT run validateGoStmt here. The wrapped
-			// text is inside a const/var value, not a function body — the value
-			// might be a partial expression fragment that isn't a valid Go
-			// statement on its own. The final validateGoSource pass below
-			// still rejects anything that breaks the file.
-			lineStart := lineStartOffset(origBody, hit[0])
-			lineEnd := lineEndOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineStart, end: lineEnd, replacement: replacement + "\n"}
-
-		default:
-			errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap)", i+1, p.Op))
+			if unknownOp {
+				break
+			}
 		}
 	}
+
+	// Reject overlapping resolved edits up-front (backlog item 12) — the
+	// back-to-front splice below corrupts bytes when two ranges intersect.
+	errs = append(errs, editOverlapErrors(origBody, bodyStartLine, edits)...)
 
 	if len(errs) > 0 {
 		msg := strings.Join(errs, "\n")
@@ -251,7 +264,13 @@ func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDecl
 		order[i] = i
 	}
 	sort.Slice(order, func(a, b int) bool {
-		return edits[order[a]].start > edits[order[b]].start
+		ea, eb := edits[order[a]], edits[order[b]]
+		if ea.start != eb.start {
+			return ea.start > eb.start
+		}
+		// Same start: apply the wider edit first so a zero-width insert at
+		// the same offset deterministically lands BEFORE the edited range.
+		return ea.end > eb.end
 	})
 
 	newBody := []byte(origBody)

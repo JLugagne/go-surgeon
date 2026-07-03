@@ -91,6 +91,10 @@ func (h *ExecutePlanHandler) ExtractInterface(ctx context.Context, req domain.Ex
 		MockName: req.MockName,
 	}
 
-	msg, _, err := h.AddInterface(ctx, actionReq)
-	return msg, err
+	if _, _, err := h.AddInterface(ctx, actionReq); err != nil {
+		return "", err
+	}
+	// Callers (CLI output, MCP interface_file field) consume the return
+	// value as the interface's destination path.
+	return destPath, nil
 }

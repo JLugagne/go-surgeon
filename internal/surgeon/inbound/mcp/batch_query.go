@@ -166,7 +166,10 @@ func dispatchBatchSymbol(ctx context.Context, queries service.SurgeonQueries, it
 		return text, results, nil
 	}
 
-	results := findSymbols(ctx, queries, item.Query, item.Tests, dir, item.Module, item.Context)
+	results, err := findSymbols(ctx, queries, item.Query, item.Tests, dir, item.Module, item.Context)
+	if len(results) == 0 && err != nil {
+		return "", nil, err
+	}
 	if len(results) == 0 {
 		return fmt.Sprintf("No matches found for '%s'.", item.Query), results, nil
 	}

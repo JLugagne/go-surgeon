@@ -32,10 +32,10 @@ func innerScopeLabel(n ast.Node) string {
 // conditional branch.
 type liftTarget struct {
 	// ShouldLift is true when fileOff is inside a nested scope (i.e., not
-	// directly in fn.Body) and a top-level statement was identified.
+	// directly in the target body) and a top-level statement was identified.
 	ShouldLift bool
-	// TopStmt is the outermost *ast.Stmt within fn.Body.List whose extent
-	// contains fileOff. Nil when ShouldLift is false.
+	// TopStmt is the outermost *ast.Stmt within the target body's List whose
+	// extent contains fileOff. Nil when ShouldLift is false.
 	TopStmt ast.Stmt
 	// InnerLabel is the human label of the innermost nested scope the
 	// anchor landed in (e.g., "closure body", "if/else branch"). Empty
@@ -49,31 +49,43 @@ type liftTarget struct {
 	TopLine int
 }
 
-// findLiftTarget searches for the outermost statement inside fn.Body.List
+// findLiftTarget is the *ast.FuncDecl convenience wrapper around
+// findLiftTargetInBody, resolving against fn's own body.
+func findLiftTarget(fset *token.FileSet, fn *ast.FuncDecl, fileOff int) liftTarget {
+	if fn == nil {
+		return liftTarget{}
+	}
+	return findLiftTargetInBody(fset, fn.Body, fileOff)
+}
+
+// findLiftTargetInBody searches for the outermost statement inside body.List
 // whose extent covers fileOff. It returns the "innermost scope-introducing
 // node" along the path, used to describe where the anchor landed.
 //
-// If fileOff is already directly inside fn.Body (not inside any nested scope
+// body is the TARGET body being patched — the function's own body, or a
+// drilled closure body for Parent>closure[N] identifiers (backlog item 5:
+// lift resolution must never escape the closure being edited).
+//
+// If fileOff is already directly inside body (not inside any nested scope
 // such as a closure, if-branch, for-loop, switch-case, etc.), ShouldLift is
 // false and TopStmt is nil.
 //
-// Never lifts across a function boundary: nested *ast.FuncDecl (not possible
-// in Go, but safe-guarded) and top-level func declarations are out of scope
-// because we only walk fn.Body.
-func findLiftTarget(fset *token.FileSet, fn *ast.FuncDecl, fileOff int) liftTarget {
+// Never lifts across a function boundary: we only walk body.List, so the
+// lift target always stays inside the body being patched.
+func findLiftTargetInBody(fset *token.FileSet, body *ast.BlockStmt, fileOff int) liftTarget {
 	var lt liftTarget
-	if fn == nil || fn.Body == nil || fset == nil {
+	if body == nil || fset == nil {
 		return lt
 	}
-	bodyStart := fset.Position(fn.Body.Lbrace).Offset
-	bodyEnd := fset.Position(fn.Body.Rbrace).Offset
+	bodyStart := fset.Position(body.Lbrace).Offset
+	bodyEnd := fset.Position(body.Rbrace).Offset
 	if fileOff <= bodyStart || fileOff >= bodyEnd {
 		return lt
 	}
 
-	// Find the outermost statement in fn.Body.List that contains fileOff.
+	// Find the outermost statement in body.List that contains fileOff.
 	var topStmt ast.Stmt
-	for _, stmt := range fn.Body.List {
+	for _, stmt := range body.List {
 		ns := fset.Position(stmt.Pos()).Offset
 		ne := fset.Position(stmt.End()).Offset
 		if fileOff >= ns && fileOff < ne {
@@ -121,7 +133,7 @@ func findLiftTarget(fset *token.FileSet, fn *ast.FuncDecl, fileOff int) liftTarg
 	// targeted the top-level statement itself, so don't lift.
 	topKwLine := fset.Position(topStmt.Pos()).Line
 	hitLine := 0
-	if file := fset.File(fn.Pos()); file != nil {
+	if file := fset.File(body.Pos()); file != nil {
 		hitLine = file.Position(file.Pos(fileOff)).Line
 	}
 	if hitLine == topKwLine && innerScopeLabel(topStmt) != "" {
@@ -131,7 +143,7 @@ func findLiftTarget(fset *token.FileSet, fn *ast.FuncDecl, fileOff int) liftTarg
 	lt.ShouldLift = true
 	lt.TopStmt = topStmt
 	lt.InnerLabel = innerLabel
-	if file := fset.File(fn.Pos()); file != nil {
+	if file := fset.File(body.Pos()); file != nil {
 		lt.InnerLine = file.Position(file.Pos(fileOff)).Line
 	}
 	lt.TopLine = fset.Position(topStmt.Pos()).Line

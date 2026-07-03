@@ -117,6 +117,45 @@ func qualifyType(typStr, pkgName string) string {
 	return prefix + pkgName + "." + base
 }
 
+// qualifyTypeExpr renders a type expression as Go source, prefixing every
+// same-package exported named type with pkgName so the type resolves inside a
+// "<pkg>_test" (black-box) file. It recurses through pointers, arrays/slices,
+// maps, channels and variadic elements; selector types (already qualified),
+// unexported names and builtins are emitted unchanged. Other composites
+// (func/struct/interface/generics) fall back to the verbatim source slice.
+func qualifyTypeExpr(expr ast.Expr, src []byte, fset *token.FileSet, pkgName string) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		if unicode.IsUpper([]rune(t.Name)[0]) {
+			return pkgName + "." + t.Name
+		}
+		return t.Name
+	case *ast.StarExpr:
+		return "*" + qualifyTypeExpr(t.X, src, fset, pkgName)
+	case *ast.ArrayType:
+		lenStr := ""
+		if t.Len != nil {
+			lenStr = typeToString(t.Len, src, fset)
+		}
+		return "[" + lenStr + "]" + qualifyTypeExpr(t.Elt, src, fset, pkgName)
+	case *ast.MapType:
+		return "map[" + qualifyTypeExpr(t.Key, src, fset, pkgName) + "]" + qualifyTypeExpr(t.Value, src, fset, pkgName)
+	case *ast.Ellipsis:
+		return "..." + qualifyTypeExpr(t.Elt, src, fset, pkgName)
+	case *ast.ChanType:
+		dir := "chan "
+		switch t.Dir {
+		case ast.SEND:
+			dir = "chan<- "
+		case ast.RECV:
+			dir = "<-chan "
+		}
+		return dir + qualifyTypeExpr(t.Value, src, fset, pkgName)
+	default:
+		return typeToString(expr, src, fset)
+	}
+}
+
 func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
 	src, err := h.fs.ReadFile(ctx, filePath)
 	if err != nil {
@@ -171,9 +210,22 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 		}
 	}
 
+	// Determine up front whether this is a black-box test. In a black-box
+	// ("<pkg>_test") file the param/result types below must be package-qualified
+	// too — not just the receiver — or same-package named types are undefined.
+	pkgName := f.Name.Name
+	blackBox := recvType == "" || isExported(recvType)
+	// A free function is black-box only if it is exported.
+	if recvType == "" {
+		blackBox = isExported(funcName)
+	}
+
 	if targetFunc.Type.Params != nil {
 		for i, field := range targetFunc.Type.Params.List {
 			typStr := typeToString(field.Type, src, fset)
+			if blackBox {
+				typStr = qualifyTypeExpr(field.Type, src, fset, pkgName)
+			}
 			if len(field.Names) == 0 {
 				params = append(params, paramInfo{Name: fmt.Sprintf("arg%d", i), Type: typStr})
 			} else {
@@ -191,6 +243,9 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 	if targetFunc.Type.Results != nil {
 		for i, field := range targetFunc.Type.Results.List {
 			typStr := typeToString(field.Type, src, fset)
+			if blackBox {
+				typStr = qualifyTypeExpr(field.Type, src, fset, pkgName)
+			}
 			if typStr == "error" {
 				returnsError = true
 				continue
@@ -221,15 +276,6 @@ func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identif
 			fmt.Fprintf(&buf, "\t\t%s %s\n", p.Name, p.Type)
 		}
 		buf.WriteString("\t}\n")
-	}
-
-	// Determine whether this will be a black-box test up front so we can use
-	// it when emitting the test struct fields too.
-	pkgName := f.Name.Name
-	blackBox := recvType == "" || isExported(recvType)
-	// A free function is black-box only if it is exported.
-	if recvType == "" {
-		blackBox = isExported(funcName)
 	}
 
 	// In a black-box test, an exported receiver type must be package-qualified.

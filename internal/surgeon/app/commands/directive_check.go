@@ -43,7 +43,7 @@ func checkDirectivesIntact(src []byte, filePath string) error {
 	}
 
 	for _, cg := range f.Comments {
-		for ci, c := range cg.List {
+		for _, c := range cg.List {
 			directive := ""
 			for _, prefix := range criticalPrefixes {
 				if strings.HasPrefix(c.Text, prefix) {
@@ -55,20 +55,10 @@ func checkDirectivesIntact(src []byte, filePath string) error {
 				continue
 			}
 
+			// Stacked directives (several //go:embed lines) and trailing
+			// comments in the same group are idiomatic and keep their
+			// attachment — only group/declaration adjacency matters below.
 			directiveLine := fset.Position(c.Pos()).Line
-
-			// Rule 1: the directive must be the LAST comment in its group.
-			// If there are more comments after it in the same group, something
-			// was inserted between the directive and the declaration.
-			if ci < len(cg.List)-1 {
-				return &domain.Error{
-					Code: "PATCH_BREAKS_DIRECTIVE",
-					Message: fmt.Sprintf(
-						"patch would detach %s directive at line %d from its target declaration — insert code after the declaration, not between the directive and its target",
-						directive, directiveLine,
-					),
-				}
-			}
 
 			// Find the declaration associated with this comment group.
 			var assocDecl ast.Decl

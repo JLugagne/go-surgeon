@@ -35,7 +35,7 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 		}
 	}
 
-	elements := parseStructFields(fset, src, structType)
+	elements, trailing := parseStructFields(fset, src, structType)
 
 	// Phase 1: resolve and validate all patches against the ORIGINAL element list.
 	working := make([]*element, len(elements))
@@ -75,6 +75,19 @@ func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchSt
 	indent := detectStructIndent(src, lbraceOff, rbraceOff)
 
 	newBody := renderElements(working, indent, src)
+	// Re-append free-standing lines that sat between the last field and the
+	// closing brace (comments, blank lines) — they are not part of any element.
+	if len(trailing) > 0 {
+		trimmed := make([]string, len(trailing))
+		for i, l := range trailing {
+			trimmed[i] = strings.TrimRight(l, " \t")
+		}
+		if newBody == "" {
+			newBody = strings.Join(trimmed, "\n")
+		} else {
+			newBody += "\n" + strings.Join(trimmed, "\n")
+		}
+	}
 
 	newSrc := make([]byte, 0, len(src)+len(newBody))
 	newSrc = append(newSrc, src[:lbraceOff+1]...)
@@ -129,6 +142,22 @@ type element struct {
 	dirty bool
 	// Trailing // comment on the same line as the field, without the leading //, or empty.
 	inlineComment string
+	// leading holds the free-standing lines (blank lines and comments not
+	// attached to any field) found immediately above this element; they are
+	// re-emitted verbatim before it.
+	leading []string
+	// group is shared by the members of one multi-name declaration
+	// (x, y int); nil for ordinary elements.
+	group *fieldGroup
+}
+
+// fieldGroup is the shared state of elements born from one multi-name field
+// declaration. It lets the renderer keep the members grouped on one line and
+// emit the shared doc / inline comment only once when the group is split.
+type fieldGroup struct {
+	size          int // original member count
+	docEmitted    bool
+	inlineEmitted bool
 }
 
 // findTargetStruct locates the target struct declaration by name.
@@ -158,8 +187,22 @@ func findTargetStruct(f *ast.File, identifier string) (*ast.TypeSpec, *ast.Struc
 }
 
 // parseStructFields walks the struct's field list into an element slice.
-func parseStructFields(fset *token.FileSet, src []byte, st *ast.StructType) []*element {
+// The second return value holds the free-standing lines (comments, blanks)
+// between the last field and the closing brace, preserved verbatim.
+func parseStructFields(fset *token.FileSet, src []byte, st *ast.StructType) ([]*element, []string) {
 	var out []*element
+	openPos := fset.Position(st.Fields.Opening)
+	closeLine := fset.Position(st.Fields.Closing).Line
+	multiLine := closeLine > openPos.Line
+
+	// cursor tracks the offset just past the last consumed body line; the
+	// text between cursor and the next field's first line is free-standing
+	// (blank lines and comments not attached to any field).
+	cursor := openPos.Offset + 1
+	for cursor < len(src) && src[cursor-1] != '\n' {
+		cursor++
+	}
+
 	for _, field := range st.Fields.List {
 		typeExpr := extractSourceRange(src, fset, field.Type.Pos(), field.Type.End())
 		var tag string
@@ -192,7 +235,35 @@ func parseStructFields(fset *token.FileSet, src []byte, st *ast.StructType) []*e
 		if field.Comment != nil {
 			rawEnd = field.Comment.End()
 		}
+		startPos := fset.Position(rawStart)
+		endPos := fset.Position(rawEnd)
 		rawLine := extractLineRange(src, fset, rawStart, rawEnd)
+		// A raw line sharing a line with either brace would drag the brace
+		// (and the surrounding declaration text) into the re-rendered body —
+		// e.g. single-line structs. Render such elements fresh instead.
+		if startPos.Line == openPos.Line || endPos.Line == closeLine {
+			rawLine = ""
+		}
+
+		var leading []string
+		if multiLine {
+			if startPos.Line > openPos.Line {
+				lineStart := startPos.Offset
+				for lineStart > 0 && src[lineStart-1] != '\n' {
+					lineStart--
+				}
+				if cursor < lineStart {
+					leading = strings.Split(strings.TrimSuffix(string(src[cursor:lineStart]), "\n"), "\n")
+				}
+			}
+			lineEnd := endPos.Offset
+			for lineEnd < len(src) && src[lineEnd] != '\n' {
+				lineEnd++
+			}
+			if lineEnd+1 > cursor {
+				cursor = lineEnd + 1
+			}
+		}
 
 		if len(field.Names) == 0 {
 			// Embedded field — the "name" is the bare type literal.
@@ -204,30 +275,48 @@ func parseStructFields(fset *token.FileSet, src []byte, st *ast.StructType) []*e
 				doc:           doc,
 				inlineComment: inlineComment,
 				rawLine:       rawLine,
+				leading:       leading,
 			})
 			continue
 		}
-		for _, n := range field.Names {
-			out = append(out, &element{
+		// A multi-name declaration (x, y int) becomes one element per name,
+		// linked through a shared fieldGroup so the renderer can keep them
+		// grouped (or split them without duplicating the shared comments).
+		var g *fieldGroup
+		if len(field.Names) > 1 {
+			g = &fieldGroup{size: len(field.Names)}
+		}
+		for i, n := range field.Names {
+			e := &element{
 				name:          n.Name,
 				kind:          "field",
 				typeExpr:      typeExpr,
 				tag:           tag,
 				doc:           doc,
 				inlineComment: inlineComment,
-				rawLine:       rawLine,
-			})
-			// When a field declaration groups multiple names (x, y int), we
-			// only have a single raw line — we can't copy it per-name, so
-			// mark all but the first dirty so the renderer emits fresh lines.
-			// This keeps correctness at the cost of reformatting grouped fields.
-			if len(field.Names) > 1 {
-				out[len(out)-1].dirty = true
-				out[len(out)-1].rawLine = ""
+				group:         g,
 			}
+			// The raw line and leading lines cover the whole declaration;
+			// attach them to the first member only.
+			if i == 0 {
+				e.rawLine = rawLine
+				e.leading = leading
+			}
+			out = append(out, e)
 		}
 	}
-	return out
+
+	var trailing []string
+	if multiLine {
+		lineStart := fset.Position(st.Fields.Closing).Offset
+		for lineStart > 0 && src[lineStart-1] != '\n' {
+			lineStart--
+		}
+		if cursor < lineStart {
+			trailing = strings.Split(strings.TrimSuffix(string(src[cursor:lineStart]), "\n"), "\n")
+		}
+	}
+	return out, trailing
 }
 
 // applyStructPatch mutates *working in place according to one patch.
@@ -462,18 +551,96 @@ func detectStructIndent(src []byte, lbraceOff, rbraceOff int) string {
 
 // renderElements emits the body content between the braces (without the braces
 // themselves), one element per line, using src to preserve unchanged lines.
+// Free-standing lines captured in element.leading are re-emitted verbatim,
+// and members of a multi-name declaration are rendered together.
 func renderElements(elems []*element, indent string, src []byte) string {
 	var lines []string
-	for _, e := range elems {
-		if !e.dirty && e.rawLine != "" {
-			// Preserve the original raw line verbatim (including any leading doc).
-			// Trim any trailing whitespace but keep inner structure.
-			lines = append(lines, strings.TrimRight(e.rawLine, " \t"))
+	for i := 0; i < len(elems); {
+		e := elems[i]
+		for _, l := range e.leading {
+			lines = append(lines, strings.TrimRight(l, " \t"))
+		}
+		if e.group == nil {
+			if !e.dirty && e.rawLine != "" {
+				// Preserve the original raw line verbatim (including any leading doc).
+				// Trim any trailing whitespace but keep inner structure.
+				lines = append(lines, strings.TrimRight(e.rawLine, " \t"))
+			} else {
+				lines = append(lines, renderElement(e, indent))
+			}
+			i++
 			continue
 		}
-		lines = append(lines, renderElement(e, indent))
+		// Collect the maximal run of consecutive members of the same group.
+		j := i + 1
+		for j < len(elems) && elems[j].group == e.group {
+			j++
+		}
+		lines = append(lines, renderGroupRun(elems[i:j], indent)...)
+		i = j
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderGroupRun renders consecutive members of one multi-name declaration.
+// An untouched, complete group is copied verbatim; members that still share
+// type/tag/doc are re-grouped on one line; diverged members get one line
+// each, with the shared doc and inline comment emitted only once.
+func renderGroupRun(run []*element, indent string) []string {
+	g := run[0].group
+	first := run[0]
+	clean, uniform := true, true
+	for _, m := range run {
+		if m.dirty {
+			clean = false
+		}
+		if m.typeExpr != first.typeExpr || m.tag != first.tag ||
+			m.doc != first.doc || m.inlineComment != first.inlineComment {
+			uniform = false
+		}
+	}
+	if len(run) == g.size && clean && first.rawLine != "" {
+		g.docEmitted = true
+		g.inlineEmitted = true
+		return []string{strings.TrimRight(first.rawLine, " \t")}
+	}
+	takeDoc := func(m *element) string {
+		if g.docEmitted {
+			return ""
+		}
+		g.docEmitted = true
+		return m.doc
+	}
+	takeInline := func(m *element) string {
+		if g.inlineEmitted {
+			return ""
+		}
+		g.inlineEmitted = true
+		return m.inlineComment
+	}
+	if uniform {
+		names := make([]string, len(run))
+		for i, m := range run {
+			names[i] = m.name
+		}
+		return []string{renderElement(&element{
+			name:          strings.Join(names, ", "),
+			kind:          "field",
+			typeExpr:      first.typeExpr,
+			tag:           first.tag,
+			doc:           takeDoc(first),
+			inlineComment: takeInline(first),
+		}, indent)}
+	}
+	out := make([]string, 0, len(run))
+	for _, m := range run {
+		cp := *m
+		cp.doc = takeDoc(m)
+		cp.inlineComment = takeInline(m)
+		cp.rawLine = ""
+		out = append(out, renderElement(&cp, indent))
+	}
+	return out
 }
 
 // renderElement returns the text for one element, including its doc comment

@@ -195,13 +195,10 @@ func Second() string {
 	require.True(t, strings.Contains(err.Error(), "not found"),
 		"expected NODE_NOT_FOUND-style error, got: %v", err)
 
-	// Note: true transactional rollback would require a dry-run + commit
-	// phase; current execute_plan writes sequentially, so by design the
-	// first patch IS applied before the second one fails. This test
-	// documents that behavior (and will need revisiting if the parallel
-	// dry-run-coordination work ever makes the whole plan atomic).
-	// We therefore only assert the error is surfaced, not that the file
-	// matches the initial bytes exactly.
+	// Plans now run against an in-memory overlay and commit only after
+	// every action succeeds, so the failing second action leaves the first
+	// patch unwritten — TestExecutePlan_FailedActionRollsBackEarlierWrites
+	// asserts the rollback; here we only assert the error surface.
 	_ = fs2.files[path]
 }
 

@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
@@ -67,14 +70,7 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		var actionType domain.ActionType
 		if in.Object == "auto" {
-			trimmed := strings.TrimSpace(in.Content)
-			if strings.HasPrefix(trimmed, "func ") {
-				actionType = domain.ActionTypeAddFunc
-			} else if strings.Contains(trimmed, "type ") && strings.Contains(trimmed, "struct {") {
-				actionType = domain.ActionTypeAddStruct
-			} else {
-				actionType = domain.ActionTypeCreateFile
-			}
+			actionType = classifyCreateContent(in.Content)
 		} else {
 			var ok bool
 			actionType, ok = createObjectMap[in.Object]
@@ -133,15 +129,9 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		var actionType domain.ActionType
 		if in.Object == "auto" {
-			trimmed := strings.TrimSpace(in.Content)
-			if strings.HasPrefix(trimmed, "func ") {
-				actionType = domain.ActionTypeUpdateFunc
-			} else if strings.Contains(trimmed, "type ") && strings.Contains(trimmed, "struct {") {
-				actionType = domain.ActionTypeUpdateStruct
-			} else if strings.HasPrefix(trimmed, "const ") || strings.HasPrefix(trimmed, "var ") {
-				actionType = domain.ActionTypeUpdateDecl
-			} else {
-				actionType = domain.ActionTypeReplaceFile
+			var errResult *mcp.CallToolResult
+			if actionType, errResult = classifyUpdateContent(in.Content); errResult != nil {
+				return errResult, nil, nil
 			}
 		} else {
 			var ok bool
@@ -240,4 +230,90 @@ func registerActionTools(s *mcp.Server, commands service.SurgeonCommands) {
 		}
 		return res, nil, nil
 	})
+}
+
+// classifyDeclContent parses decl-only content and reports what its single
+// top-level declaration is: "func", "struct", "interface", "decl" (const /
+// var / other type declarations), "file" (content carries its own package
+// clause), or "multi" (several declarations). ok=false means the content is
+// not parseable Go. Parsing replaces the previous string-prefix sniffing,
+// which misrouted doc-comment-prefixed declarations, single-line structs
+// (`type T struct{ … }`), interfaces and type aliases.
+func classifyDeclContent(content string) (string, bool) {
+	fset := token.NewFileSet()
+	if f, err := parser.ParseFile(fset, "sniff.go", content, parser.PackageClauseOnly); err == nil && f.Name != nil {
+		return "file", true
+	}
+	f, err := parser.ParseFile(fset, "sniff.go", "package sniff\n"+content, parser.SkipObjectResolution)
+	if err != nil || len(f.Decls) == 0 {
+		return "", false
+	}
+	if len(f.Decls) > 1 {
+		return "multi", true
+	}
+	switch d := f.Decls[0].(type) {
+	case *ast.FuncDecl:
+		return "func", true
+	case *ast.GenDecl:
+		if d.Tok == token.TYPE && len(d.Specs) == 1 {
+			if ts, ok := d.Specs[0].(*ast.TypeSpec); ok {
+				switch ts.Type.(type) {
+				case *ast.StructType:
+					return "struct", true
+				case *ast.InterfaceType:
+					return "interface", true
+				}
+			}
+		}
+		return "decl", true
+	default:
+		return "", false
+	}
+}
+
+// classifyCreateContent maps object=auto create content to an action type.
+// Funcs and structs (including doc-comment-prefixed and single-line forms)
+// route to append actions; everything else keeps the historical create_file
+// fallback, which is safe for create: an existing target file fails with
+// FILE_ALREADY_EXISTS instead of being overwritten.
+func classifyCreateContent(content string) domain.ActionType {
+	kind, ok := classifyDeclContent(content)
+	if !ok {
+		return domain.ActionTypeCreateFile
+	}
+	switch kind {
+	case "func":
+		return domain.ActionTypeAddFunc
+	case "struct":
+		return domain.ActionTypeAddStruct
+	default:
+		return domain.ActionTypeCreateFile
+	}
+}
+
+// classifyUpdateContent maps object=auto update content to an action type.
+// It refuses to guess when content is not a single declaration: the old
+// fallback silently routed anything unrecognized to replace_file, which
+// rewrites the whole target file and destroys every other declaration in
+// it. Content carrying its own package clause is the only shape still
+// treated as a whole-file replacement.
+func classifyUpdateContent(content string) (domain.ActionType, *mcp.CallToolResult) {
+	kind, ok := classifyDeclContent(content)
+	if !ok {
+		return "", errorResult("update object=auto: content is not parseable Go (neither a single declaration nor a full file with a package clause) — fix the content or pass object explicitly (file, func, struct)")
+	}
+	switch kind {
+	case "func":
+		return domain.ActionTypeUpdateFunc, nil
+	case "struct":
+		return domain.ActionTypeUpdateStruct, nil
+	case "interface":
+		return domain.ActionTypeUpdateInterface, nil
+	case "decl":
+		return domain.ActionTypeUpdateDecl, nil
+	case "file":
+		return domain.ActionTypeReplaceFile, nil
+	default:
+		return "", errorResult("update object=auto: content contains multiple declarations; update targets a single declaration — use execute_plan for several edits, or pass object=file with full file content to replace the whole file")
+	}
 }

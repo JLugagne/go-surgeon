@@ -49,26 +49,11 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 		return &domain.Error{Code: "NOT_FOUND", Message: fmt.Sprintf("struct '%s' not found", req.StructName)}
 	}
 
-	type replacement struct {
-		start, end int
-		newText    string
-	}
-	var replacements []replacement
+	var replacements []tagReplacement
 
 	for _, field := range targetStruct.Fields.List {
 		if len(field.Names) == 0 {
 			continue // embedded field, skip for now
-		}
-
-		name := field.Names[0].Name
-		if req.FieldName != "" && name != req.FieldName {
-			continue
-		}
-
-		// determine new tag
-		isExported := ast.IsExported(name)
-		if req.AutoFormat != "" && !isExported {
-			continue // only auto-tag exported fields
 		}
 
 		var existingTagStr string
@@ -80,8 +65,24 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 			}
 		}
 
-		newTagStr := existingTagStr
+		// A multi-name declaration (x, y int) shares one tag in Go, so any
+		// per-name tag change requires splitting the group.
+		if len(field.Names) > 1 {
+			if rep, ok := groupedTagReplacement(fset, src, field, existingTagStr, req); ok {
+				replacements = append(replacements, rep)
+			}
+			continue
+		}
 
+		name := field.Names[0].Name
+		if req.FieldName != "" && name != req.FieldName {
+			continue
+		}
+		if req.AutoFormat != "" && !ast.IsExported(name) {
+			continue // only auto-tag exported fields
+		}
+
+		newTagStr := existingTagStr
 		if req.SetTag != "" {
 			if req.FieldName != "" {
 				// Exact replacement for specific field
@@ -91,16 +92,7 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 				newTagStr = mergeTags(existingTagStr, req.SetTag)
 			}
 		} else if req.AutoFormat != "" {
-			formattedName := formatFieldName(name, "snake") // default to snake, maybe allow config
-			if req.AutoFormat == "json" || req.AutoFormat == "bson" {
-				// simple snake case for auto
-				// Actually standard json format might be camelCase or snake_case. Let's do camelCase for json.
-				if req.AutoFormat == "json" {
-					formattedName = formatFieldName(name, "camel")
-				}
-			}
-			autoTag := fmt.Sprintf(`%s:"%s"`, req.AutoFormat, formattedName)
-			newTagStr = mergeTags(existingTagStr, autoTag)
+			newTagStr = mergeTags(existingTagStr, autoTagValue(name, req.AutoFormat))
 		}
 
 		// Unchanged
@@ -108,17 +100,7 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 			continue
 		}
 
-		finalTag := "`" + newTagStr + "`"
-
-		if field.Tag != nil {
-			start := fset.Position(field.Tag.Pos()).Offset
-			end := fset.Position(field.Tag.End()).Offset
-			replacements = append(replacements, replacement{start: start, end: end, newText: finalTag})
-		} else {
-			// Insert after type
-			end := fset.Position(field.Type.End()).Offset
-			replacements = append(replacements, replacement{start: end, end: end, newText: " " + finalTag})
-		}
+		replacements = append(replacements, tagReplacementFor(fset, field, newTagStr))
 	}
 
 	if len(replacements) == 0 {
@@ -146,6 +128,144 @@ func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagReques
 	}
 
 	return nil
+}
+
+// tagReplacement is one byte-range substitution in the source file.
+type tagReplacement struct {
+	start, end int
+	newText    string
+}
+
+// tagReplacementFor replaces (or inserts) the tag literal of a single field
+// declaration.
+func tagReplacementFor(fset *token.FileSet, field *ast.Field, newTag string) tagReplacement {
+	final := "`" + newTag + "`"
+	if field.Tag != nil {
+		return tagReplacement{
+			start:   fset.Position(field.Tag.Pos()).Offset,
+			end:     fset.Position(field.Tag.End()).Offset,
+			newText: final,
+		}
+	}
+	// Insert after type
+	end := fset.Position(field.Type.End()).Offset
+	return tagReplacement{start: end, end: end, newText: " " + final}
+}
+
+// autoTagValue builds the auto-generated tag for one field name: camelCase
+// keys for json, snake_case for every other format.
+func autoTagValue(name, format string) string {
+	style := "snake"
+	if format == "json" {
+		style = "camel"
+	}
+	return fmt.Sprintf(`%s:"%s"`, format, formatFieldName(name, style))
+}
+
+// groupedTagReplacement computes the edit for a multi-name declaration.
+// When the requested change gives every member the same tag, the shared tag
+// is edited in place; otherwise the declaration is split into one line per
+// name so each member carries its own tag (Go attaches a tag to the whole
+// declaration, so per-name tags are impossible without splitting).
+func groupedTagReplacement(fset *token.FileSet, src []byte, field *ast.Field, existing string, req domain.TagRequest) (tagReplacement, bool) {
+	names := field.Names
+	newTags := make([]string, len(names))
+	for i := range newTags {
+		newTags[i] = existing
+	}
+
+	switch {
+	case req.FieldName != "":
+		idx := -1
+		for i, n := range names {
+			if n.Name == req.FieldName {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return tagReplacement{}, false
+		}
+		if req.SetTag != "" {
+			newTags[idx] = req.SetTag
+		} else if req.AutoFormat != "" {
+			if !ast.IsExported(req.FieldName) {
+				return tagReplacement{}, false
+			}
+			newTags[idx] = mergeTags(existing, autoTagValue(req.FieldName, req.AutoFormat))
+		}
+	case req.SetTag != "":
+		// Append-to-all: every member gets the same tag, group stays intact.
+		merged := mergeTags(existing, req.SetTag)
+		for i := range newTags {
+			newTags[i] = merged
+		}
+	case req.AutoFormat != "":
+		for i, n := range names {
+			if ast.IsExported(n.Name) {
+				newTags[i] = mergeTags(existing, autoTagValue(n.Name, req.AutoFormat))
+			}
+		}
+	}
+
+	changed, uniform := false, true
+	for _, t := range newTags {
+		if t != existing {
+			changed = true
+		}
+		if t != newTags[0] {
+			uniform = false
+		}
+	}
+	if !changed {
+		return tagReplacement{}, false
+	}
+	if uniform {
+		return tagReplacementFor(fset, field, newTags[0]), true
+	}
+
+	// Split the declaration: one "Name Type `tag`" line per member.
+	typeText := extractSourceRange(src, fset, field.Type.Pos(), field.Type.End())
+	indent := lineIndentAt(src, fset.Position(field.Pos()).Offset)
+	var b strings.Builder
+	for i, n := range names {
+		if i > 0 {
+			b.WriteString("\n")
+			b.WriteString(indent)
+		}
+		b.WriteString(n.Name)
+		b.WriteString(" ")
+		b.WriteString(typeText)
+		if newTags[i] != "" {
+			b.WriteString(" `")
+			b.WriteString(newTags[i])
+			b.WriteString("`")
+		}
+	}
+	end := fset.Position(field.Type.End()).Offset
+	if field.Tag != nil {
+		end = fset.Position(field.Tag.End()).Offset
+	}
+	return tagReplacement{
+		start:   fset.Position(field.Pos()).Offset,
+		end:     end,
+		newText: b.String(),
+	}, true
+}
+
+// lineIndentAt returns the leading whitespace of the line containing off,
+// falling back to a tab when non-whitespace precedes off on that line
+// (e.g. a single-line struct).
+func lineIndentAt(src []byte, off int) string {
+	lineStart := off
+	for lineStart > 0 && src[lineStart-1] != '\n' {
+		lineStart--
+	}
+	prefix := string(src[lineStart:off])
+	if strings.TrimLeft(prefix, " \t") != "" {
+		return "\t"
+	}
+	return prefix
 }
 
 func mergeTags(existing, addition string) string {
