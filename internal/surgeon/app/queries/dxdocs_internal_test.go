@@ -39,7 +39,7 @@ func TestLimitedBuffer_DoesNotSplitMultiByteRune(t *testing.T) {
 	var b limitedBuffer
 	b.limit = 2 // cut falls in the middle of the 3-byte '€'
 	// "€a" is E2 82 AC 61 — a naive p[:2] keeps E2 82, an invalid rune.
-	b.Write([]byte("€a"))
+	_, _ = b.Write([]byte("€a"))
 
 	if !utf8.ValidString(b.String()) {
 		t.Fatalf("limitedBuffer split a multi-byte rune: % x", []byte(b.String()))
