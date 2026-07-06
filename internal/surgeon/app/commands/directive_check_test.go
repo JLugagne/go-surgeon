@@ -10,12 +10,12 @@ import (
 )
 
 // TestDirective_PatchFile_InsertCommentBetweenEmbedAndVar_Accepted: per the
-// go:embed spec, "only blank lines and other comment lines are allowed
-// between the directive and the declaration" — a comment keeps the directive
-// attached (same comment group), so the patch must be accepted. The previous
-// stricter rule ("directive must be the last comment in its group") also
-// rejected idiomatic stacked //go:embed directives, blocking every patch to
-// such files.
+// spec for the embed directive, "only blank lines and other comment lines
+// are allowed between the directive and the declaration" — a comment keeps
+// the directive attached (same comment group), so the patch must be
+// accepted. The previous stricter rule ("directive must be the last comment
+// in its group") also rejected idiomatic stacked //go:embed directives,
+// blocking every patch to such files.
 func TestDirective_PatchFile_InsertCommentBetweenEmbedAndVar_Accepted(t *testing.T) {
 	ctx := context.Background()
 	h, fs := newPatchHandler()
