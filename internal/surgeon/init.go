@@ -29,6 +29,10 @@ func Setup(version string) Runner {
 		executePlanHandler := appcommands.NewExecutePlanHandler(proxyFS).WithLoader(sharedLoader)
 		queriesHandler := appqueries.NewSurgeonQueriesHandler(proxyFS).WithLoader(sharedLoader)
 
+		// Any write through the proxy invalidates the shared loader cache so
+		// queries never serve pre-edit type information.
+		proxyFS.OnWrite = sharedLoader.Invalidate
+
 		rootCmd := &cobra.Command{
 			Use:           "go-surgeon",
 			Short:         "AST-based Go code editor",

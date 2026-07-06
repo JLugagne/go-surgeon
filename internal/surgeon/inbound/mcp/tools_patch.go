@@ -8,7 +8,7 @@ import (
 // --- Patch tools ---
 
 type patchOpInput struct {
-	Op         string   `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap"`
+	Op         string   `json:"op" jsonschema:"operation: replace, insert_before, insert_after, delete, wrap, set_signature (function only)"`
 	Match      string   `json:"match,omitempty" jsonschema:"literal text to match inside the function body (whitespace-normalized)"`
 	MatchRegex string   `json:"match_regex,omitempty" jsonschema:"regex alternative to match; mutually exclusive with match"`
 	Occurrence int      `json:"occurrence,omitempty" jsonschema:"which match to operate on (1-based, default 0 = error-if-ambiguous for function). Use -1 to apply to all matches."`

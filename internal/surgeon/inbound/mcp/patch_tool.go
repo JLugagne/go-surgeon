@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -162,40 +163,22 @@ func registerPatchTool(s *mcp.Server, commands service.SurgeonCommands) {
 
 // decodeFunctionOps decodes one item's raw patches into typed function patch
 // ops. Returns an error description on failure.
+// decodeFunctionOps decodes one item's raw patches into typed function patch
+// ops, rejecting unknown field names.
 func decodeFunctionOps(raw []map[string]any) ([]patchOpInput, error) {
-	var ops []patchOpInput
-	buf, _ := json.Marshal(raw)
-	if err := json.Unmarshal(buf, &ops); err != nil {
-		return nil, err
-	}
-	return ops, nil
+	return decodeOpsStrict[patchOpInput](raw)
 }
 
 func decodeStructOps(raw []map[string]any) ([]structPatchOpInput, error) {
-	var ops []structPatchOpInput
-	buf, _ := json.Marshal(raw)
-	if err := json.Unmarshal(buf, &ops); err != nil {
-		return nil, err
-	}
-	return ops, nil
+	return decodeOpsStrict[structPatchOpInput](raw)
 }
 
 func decodeInterfaceOps(raw []map[string]any) ([]interfacePatchOpInput, error) {
-	var ops []interfacePatchOpInput
-	buf, _ := json.Marshal(raw)
-	if err := json.Unmarshal(buf, &ops); err != nil {
-		return nil, err
-	}
-	return ops, nil
+	return decodeOpsStrict[interfacePatchOpInput](raw)
 }
 
 func decodeFileOps(raw []map[string]any) ([]filePatchOpInput, error) {
-	var ops []filePatchOpInput
-	buf, _ := json.Marshal(raw)
-	if err := json.Unmarshal(buf, &ops); err != nil {
-		return nil, err
-	}
-	return ops, nil
+	return decodeOpsStrict[filePatchOpInput](raw)
 }
 
 func handlePatchFunction(ctx context.Context, commands service.SurgeonCommands, in patchInput) (*mcp.CallToolResult, any, error) {
@@ -259,7 +242,7 @@ func handlePatchFunction(ctx context.Context, commands service.SurgeonCommands, 
 		return errorResultWithCode(fmt.Sprintf("ERROR (patch function bulk): %v", err), err), nil, nil
 	}
 	out := buildFunctionBulkOutput(in.Items, result)
-	res := textResult(renderBulkText(len(in.Items), result.Applied, result.Preview, result.Diff))
+	res := textResult(renderBulkText(out.Items, result.Preview, result.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
@@ -307,9 +290,9 @@ func renderSingleFunction(it patchItemInput, ops []patchOpInput, result domain.P
 	out := patchBulkOutput{Items: []patchOutput{item}, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
 	var res *mcp.CallToolResult
 	if result.Diff != "" {
-		res = textResult(prefix + "\n\n" + result.Diff)
+		res = textResult(appendPreviewNote(prefix+"\n\n"+result.Diff, result.Preview))
 	} else {
-		res = textResult(prefix)
+		res = textResult(appendPreviewNote(prefix, result.Preview))
 	}
 	res.StructuredContent = out
 	return res
@@ -402,7 +385,7 @@ func handlePatchStruct(ctx context.Context, commands service.SurgeonCommands, in
 		return errorResultWithCode(fmt.Sprintf("ERROR (patch struct bulk): %v", err), err), nil, nil
 	}
 	out := buildStructBulkOutput(in.Items, result)
-	res := textResult(renderBulkText(len(in.Items), result.Applied, result.Preview, result.Diff))
+	res := textResult(renderBulkText(out.Items, result.Preview, result.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
@@ -427,9 +410,9 @@ func renderSingleStruct(it patchItemInput, result domain.PatchStructResult) *mcp
 	out := patchBulkOutput{Items: []patchOutput{item}, Applied: result.Applied, Preview: result.Preview, Diff: result.Diff}
 	var res *mcp.CallToolResult
 	if result.Diff != "" {
-		res = textResult(prefix + "\n\n" + result.Diff)
+		res = textResult(appendPreviewNote(prefix+"\n\n"+result.Diff, result.Preview))
 	} else {
-		res = textResult(prefix)
+		res = textResult(appendPreviewNote(prefix, result.Preview))
 	}
 	res.StructuredContent = out
 	return res
@@ -492,15 +475,15 @@ func handlePatchStructAutoTag(ctx context.Context, commands service.SurgeonComma
 		out.Diff = item.Diff
 		var res *mcp.CallToolResult
 		if item.Diff != "" {
-			res = textResult(prefix + "\n\n" + item.Diff)
+			res = textResult(appendPreviewNote(prefix+"\n\n"+item.Diff, item.Preview))
 		} else {
-			res = textResult(prefix)
+			res = textResult(appendPreviewNote(prefix, item.Preview))
 		}
 		res.StructuredContent = out
 		return res, nil, nil
 	}
 	out.Diff = strings.Join(diffs, "\n")
-	res := textResult(renderBulkText(len(in.Items), out.Applied, in.Preview, out.Diff))
+	res := textResult(renderBulkText(out.Items, in.Preview, out.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
@@ -576,15 +559,15 @@ func handlePatchInterface(ctx context.Context, commands service.SurgeonCommands,
 		out.Diff = item.Diff
 		var res *mcp.CallToolResult
 		if item.Diff != "" {
-			res = textResult(prefix + "\n\n" + item.Diff)
+			res = textResult(appendPreviewNote(prefix+"\n\n"+item.Diff, item.Preview))
 		} else {
-			res = textResult(prefix)
+			res = textResult(appendPreviewNote(prefix, item.Preview))
 		}
 		_ = it
 		res.StructuredContent = out
 		return res, nil, nil
 	}
-	res := textResult(renderBulkText(len(in.Items), out.Applied, in.Preview, out.Diff))
+	res := textResult(renderBulkText(out.Items, in.Preview, out.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
@@ -676,9 +659,9 @@ func handlePatchFile(ctx context.Context, commands service.SurgeonCommands, in p
 		out.Diff = v.out.Diff
 		var res *mcp.CallToolResult
 		if v.out.Diff != "" {
-			res = textResult(prefix + "\n\n" + v.out.Diff)
+			res = textResult(appendPreviewNote(prefix+"\n\n"+v.out.Diff, v.out.Preview))
 		} else {
-			res = textResult(prefix)
+			res = textResult(appendPreviewNote(prefix, v.out.Preview))
 		}
 		_ = it
 		// For target=file we expose a patchFileOutput-equivalent at items[0]
@@ -698,7 +681,7 @@ func handlePatchFile(ctx context.Context, commands service.SurgeonCommands, in p
 		return res, nil, nil
 	}
 	out.Diff = strings.Join(diffs, "\n")
-	res := textResult(renderBulkText(len(in.Items), totalApplied, in.Preview, out.Diff))
+	res := textResult(renderBulkText(out.Items, in.Preview, out.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
@@ -768,37 +751,86 @@ func handlePatchDecl(ctx context.Context, commands service.SurgeonCommands, in p
 		out.Diff = item.Diff
 		var res *mcp.CallToolResult
 		if item.Diff != "" {
-			res = textResult(prefix + "\n\n" + item.Diff)
+			res = textResult(appendPreviewNote(prefix+"\n\n"+item.Diff, item.Preview))
 		} else {
-			res = textResult(prefix)
+			res = textResult(appendPreviewNote(prefix, item.Preview))
 		}
 		_ = it
 		res.StructuredContent = out
 		return res, nil, nil
 	}
 	out.Diff = strings.Join(diffs, "\n")
-	res := textResult(renderBulkText(len(in.Items), out.Applied, in.Preview, out.Diff))
+	res := textResult(renderBulkText(out.Items, in.Preview, out.Diff))
 	res.StructuredContent = out
 	return res, nil, nil
 }
 
 // ── Bulk helpers (atomic targets: function, struct) ─────────────────────────
 
-// renderBulkText builds the human-readable tool-result text: an "OK: N/M
+// renderBulkText builds the human-readable tool-result text: an "OK: X/N
 // items applied" (or "PREVIEW:") header followed by the aggregated diff
-// (which already carries per-item "--- file:identifier ---" separators).
-func renderBulkText(itemCount, applied int, preview bool, diff string) string {
-	header := fmt.Sprintf("OK: %d/%d items applied", itemCount, itemCount)
+// (which already carries per-item "--- file:identifier ---" separators). X is
+// the number of items that actually applied a change (per-item Applied > 0),
+// not the item count — a batch with no-op items must not read N/N.
+func renderBulkText(items []patchOutput, preview bool, diff string) string {
+	itemCount := len(items)
+	applied := 0
+	for _, it := range items {
+		if it.Applied > 0 {
+			applied++
+		}
+	}
+	header := fmt.Sprintf("OK: %d/%d items applied", applied, itemCount)
 	if preview {
-		header = fmt.Sprintf("PREVIEW: %d/%d items (not written)", itemCount, itemCount)
+		header = fmt.Sprintf("PREVIEW: %d/%d items (not written)", applied, itemCount)
 	}
 	if applied == 0 && !preview {
 		header = fmt.Sprintf("OK: 0/%d items applied (all no-op)", itemCount)
 	}
-	if diff == "" {
-		return header
+	// Preview does not compose across items that target the same file: each
+	// item is previewed independently against the current on-disk state, so a
+	// later item's diff won't reflect an earlier item's (unwritten) change. A
+	// real (non-preview) run applies them sequentially and does compose.
+	if preview {
+		if dup := firstDuplicateFile(items); dup != "" {
+			header += fmt.Sprintf("\n  WARNING: multiple items target the same file (%s); each preview is computed independently against the current file and does NOT compose — a real run applies them sequentially.", dup)
+		}
 	}
-	return header + "\n\n" + diff
+	text := header
+	if diff != "" {
+		text = header + "\n\n" + diff
+	}
+	return appendPreviewNote(text, preview)
+}
+
+// firstDuplicateFile returns the first file path that appears more than once
+// across items, or "" when every item targets a distinct file.
+func firstDuplicateFile(items []patchOutput) string {
+	seen := make(map[string]bool, len(items))
+	for _, it := range items {
+		if it.File == "" {
+			continue
+		}
+		if seen[it.File] {
+			return it.File
+		}
+		seen[it.File] = true
+	}
+	return ""
+}
+
+// previewFinalizeNote is appended to any preview output. A preview diff is the
+// raw pre-format edit: gofmt/goimports (formatting and import fixups) run only
+// on write, and AddedImports is blanked in preview, so the written result can
+// differ from the previewed diff.
+const previewFinalizeNote = "NOTE: preview shows the raw edit; gofmt/goimports (formatting and import fixups) are applied only on write, so the written result may differ."
+
+// appendPreviewNote appends previewFinalizeNote to text when preview is true.
+func appendPreviewNote(text string, preview bool) string {
+	if !preview {
+		return text
+	}
+	return text + "\n\n  " + previewFinalizeNote
 }
 
 func buildStructBulkOutput(inputs []patchItemInput, result domain.PatchStructBulkResult) patchBulkOutput {
@@ -887,4 +919,19 @@ func replaceShorterHintFile(ops []filePatchOpInput) string {
 		}
 	}
 	return ""
+}
+
+// decodeOpsStrict re-marshals raw op maps and decodes them into T with
+// DisallowUnknownFields, so a typo'd field name (e.g. "replce") is rejected
+// instead of silently dropped — a dropped field changes the op's targeting
+// or payload without any signal to the caller.
+func decodeOpsStrict[T any](raw []map[string]any) ([]T, error) {
+	buf, _ := json.Marshal(raw)
+	dec := json.NewDecoder(bytes.NewReader(buf))
+	dec.DisallowUnknownFields()
+	var ops []T
+	if err := dec.Decode(&ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
 }

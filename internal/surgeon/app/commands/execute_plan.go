@@ -17,7 +17,10 @@ import (
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 )
 
-// ExecutePlanHandler handles the execution of a surgery plan.
+// maxPlanActions caps a single plan, matching the documented "up to 15
+// related AST edits" contract of execute_plan.
+const maxPlanActions = 15
+
 // ExecutePlanHandler handles the execution of a surgery plan.
 type ExecutePlanHandler struct {
 	fs         filesystem.FileSystem
@@ -54,24 +57,28 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 	if len(plan.Actions) == 0 {
 		return domain.PlanResult{}, domain.ErrEmptyPlan
 	}
+	if len(plan.Actions) > maxPlanActions {
+		return domain.PlanResult{}, domain.ErrActionLimitExceeded
+	}
 
-	// Preview=true funnels the exact same write path through an in-memory
-	// filesystem, so we get a unified diff but never touch disk. Using the
-	// real handler code guarantees the preview matches what a subsequent
-	// non-preview run would produce.
+	// Every plan first runs against an in-memory overlay: preview renders
+	// its diff from the overlay, and real execution commits the overlay to
+	// disk only after every action succeeded — a failing action can never
+	// leave earlier actions written (the atomicity contract of execute_plan).
+	previewH, overlay := h.previewHandler()
+	childPlan := plan
+	childPlan.Preview = false
+	res, err := previewH.runPlan(ctx, childPlan)
+	if err != nil {
+		return domain.PlanResult{}, err
+	}
+
 	if plan.Preview {
-		previewH, dry := h.previewHandler()
-		childPlan := plan
-		childPlan.Preview = false
-		res, err := previewH.Handle(ctx, childPlan)
-		if err != nil {
-			return domain.PlanResult{}, err
-		}
-		diff, diffErr := dry.Diff(ctx)
+		diff, diffErr := overlay.Diff(ctx)
 		if diffErr != nil {
 			return domain.PlanResult{}, diffErr
 		}
-		res.Files = dry.WrittenFiles()
+		res.Files = overlay.WrittenFiles()
 		res.FilesModified = len(res.Files)
 		res.Preview = true
 		res.Diff = diff
@@ -82,32 +89,7 @@ func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (doma
 		return res, nil
 	}
 
-	modifiedFiles := make(map[string]bool)
-	var warnings []string
-	var addedImports []string
-	seenImports := make(map[string]bool)
-
-	for _, action := range plan.Actions {
-		w, imps, err := h.executeAction(ctx, action, plan.Preview)
-		if err != nil {
-			return domain.PlanResult{}, err
-		}
-		warnings = append(warnings, w...)
-		for _, imp := range imps {
-			if !seenImports[imp] {
-				addedImports = append(addedImports, imp)
-				seenImports[imp] = true
-			}
-		}
-		modifiedFiles[action.FilePath] = true
-	}
-
-	files := make([]string, 0, len(modifiedFiles))
-	for f := range modifiedFiles {
-		files = append(files, f)
-	}
-	sort.Strings(files)
-	return domain.PlanResult{FilesModified: len(modifiedFiles), Files: files, Warnings: warnings, AddedImports: addedImports}, nil
+	return h.commitOverlay(ctx, overlay, res)
 }
 
 // ExecutePlan implements the SurgeonCommands interface.
@@ -132,8 +114,8 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			MockFile: action.MockFile,
 			MockName: action.MockName,
 		}
-		_, imps, err := h.AddInterface(ctx, req)
-		return nil, imps, err
+		msg, imps, err := h.AddInterface(ctx, req)
+		return interfaceActionWarnings(msg), imps, err
 	case domain.ActionTypeUpdateInterface:
 		req := domain.InterfaceActionRequest{
 			FilePath:   action.FilePath,
@@ -144,15 +126,15 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 			Doc:        action.Doc,
 			StripDoc:   action.StripDoc,
 		}
-		_, imps, err := h.UpdateInterface(ctx, req)
-		return nil, imps, err
+		msg, imps, err := h.UpdateInterface(ctx, req)
+		return interfaceActionWarnings(msg), imps, err
 	case domain.ActionTypeDeleteInterface:
 		req := domain.InterfaceActionRequest{
 			FilePath:   action.FilePath,
 			Identifier: action.Identifier,
 		}
-		_, imps, err := h.DeleteInterface(ctx, req)
-		return nil, imps, err
+		msg, imps, err := h.DeleteInterface(ctx, req)
+		return interfaceActionWarnings(msg), imps, err
 	case domain.ActionTypePatchFunction:
 		res, err := h.PatchFunction(ctx, domain.PatchFunctionRequest{
 			FilePath:   action.FilePath,
@@ -214,6 +196,19 @@ func (h *ExecutePlanHandler) executeAction(ctx context.Context, action domain.Ac
 	default:
 		return nil, nil, fmt.Errorf("invalid action type: %s", action.Action)
 	}
+}
+
+// interfaceActionWarnings promotes an interface handler's human-readable
+// summary to a plan warning when it carries a fallback notice (the "not
+// found, appended as a new declaration" case). Those notices are otherwise
+// lost inside execute_plan, which only propagates the warnings slice —
+// leaving an agent to believe an in-place update happened when the content
+// was actually appended. Plain success summaries are not surfaced.
+func interfaceActionWarnings(msg string) []string {
+	if strings.Contains(msg, "NOTE:") {
+		return []string{msg}
+	}
+	return nil
 }
 
 func (h *ExecutePlanHandler) handleCreateFile(ctx context.Context, action domain.Action) ([]string, error) {
@@ -412,9 +407,20 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	case domain.ActionTypeUpdateDecl:
 		offsets, ok := findDeclOffsets(fset, f, action.Identifier)
 		if ok {
-			updatedSrc = append([]byte(nil), src[:offsets.DocStart]...)
-			updatedSrc = append(updatedSrc, []byte(action.Content)...)
-			updatedSrc = append(updatedSrc, src[offsets.End:]...)
+			if offsets.Grouped {
+				spec, specErr := extractSpecContent(action.Content)
+				if specErr != nil {
+					return nil, nil, specErr
+				}
+				updatedSrc = append([]byte(nil), src[:offsets.SpecDocStart]...)
+				updatedSrc = append(updatedSrc, []byte(spec)...)
+				updatedSrc = append(updatedSrc, src[offsets.SpecEnd:]...)
+			} else {
+				start, replacement := resolveDocReplacement(offsets.nodeOffsets, action.Content, action.Doc, action.StripDoc)
+				updatedSrc = append([]byte(nil), src[:start]...)
+				updatedSrc = append(updatedSrc, []byte(replacement)...)
+				updatedSrc = append(updatedSrc, src[offsets.End:]...)
+			}
 			updated = true
 		} else {
 			// Fall back to add behavior: append the declaration
@@ -433,6 +439,15 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 			return nil, nil, domain.ErrNodeNotFound
 		}
 		return nil, nil, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to apply AST action"}
+	}
+
+	// Re-parse the spliced result before writing. handleASTAction assembles
+	// output by byte offsets, so truncated or malformed content would
+	// otherwise land on disk as broken Go with a SUCCESS report (goimports
+	// falls back to raw bytes on a parse failure). Reject it instead, like
+	// the patch family does, leaving the file untouched.
+	if err := validateGoSource(action.FilePath, updatedSrc); err != nil {
+		return nil, nil, err
 	}
 
 	if isFileNew {
@@ -499,12 +514,22 @@ func getRecvType(recv *ast.FieldList) string {
 	if recv == nil || len(recv.List) == 0 {
 		return ""
 	}
-	switch t := recv.List[0].Type.(type) {
+	t := recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	switch e := t.(type) {
 	case *ast.Ident:
-		return t.Name
-	case *ast.StarExpr:
-		if ident, ok := t.X.(*ast.Ident); ok {
-			return ident.Name
+		return e.Name
+	case *ast.IndexExpr:
+		// generic receiver with one type parameter: Store[T]
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.IndexListExpr:
+		// generic receiver with several type parameters: Store[K, V]
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
 		}
 	}
 	return ""
@@ -577,6 +602,9 @@ func findStructOffsets(fset *token.FileSet, f *ast.File, identifier string) (nod
 
 func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier string) [][2]int {
 	var ranges [][2]int
+	// Method receivers are bare type names, so compare against the name part
+	// of the identifier (e.g. "pkg.User" -> "User"), not the raw string.
+	_, nameTarget := parseIdentifier(identifier)
 	// Find struct
 	if offsets, ok := findStructOffsets(fset, f, identifier); ok {
 		ranges = append(ranges, [2]int{offsets.DocStart, offsets.End})
@@ -585,7 +613,7 @@ func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier st
 	// Find methods
 	for _, decl := range f.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv != nil {
-			if getRecvType(fn.Recv) == identifier {
+			if getRecvType(fn.Recv) == nameTarget {
 				start := fn.Pos()
 				if fn.Doc != nil {
 					start = fn.Doc.Pos()
@@ -599,37 +627,53 @@ func findStructAndMethodsOffsets(fset *token.FileSet, f *ast.File, identifier st
 
 // findDeclOffsets locates a top-level const/var declaration by name and
 // returns the byte offsets (including doc comment if present) for replacement.
-func findDeclOffsets(fset *token.FileSet, f *ast.File, name string) (nodeOffsets, bool) {
+// findDeclOffsets locates the const/var/type declaration that declares name.
+// Grouped declarations report the matched spec's range (SpecDocStart..SpecEnd)
+// so callers can splice a single member without touching its siblings.
+func findDeclOffsets(fset *token.FileSet, f *ast.File, name string) (declOffsets, bool) {
 	for _, decl := range f.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok {
 			continue
 		}
-		if gen.Tok != token.CONST && gen.Tok != token.VAR {
+		if gen.Tok != token.CONST && gen.Tok != token.VAR && gen.Tok != token.TYPE {
 			continue
 		}
 		for _, sp := range gen.Specs {
-			vs, ok := sp.(*ast.ValueSpec)
-			if !ok {
-				continue
+			var names []*ast.Ident
+			switch s := sp.(type) {
+			case *ast.ValueSpec:
+				names = s.Names
+			case *ast.TypeSpec:
+				names = []*ast.Ident{s.Name}
 			}
-			for _, id := range vs.Names {
-				if id.Name == name {
-					docStart := fset.Position(gen.Pos()).Offset
-					if gen.Doc != nil {
-						docStart = fset.Position(gen.Doc.Pos()).Offset
-					}
-					return nodeOffsets{
+			for _, id := range names {
+				if id.Name != name {
+					continue
+				}
+				docStart := fset.Position(gen.Pos()).Offset
+				if gen.Doc != nil {
+					docStart = fset.Position(gen.Doc.Pos()).Offset
+				}
+				out := declOffsets{
+					nodeOffsets: nodeOffsets{
 						DocStart:  docStart,
 						NodeStart: fset.Position(gen.Pos()).Offset,
 						End:       fset.Position(gen.End()).Offset,
 						HasDoc:    gen.Doc != nil,
-					}, true
+					},
+					Grouped:      len(gen.Specs) > 1,
+					SpecDocStart: fset.Position(sp.Pos()).Offset,
+					SpecEnd:      fset.Position(sp.End()).Offset,
 				}
+				if d := specDocOf(sp); d != nil {
+					out.SpecDocStart = fset.Position(d.Pos()).Offset
+				}
+				return out, true
 			}
 		}
 	}
-	return nodeOffsets{}, false
+	return declOffsets{}, false
 }
 
 func deleteRanges(src []byte, ranges [][2]int) []byte {
@@ -1031,4 +1075,134 @@ func (h *ExecutePlanHandler) PreviewWith(ctx context.Context, fn func(service.Su
 		return "", nil, err
 	}
 	return diff, dry.WrittenFiles(), nil
+}
+
+// declOffsets locates a const/var/type declaration by name. For grouped
+// declarations (multiple specs) the Spec* offsets address just the matched
+// spec so sibling members survive an update.
+type declOffsets struct {
+	nodeOffsets
+	Grouped      bool
+	SpecDocStart int
+	SpecEnd      int
+}
+
+// specDocOf returns the doc comment group attached to a const/var/type spec.
+func specDocOf(sp ast.Spec) *ast.CommentGroup {
+	switch s := sp.(type) {
+	case *ast.ValueSpec:
+		return s.Doc
+	case *ast.TypeSpec:
+		return s.Doc
+	}
+	return nil
+}
+
+// extractSpecContent renders decl-only content ("const A = 3", "type ID int"
+// or the bare spec "A = 3") as the spec form used inside a grouped
+// declaration block.
+func extractSpecContent(content string) (string, error) {
+	trimmed := strings.TrimSpace(content)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", "package p\n"+trimmed, 0)
+	if err != nil {
+		// Content may already be a bare spec ("A = 3"): accept it when it
+		// parses inside a grouped block.
+		for _, kw := range []string{"const", "var", "type"} {
+			if _, err2 := parser.ParseFile(token.NewFileSet(), "", "package p\n"+kw+" (\n"+trimmed+"\n)", 0); err2 == nil {
+				return trimmed, nil
+			}
+		}
+		return "", &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("update_decl: content is not a valid declaration: %v", err)}
+	}
+	if len(f.Decls) != 1 {
+		return "", &domain.Error{Code: "INVALID_ARGUMENT", Message: "update_decl: content must contain exactly one declaration when updating a member of a grouped block"}
+	}
+	gen, ok := f.Decls[0].(*ast.GenDecl)
+	if !ok || len(gen.Specs) != 1 {
+		return "", &domain.Error{Code: "INVALID_ARGUMENT", Message: "update_decl: content must be a single const/var/type declaration when updating a member of a grouped block"}
+	}
+	src := "package p\n" + trimmed
+	start := fset.Position(gen.Specs[0].Pos()).Offset
+	end := fset.Position(gen.Specs[0].End()).Offset
+	return src[start:end], nil
+}
+
+// runPlan executes every action in order against h's filesystem. It is the
+// raw, non-atomic engine — Handle always points it at an in-memory overlay
+// and commits afterwards.
+func (h *ExecutePlanHandler) runPlan(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
+	modifiedFiles := make(map[string]bool)
+	var warnings []string
+	var addedImports []string
+	seenImports := make(map[string]bool)
+
+	for _, action := range plan.Actions {
+		w, imps, err := h.executeAction(ctx, action, plan.Preview)
+		if err != nil {
+			return domain.PlanResult{}, err
+		}
+		warnings = append(warnings, w...)
+		for _, imp := range imps {
+			if !seenImports[imp] {
+				addedImports = append(addedImports, imp)
+				seenImports[imp] = true
+			}
+		}
+		modifiedFiles[action.FilePath] = true
+	}
+
+	files := make([]string, 0, len(modifiedFiles))
+	for f := range modifiedFiles {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return domain.PlanResult{FilesModified: len(modifiedFiles), Files: files, Warnings: warnings, AddedImports: addedImports}, nil
+}
+
+// commitOverlay flushes the overlay's writes and deletions through the real
+// filesystem (running goimports per file). Only disk errors can interrupt a
+// commit — validation failures were already caught during the overlay run.
+func (h *ExecutePlanHandler) commitOverlay(ctx context.Context, overlay *previewFS, res domain.PlanResult) (domain.PlanResult, error) {
+	paths := make([]string, 0, len(overlay.files))
+	for p := range overlay.files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	seen := make(map[string]bool)
+	var addedImports []string
+	for _, path := range paths {
+		if dir := filepath.Dir(path); dir != "" && dir != "." {
+			if err := h.fs.MkdirAll(ctx, dir); err != nil {
+				return domain.PlanResult{}, &domain.Error{Code: "INTERNAL_ERROR", Message: "failed to create directory", Err: err}
+			}
+		}
+		imps, err := h.fs.WriteFile(ctx, path, overlay.files[path])
+		if err != nil {
+			return domain.PlanResult{}, err
+		}
+		for _, imp := range imps {
+			if !seen[imp] {
+				seen[imp] = true
+				addedImports = append(addedImports, imp)
+			}
+		}
+	}
+
+	deleted := make([]string, 0, len(overlay.deleted))
+	for p := range overlay.deleted {
+		deleted = append(deleted, p)
+	}
+	sort.Strings(deleted)
+	for _, path := range deleted {
+		if err := h.fs.DeleteFile(ctx, path); err != nil {
+			return domain.PlanResult{}, err
+		}
+	}
+
+	res.Files = overlay.WrittenFiles()
+	res.FilesModified = len(res.Files)
+	res.AddedImports = addedImports
+	return res, nil
 }

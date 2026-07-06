@@ -137,33 +137,34 @@ func formatGraph(packages []domain.GraphPackage, opts domain.GraphOptions) strin
 }
 
 // findSymbols mirrors the CLI symbol command's multi-form query resolution.
-func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string, module string, context string) []domain.SymbolResult {
+// findSymbols mirrors the CLI symbol command's multi-form query resolution.
+// The returned error is the first failure seen across the attempted query
+// forms; callers should surface it only when no form produced results —
+// otherwise one failing form would mask hits from a successful one.
+func findSymbols(ctx context.Context, queries service.SurgeonQueries, queryStr string, tests bool, dir string, module string, context string) ([]domain.SymbolResult, error) {
 	parts := strings.Split(queryStr, ".")
 	var allResults []domain.SymbolResult
+	var firstErr error
 
-	if len(parts) == 1 {
-		query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: module, Context: context}
-		results, _ := queries.FindSymbols(ctx, query, dir)
+	collect := func(q domain.SymbolQuery) {
+		results, err := queries.FindSymbols(ctx, q, dir)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 		allResults = append(allResults, results...)
 	}
 
-	if len(parts) == 2 {
-		query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context}
-		results1, _ := queries.FindSymbols(ctx, query1, dir)
-		allResults = append(allResults, results1...)
-
-		query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context}
-		results2, _ := queries.FindSymbols(ctx, query2, dir)
-		allResults = append(allResults, results2...)
+	switch len(parts) {
+	case 1:
+		collect(domain.SymbolQuery{Name: parts[0], Tests: tests, Module: module, Context: context})
+	case 2:
+		collect(domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context})
+		collect(domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: module, Context: context})
+	case 3:
+		collect(domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: module, Context: context})
 	}
 
-	if len(parts) == 3 {
-		query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: module, Context: context}
-		results, _ := queries.FindSymbols(ctx, query, dir)
-		allResults = append(allResults, results...)
-	}
-
-	return allResults
+	return allResults, firstErr
 }
 
 // formatSymbolResults renders symbol results the same way the CLI symbol command does.

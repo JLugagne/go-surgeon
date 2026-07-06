@@ -87,6 +87,9 @@ func registerExecutePlanTool(s *mcp.Server, commands service.SurgeonCommands) {
 			sb.WriteString("\n\n")
 			sb.WriteString(result.Diff)
 		}
+		if result.Preview {
+			sb.WriteString("\n\n  " + previewFinalizeNote)
+		}
 		symbols := make([]symbolEdit, len(in.Actions))
 		for i, a := range in.Actions {
 			symbols[i] = symbolEdit{Action: a.Action, Identifier: a.Identifier, File: a.File}

@@ -752,7 +752,20 @@ func TestGraph_TokenBudget_TruncatesPackageList(t *testing.T) {
 		TokenBudget: 1,
 	})
 	require.NoError(t, err)
-	assert.LessOrEqual(t, len(packages), 1, "should truncate package list to fit tiny budget")
+
+	// Truncation now appends a visible marker package (see item 31), so count
+	// only the real (non-marker) packages here.
+	real := 0
+	var marker bool
+	for _, p := range packages {
+		if strings.Contains(p.Path, "truncated") {
+			marker = true
+			continue
+		}
+		real++
+	}
+	assert.LessOrEqual(t, real, 1, "should truncate package list to fit tiny budget")
+	assert.True(t, marker, "silent truncation should leave a visible marker")
 }
 
 func TestGraph_TokenBudget_Zero_Unlimited(t *testing.T) {

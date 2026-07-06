@@ -147,7 +147,10 @@ func registerQueryTools(s *mcp.Server, queries service.SurgeonQueries) {
 			return textResult(text), nil, nil
 		}
 
-		results := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module, in.Context)
+		results, err := findSymbols(ctx, queries, in.Query, in.Tests, dir, in.Module, in.Context)
+		if len(results) == 0 && err != nil {
+			return errorResultWithCode(err.Error(), err), nil, nil
+		}
 		if len(results) == 0 {
 			return textResult(fmt.Sprintf("No matches found for '%s'.\nHint: run 'overview' with symbols=true and dir set to list available symbols.", in.Query)), nil, nil
 		}

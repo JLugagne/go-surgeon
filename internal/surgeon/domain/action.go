@@ -35,8 +35,8 @@ const (
 	InsertBeforeReturn InsertPosition = "before-return"
 	// InsertEndOfBody places the call at the end of the function body, before the closing brace.
 	InsertEndOfBody InsertPosition = "end-of-body"
-	// InsertAfterMarker places the call after the first comment line that contains the marker text.
-	InsertAfterMarker InsertPosition = "after-marker"
+	// after:<marker> (parsed directly as a string prefix, not a named constant)
+	// places the call after the line containing the marker text.
 )
 
 // Action represents a single modification to the codebase.

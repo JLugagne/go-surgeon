@@ -112,7 +112,11 @@ func (l *Loader) Load(ctx context.Context, absDir string, tests bool) (*LoadedPa
 		// free, and holding the mutex across it would serialize every
 		// cached lookup.
 		if fresh, err := isFresh(entry); err == nil && fresh {
+			// lastUsed is read under the mutex in the expiry check above —
+			// update it under the same lock to keep -race clean.
+			l.mu.Lock()
 			entry.lastUsed = now
+			l.mu.Unlock()
 			l.hits.Add(1)
 			return entry.loaded, nil
 		}
@@ -191,4 +195,12 @@ func goModInfo(absDir string) (string, time.Time) {
 		}
 		dir = parent
 	}
+}
+
+// Invalidate drops every cached entry. The write side calls this after
+// files change so queries never serve pre-edit type information.
+func (l *Loader) Invalidate() {
+	l.mu.Lock()
+	l.cache = make(map[cacheKey]*cacheEntry)
+	l.mu.Unlock()
 }

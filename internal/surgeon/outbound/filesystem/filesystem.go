@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/imports"
@@ -30,14 +31,17 @@ func NewFileSystem() *FileSystem {
 // ReadFile reads the content of the file at path. Reads are allowed
 // from anywhere — the worktree guard only protects writes from
 // escaping the captured root.
+// ReadFile reads the content of the file at path. Relative paths are
+// anchored on the captured root so reads resolve the same location writes
+// do; absolute paths are honored as-is (reads are allowed from anywhere).
 func (f *FileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	return os.ReadFile(path)
+	return os.ReadFile(f.resolveRead(path))
 }
 
 // WriteFile writes content to the file at path. Path is normalized
 // against the captured root: relative paths are anchored on root, and
-// absolute paths that resolve through a symlink into a sibling worktree
-// are rewritten to land inside our root. A one-line warning is emitted
+// absolute paths that resolve through a symlink back into the root are
+// rewritten to the canonical root prefix. A one-line warning is emitted
 // to stderr when a rewrite happens so agents learn the canonical path.
 func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte) ([]string, error) {
 	resolved, warning, err := normalizePath(f.root, path)
@@ -56,8 +60,11 @@ func (f *FileSystem) WriteFile(ctx context.Context, path string, content []byte)
 
 // ReadDir returns the names of the files and directories in path.
 // Reads are allowed from anywhere.
+// ReadDir returns the names of the files and directories in path.
+// Relative paths are anchored on the captured root; absolute paths are
+// honored as-is.
 func (f *FileSystem) ReadDir(ctx context.Context, path string) ([]string, error) {
-	entries, err := os.ReadDir(path)
+	entries, err := os.ReadDir(f.resolveRead(path))
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +79,10 @@ func (f *FileSystem) ReadDir(ctx context.Context, path string) ([]string, error)
 
 // IsDir returns true if the path is a directory. Reads are allowed
 // from anywhere.
+// IsDir returns true if the path is a directory. Relative paths are
+// anchored on the captured root; absolute paths are honored as-is.
 func (f *FileSystem) IsDir(ctx context.Context, path string) (bool, error) {
-	info, err := os.Stat(path)
+	info, err := os.Stat(f.resolveRead(path))
 	if err != nil {
 		return false, err
 	}
@@ -233,4 +242,14 @@ func applyGoImports(path string, content []byte) ([]byte, []string) {
 	}
 	warnUnresolvedImports(path, formatted)
 	return formatted, addedImports
+}
+
+// resolveRead anchors relative paths on the captured root so reads target
+// the same location the write-side normalization resolves; absolute paths
+// (and rootless mode) pass through untouched.
+func (f *FileSystem) resolveRead(path string) string {
+	if f.root == "" || path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(f.root, path)
 }

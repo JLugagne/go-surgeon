@@ -105,7 +105,11 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	// Walk closurePath (if any) to drill into the Nth FuncLit of each body.
+	// targetLit tracks the innermost drilled closure literal (nil when the
+	// identifier has no closure path) — set_signature and the insert-lift
+	// logic must operate on IT, not on the outer FuncDecl (backlog item 5).
 	targetBody := targetFn.Body
+	var targetLit *ast.FuncLit
 	for depth, idx := range closurePath {
 		children := directChildClosures(targetBody)
 		if idx >= len(children) {
@@ -126,6 +130,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				Message: fmt.Sprintf("closure[%d] at depth %d in %s has no body", idx, depth+1, req.Identifier),
 			}
 		}
+		targetLit = children[idx]
 		targetBody = children[idx].Body
 	}
 
@@ -154,10 +159,6 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 	var pendingCtx []pendingInsertCtx
 	// Phase 1: resolve all patches against the original body.
-	type resolvedEdit struct {
-		start, end  int    // byte offsets relative to origBody start
-		replacement string // text to substitute
-	}
 	edits := make([]resolvedEdit, len(req.Patches))
 	var extraEdits []resolvedEdit
 	var sigEdits []signatureEdit
@@ -173,7 +174,13 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	afterFuncEdits := map[int]afterFuncEdit{}
 	for i, p := range req.Patches {
 		if p.Op == domain.PatchOpSetSignature {
-			ses, sigErr := resolveSignatureEdit(fset, targetFn, src, p.Params, p.Returns)
+			// On a Parent>closure[N] identifier, rewrite the closure
+			// literal's signature — never the outer function's.
+			sigType := targetFn.Type
+			if targetLit != nil {
+				sigType = targetLit.Type
+			}
+			ses, sigErr := resolveSignatureEdit(fset, sigType, src, p.Params, p.Returns)
 			if sigErr != nil {
 				errs = append(errs, fmt.Sprintf("patch #%d (set_signature): %v", i+1, sigErr))
 				continue
@@ -199,8 +206,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			// insert_after on the function declaration line means
 			// "insert after the closing } of the function". Detect this
 			// before resolveBodyLineRange so it works for one-liners too
-			// (where the declaration line equals bodyStartLine).
-			if p.Op == domain.PatchOpInsertAfter && p.AtLine > 0 && p.AtLine == fset.Position(targetFn.Pos()).Line {
+			// (where the declaration line equals bodyStartLine). Only for
+			// plain identifiers — after a closure's '}' is mid-expression.
+			if p.Op == domain.PatchOpInsertAfter && p.AtLine > 0 && targetLit == nil && p.AtLine == fset.Position(targetFn.Pos()).Line {
 				afterFuncEdits[i] = afterFuncEdit{code: p.Code}
 				continue
 			}
@@ -228,8 +236,15 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				continue
 			}
 			if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
-				plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, start)
-				edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line}
+				// insert_after anchors on the LAST line of the range (to_line) so a
+				// from_line/to_line insert_after lands after to_line, consistent with
+				// patch_decl (backlog item 28). from_line is the anchor for insert_before.
+				anchor := start
+				if p.Op == domain.PatchOpInsertAfter && end > start {
+					anchor = lineStartOffset(origBody, end-1)
+				}
+				plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, anchor)
+				edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1}
 				if plan.Lift != nil {
 					autoLifts = append(autoLifts, *plan.Lift)
 					pendingCtx = append(pendingCtx, pendingInsertCtx{
@@ -246,7 +261,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				continue
 			}
 			ls, le, lrepl := buildLineModeEdit(p, origBody, start, end)
-			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl}
+			edits[i] = resolvedEdit{start: ls, end: le, replacement: lrepl, patch: i + 1}
 			if p.Op == domain.PatchOpReplace {
 				replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: lrepl, Match: origBody[ls:le], PreBody: origBody})
 			}
@@ -308,19 +323,22 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 						break
 					}
 					repl := p.Replace
+					if p.MatchRegex != "" {
+						repl = expandRegexReplace(p.MatchRegex, origBody[h[0]:h[1]], repl)
+					}
 					if repl != "" && !startsWithWhitespace(repl) {
 						if indent := lineIndent(origBody, h[0]); indent != "" && h[0] == lineStartOffset(origBody, h[0]) {
 							repl = reIndentReplacement(repl, indent)
 						}
 					}
-					extraEdits = append(extraEdits, resolvedEdit{start: h[0], end: h[1], replacement: repl})
+					extraEdits = append(extraEdits, resolvedEdit{start: h[0], end: h[1], replacement: repl, patch: i + 1})
 					replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl, Match: origBody[h[0]:h[1]], PreBody: origBody})
 				case domain.PatchOpDelete:
 					start, end := deletionRange(origBody, h[0], h[1])
-					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: ""})
+					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: "", patch: i + 1})
 				case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
-					plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, h[0])
-					extraEdits = append(extraEdits, resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line})
+					plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, h[0])
+					extraEdits = append(extraEdits, resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1})
 					if plan.Lift != nil {
 						autoLifts = append(autoLifts, *plan.Lift)
 						pendingCtx = append(pendingCtx, pendingInsertCtx{
@@ -331,16 +349,12 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 						})
 					}
 				case domain.PatchOpWrap:
-					indent := lineIndent(origBody, h[0])
-					trimmedMatch := strings.TrimSpace(origBody[h[0]:h[1]])
-					replacement := indent + fmt.Sprintf(p.Wrap, trimmedMatch)
-					if wrapErr := validateGoStmt(replacement); wrapErr != nil {
+					ws, we, wrepl, wrapErr := buildWrapEdit(origBody, p.Wrap, h, true)
+					if wrapErr != nil {
 						errs = append(errs, fmt.Sprintf("patch #%d (wrap): result of wrap does not parse as a Go statement: %v", i+1, wrapErr))
 						break
 					}
-					lineStart := lineStartOffset(origBody, h[0])
-					lineEnd := lineEndOffset(origBody, h[0])
-					extraEdits = append(extraEdits, resolvedEdit{start: lineStart, end: lineEnd, replacement: replacement + "\n"})
+					extraEdits = append(extraEdits, resolvedEdit{start: ws, end: we, replacement: wrepl, patch: i + 1})
 				default:
 					errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap, set_signature)", i+1, p.Op))
 				}
@@ -352,7 +366,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			// the SAME top-level statement, the lifted position is
 			// unambiguous even though the raw anchor matched multiple times.
 			// Fall through with a synthetic idx=0 in that case.
-			if (p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter) && liftsAgree(fset, targetFn, lbraceOff+1, hits) {
+			if (p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter) && liftsAgree(fset, targetBody, lbraceOff+1, hits) {
 				// proceed with the first hit; the lift logic will anchor
 				// at the shared top-level statement.
 			} else {
@@ -376,7 +390,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 					i+1, p.Op, p.Match+p.MatchRegex, len(hits), req.Identifier, len(hits), strings.Join(candidates, "\n"), trailer, firstLine, len(hits),
 				)
 				if p.Op == domain.PatchOpInsertBefore || p.Op == domain.PatchOpInsertAfter {
-					if liftCands := ambiguousLiftCandidates(fset, targetFn, src, lbraceOff+1, hits); len(liftCands) > 1 {
+					if liftCands := ambiguousLiftCandidates(fset, targetBody, src, lbraceOff+1, hits); len(liftCands) > 1 {
 						msg += "\nAuto-lift candidates (different top-level statements):\n  " + strings.Join(liftCands, "\n  ")
 					}
 				}
@@ -427,6 +441,9 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				continue
 			}
 			repl := p.Replace
+			if p.MatchRegex != "" {
+				repl = expandRegexReplace(p.MatchRegex, origBody[hit[0]:hit[1]], repl)
+			}
 			// Re-apply the original line's indentation when the replacement has none,
 			// so callers don't need to reproduce leading whitespace.
 			if repl != "" && !startsWithWhitespace(repl) {
@@ -434,12 +451,12 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 					repl = reIndentReplacement(repl, indent)
 				}
 			}
-			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl}
+			edits[i] = resolvedEdit{start: hit[0], end: hit[1], replacement: repl, patch: i + 1}
 			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl, Match: origBody[hit[0]:hit[1]], PreBody: origBody})
 
 		case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
-			plan := resolveInsertAnchor(fset, targetFn, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
-			edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line}
+			plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
+			edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1}
 			if plan.Lift != nil {
 				autoLifts = append(autoLifts, *plan.Lift)
 				pendingCtx = append(pendingCtx, pendingInsertCtx{
@@ -452,28 +469,32 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 
 		case domain.PatchOpDelete:
 			start, end := deletionRange(origBody, hit[0], hit[1])
-			edits[i] = resolvedEdit{start: start, end: end, replacement: ""}
+			edits[i] = resolvedEdit{start: start, end: end, replacement: "", patch: i + 1}
 
 		case domain.PatchOpWrap:
-			// Use the trimmed matched text as the %s argument so the agent does
-			// not need to reproduce indentation in the wrap template.
-			// The result is re-indented to match the original line's indentation.
-			indent := lineIndent(origBody, hit[0])
-			trimmedMatch := strings.TrimSpace(origBody[hit[0]:hit[1]])
-			replacement := indent + fmt.Sprintf(p.Wrap, trimmedMatch)
-			if wrapErr := validateGoStmt(replacement); wrapErr != nil {
+			ws, we, wrepl, wrapErr := buildWrapEdit(origBody, p.Wrap, hit, true)
+			if wrapErr != nil {
 				errs = append(errs, fmt.Sprintf("patch #%d (wrap): result of wrap does not parse as a Go statement: %v", i+1, wrapErr))
 				continue
 			}
-			// Replace the whole line (so indentation is not duplicated).
-			lineStart := lineStartOffset(origBody, hit[0])
-			lineEnd := lineEndOffset(origBody, hit[0])
-			edits[i] = resolvedEdit{start: lineStart, end: lineEnd, replacement: replacement + "\n"}
+			edits[i] = resolvedEdit{start: ws, end: we, replacement: wrepl, patch: i + 1}
 
 		default:
 			errs = append(errs, fmt.Sprintf("patch #%d: unknown op %q (must be replace, insert_before, insert_after, delete, wrap, set_signature)", i+1, p.Op))
 		}
 	}
+
+	// Merge per-patch edits with extraEdits from occurrence=-1 patches, then
+	// reject overlapping ranges up-front (backlog item 12) — the back-to-front
+	// splice below corrupts bytes when two resolved edits intersect.
+	allEdits := make([]resolvedEdit, 0, len(edits)+len(extraEdits))
+	for _, e := range edits {
+		if e.start != 0 || e.end != 0 || e.replacement != "" {
+			allEdits = append(allEdits, e)
+		}
+	}
+	allEdits = append(allEdits, extraEdits...)
+	errs = append(errs, editOverlapErrors(origBody, bodyStartLine, allEdits)...)
 
 	if len(errs) > 0 {
 		msg := strings.Join(errs, "\n")
@@ -492,16 +513,13 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	// Phase 2: apply edits to origBody working backwards (highest offset first).
-	// Merge per-patch edits with extraEdits from occurrence=-1 patches.
-	allEdits := make([]resolvedEdit, 0, len(edits)+len(extraEdits))
-	for _, e := range edits {
-		if e.start != 0 || e.end != 0 || e.replacement != "" {
-			allEdits = append(allEdits, e)
-		}
-	}
-	allEdits = append(allEdits, extraEdits...)
 	sort.Slice(allEdits, func(a, b int) bool {
-		return allEdits[a].start > allEdits[b].start
+		if allEdits[a].start != allEdits[b].start {
+			return allEdits[a].start > allEdits[b].start
+		}
+		// Same start: apply the wider edit first so a zero-width insert at
+		// the same offset deterministically lands BEFORE the edited range.
+		return allEdits[a].end > allEdits[b].end
 	})
 
 	newBody := []byte(origBody)
@@ -580,14 +598,13 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	// statements than the math says it should), refuse the write. This is
 	// the multi-line shrinking-replace case where validateReplaceApplied's
 	// substring check passes but the body still ends up missing content.
+	// Aggregate across all replace checks (backlog item 11): occurrence:-1 and
+	// multiple shrinking replaces apply several edits to one body, so the
+	// expected statement count must sum every matched/replacement delta rather
+	// than back out a single application per check (which false-positived).
 	postBody := string(newBody)
-	for _, rv := range replaceChecks {
-		if rv.Match == "" || rv.PreBody == "" {
-			continue
-		}
-		if vErr := validateNoDroppedStmts(rv.Replacement, rv.Match, rv.PreBody, postBody); vErr != nil {
-			return domain.PatchFunctionResult{}, vErr
-		}
+	if vErr := validateNoDroppedStmtsBatch(replaceChecks, postBody); vErr != nil {
+		return domain.PatchFunctionResult{}, vErr
 	}
 
 	diff := diffStrings(req.FilePath, string(src), string(newSrc))
@@ -632,6 +649,63 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	}
 
 	return domain.PatchFunctionResult{Diff: diff, Applied: len(req.Patches), AddedImports: addedImports, Warnings: warnings, AutoLifts: autoLifts}, nil
+}
+
+// resolvedEdit is a resolved byte-range edit against the patched body
+// (function body or decl value). start/end are body-relative offsets;
+// patch is the 1-based patch number that produced the edit, kept for
+// overlap diagnostics.
+type resolvedEdit struct {
+	start, end  int
+	replacement string
+	patch       int
+}
+
+// editOverlapErrors returns one message per pair of resolved edits whose byte
+// ranges overlap (backlog item 12). The phase-2 back-to-front splice corrupts
+// bytes when ranges intersect, so callers must reject the whole request.
+// Edits touching only at a boundary are disjoint; a zero-width insert at
+// another edit's start is allowed too — the phase-2 sort applies it after the
+// wider edit, so its text deterministically lands before that edit's range.
+func editOverlapErrors(origBody string, bodyStartLine int, edits []resolvedEdit) []string {
+	if len(edits) < 2 {
+		return nil
+	}
+	sorted := make([]resolvedEdit, len(edits))
+	copy(sorted, edits)
+	sort.Slice(sorted, func(a, b int) bool {
+		if sorted[a].start != sorted[b].start {
+			return sorted[a].start < sorted[b].start
+		}
+		return sorted[a].end < sorted[b].end
+	})
+	lineOf := func(off int) int {
+		if off > len(origBody) {
+			off = len(origBody)
+		}
+		return bodyStartLine + strings.Count(origBody[:off], "\n")
+	}
+	span := func(e resolvedEdit) string {
+		from := lineOf(e.start)
+		to := lineOf(max(e.end-1, e.start))
+		if from == to {
+			return fmt.Sprintf("L%d", from)
+		}
+		return fmt.Sprintf("L%d-L%d", from, to)
+	}
+	var out []string
+	widest := sorted[0]
+	for _, e := range sorted[1:] {
+		if e.start < widest.end {
+			out = append(out, fmt.Sprintf(
+				"patch #%d (%s) and patch #%d (%s) overlap — resolved edits in one request must be disjoint; drop one of them or narrow its match/line range",
+				widest.patch, span(widest), e.patch, span(e)))
+		}
+		if e.end > widest.end {
+			widest = e
+		}
+	}
+	return out
 }
 
 // safeRegexMatches compiles pattern and returns all non-empty match byte ranges
@@ -702,6 +776,30 @@ func safeRegexMatches(pattern, body string) ([][2]int, error) {
 	return hits, nil
 }
 
+// expandRegexReplace expands $1/$name backreferences in template using the
+// submatches of matched under pattern, mirroring patch_file's ExpandString
+// behavior so match_regex replacements support capture groups in
+// patch_function and patch_decl too (backlog item 27).
+//
+// matched must be exactly one full match of pattern — it comes straight from
+// safeRegexMatches, so re-matching it reproduces the same submatches. When the
+// template has no '$' backreference, or the pattern fails to recompile, or the
+// substring does not re-match, the template is returned unchanged.
+func expandRegexReplace(pattern, matched, template string) string {
+	if !strings.Contains(template, "$") {
+		return template
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return template
+	}
+	loc := re.FindStringSubmatchIndex(matched)
+	if loc == nil {
+		return template
+	}
+	return string(re.ExpandString(nil, template, matched, loc))
+}
+
 // findNormalizedMatches returns all [start,end] byte ranges in body where
 // the whitespace-normalized content matches the normalized match string.
 // Matching is attempted at four granularities:
@@ -730,12 +828,11 @@ func findNormalizedMatches(body, match string) [][2]int {
 			hits = append(hits, [2]int{offsets[i], offsets[i] + len(l)})
 			continue
 		}
-		// sub-string match using normalised versions — find position in original.
-		if idx := strings.Index(normLine, normMatch); idx != -1 {
-			// Map the normalized index back to the original line via rune scan.
-			start, end := mapNormIndexToOrig(l, normMatch)
-			if start >= 0 {
-				hits = append(hits, [2]int{offsets[i] + start, offsets[i] + end})
+		// sub-string match using normalised versions — record EVERY position
+		// in the original line so occurrence counting stays exact.
+		if strings.Contains(normLine, normMatch) {
+			for _, m := range mapNormIndexToOrig(l, normMatch) {
+				hits = append(hits, [2]int{offsets[i] + m[0], offsets[i] + m[1]})
 			}
 		}
 	}
@@ -746,15 +843,19 @@ func findNormalizedMatches(body, match string) [][2]int {
 	// 3: multi-line: collapse all body whitespace and try to find the match.
 	normBody := normalizeWS(body)
 	searchFrom := 0
-	for {
+	for searchFrom <= len(normBody) {
 		idx := strings.Index(normBody[searchFrom:], normMatch)
 		if idx < 0 {
 			break
 		}
 		absIdx := searchFrom + idx
 		start, end := mapNormBodyToOrig(body, normBody, absIdx, absIdx+len(normMatch))
-		if start >= 0 {
+		if start >= 0 && hitOnTokenBoundaries(body, start, end) {
 			hits = append(hits, [2]int{start, end})
+			// Resume past the accepted match so hits never overlap (backlog
+			// item 4: overlapping ranges corrupt the phase-2 splice).
+			searchFrom = absIdx + len(normMatch)
+			continue
 		}
 		searchFrom = absIdx + 1
 	}
@@ -773,20 +874,24 @@ func normalizeWS(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// mapNormIndexToOrig finds the byte range in orig that corresponds to the
-// normalised needle. Returns (-1,-1) on failure.
-func mapNormIndexToOrig(orig, normNeedle string) (int, int) {
+// mapNormIndexToOrig finds every byte range in orig that corresponds to the
+// normalised needle. Candidates that start or end inside an identifier or
+// numeric literal are rejected (hitOnTokenBoundaries), so a needle like
+// "x = 1" can never bind inside "max = 12". Accepted matches never overlap:
+// the scan resumes past each accepted match.
+func mapNormIndexToOrig(orig, normNeedle string) [][2]int {
 	fields := strings.Fields(normNeedle)
 	if len(fields) == 0 {
-		return -1, -1
+		return nil
 	}
+	var out [][2]int
 	// Walk orig looking for the first field.
 	first := fields[0]
 	i := 0
 	for i < len(orig) {
 		idx := strings.Index(orig[i:], first)
 		if idx < 0 {
-			return -1, -1
+			break
 		}
 		start := i + idx
 		// Try to match all remaining fields from here.
@@ -803,12 +908,50 @@ func mapNormIndexToOrig(orig, normNeedle string) (int, int) {
 			}
 			pos += len(f)
 		}
-		if matched {
-			return start, pos
+		if matched && hitOnTokenBoundaries(orig, start, pos) {
+			out = append(out, [2]int{start, pos})
+			i = pos
+			continue
 		}
 		i = start + 1
 	}
-	return -1, -1
+	return out
+}
+
+// isWordByte reports whether c can be part of an identifier or numeric
+// literal (ASCII letter, digit, or underscore).
+func isWordByte(c byte) bool {
+	return c == '_' || (c >= '0' && c <= '9') ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// hitOnTokenBoundaries reports whether the match spanning [start,end) in s
+// begins and ends on token boundaries — i.e. it does not cut an identifier
+// or a numeric literal in half. A '.' glued to a digit is treated as part
+// of a float literal ("1.5"), while '.' before a letter stays a selector
+// ("pkg.Name") and is allowed.
+func hitOnTokenBoundaries(s string, start, end int) bool {
+	if start < 0 || end > len(s) || start >= end {
+		return false
+	}
+	if start > 0 && isWordByte(s[start-1]) && isWordByte(s[start]) {
+		return false
+	}
+	if end < len(s) && isWordByte(s[end-1]) && isWordByte(s[end]) {
+		return false
+	}
+	// '.' followed by a digit is always a float continuation (field names
+	// cannot start with a digit), so a match must not start right after it.
+	if start > 0 && s[start-1] == '.' && s[start] >= '0' && s[start] <= '9' {
+		return false
+	}
+	// Symmetric case: a match ending in a digit must not stop right before
+	// the fractional part of a float literal.
+	if end+1 < len(s) && s[end] == '.' && s[end-1] >= '0' && s[end-1] <= '9' &&
+		s[end+1] >= '0' && s[end+1] <= '9' {
+		return false
+	}
+	return true
 }
 
 // mapNormBodyToOrig maps a byte range in the normalised body back to the original body.
@@ -893,6 +1036,49 @@ func deletionRange(body string, start, end int) (int, int) {
 		return lineStart, lineEnd
 	}
 	return start, end
+}
+
+// buildWrapEdit resolves an op=wrap patch against the hit [h0,h1) in origBody.
+//
+// Whole-line matches (the hit spans the entire non-whitespace content of its
+// line block) keep the legacy semantics: the full line block is replaced by
+// indent + wrap(trimmedMatch). Sub-line matches splice wrap(matchedFragment)
+// over the matched range only, so the rest of the line is preserved (backlog
+// item 3).
+//
+// validateStmt enables the go-statement parse check (function bodies only —
+// decl values may hold expression fragments that are not statements). For a
+// sub-line hit the check runs on the resulting line; it is skipped when the
+// original line itself was not a standalone statement (continuation lines),
+// in which case the final whole-file validation is the safety net.
+func buildWrapEdit(origBody, wrapTmpl string, h [2]int, validateStmt bool) (start, end int, replacement string, err error) {
+	lineStart := lineStartOffset(origBody, h[0])
+	lineEnd := lineEndOffset(origBody, h[1]-1)
+	matched := origBody[h[0]:h[1]]
+	lineContent := origBody[lineStart:lineEnd]
+
+	if strings.TrimSpace(lineContent) == strings.TrimSpace(matched) {
+		indent := lineIndent(origBody, h[0])
+		repl := indent + fmt.Sprintf(wrapTmpl, strings.TrimSpace(matched))
+		if validateStmt {
+			if werr := validateGoStmt(repl); werr != nil {
+				return 0, 0, "", werr
+			}
+		}
+		if strings.HasSuffix(lineContent, "\n") {
+			repl += "\n"
+		}
+		return lineStart, lineEnd, repl, nil
+	}
+
+	wrapped := fmt.Sprintf(wrapTmpl, matched)
+	if validateStmt {
+		newLine := origBody[lineStart:h[0]] + wrapped + origBody[h[1]:lineEnd]
+		if werr := validateGoStmt(newLine); werr != nil && validateGoStmt(lineContent) == nil {
+			return 0, 0, "", werr
+		}
+	}
+	return h[0], h[1], wrapped, nil
 }
 
 // validateGoStmt checks that s parses as a valid Go statement inside a dummy function.
@@ -1285,8 +1471,14 @@ func scanTokens(s string) []tokInfo {
 // FindTokenMatches finds byte ranges in body where the Go token sequence
 // from match appears. Used as a fallback when whitespace normalization
 // alone isn't enough — handles comment differences and formatting
-// divergences that produce identical token streams. Returned ranges are
-// extended to full-line boundaries for consistent indentation handling.
+// divergences that produce identical token streams.
+//
+// A hit is extended to full-line boundaries ONLY when the token span already
+// covers the whole line content (nothing but whitespace before it on its
+// first line and after it on its last line) — that keeps indentation handling
+// consistent with whitespace-normalized matches. A sub-line hit keeps its
+// exact token range so replace/delete/wrap cannot silently consume the rest
+// of the line (backlog item 2).
 func FindTokenMatches(body, match string) [][2]int {
 	bodyToks := scanTokens(body)
 	matchToks := scanTokens(match)
@@ -1305,24 +1497,30 @@ func FindTokenMatches(body, match string) [][2]int {
 		if found {
 			start := bodyToks[i].pos
 			end := bodyToks[i+len(matchToks)-1].end
-			// Extend to full-line boundaries so indentation handling
-			// works the same as whitespace-normalized matches.
-			for start > 0 && body[start-1] != '\n' {
-				start--
+			ls := start
+			for ls > 0 && body[ls-1] != '\n' {
+				ls--
 			}
-			for end < len(body) && body[end] != '\n' {
-				end++
+			le := end
+			for le < len(body) && body[le] != '\n' {
+				le++
+			}
+			if strings.TrimSpace(body[ls:start]) == "" && strings.TrimSpace(body[end:le]) == "" {
+				start, end = ls, le
 			}
 			hits = append(hits, [2]int{start, end})
+			// Resume past the matched token run so hits never overlap
+			// (backlog item 4); the loop's i++ moves to the next token.
+			i += len(matchToks) - 1
 		}
 	}
 	return hits
 }
 
 // resolveSignatureEdit computes the absolute file-offset edits needed to
-// rewrite the params and/or results list of a function or method while
-// leaving the body, name, receiver, and any generic type-parameter block
-// (e.g. [T any]) intact.
+// rewrite the params and/or results list of a function, method, or closure
+// literal (fnType is the target's *ast.FuncType) while leaving the body,
+// name, receiver, and any generic type-parameter block (e.g. [T any]) intact.
 //
 // At least one of newParams or newReturns must be non-empty. newParams is
 // expected to include its surrounding parens (e.g. "(ctx context.Context, x int)").
@@ -1332,11 +1530,11 @@ func FindTokenMatches(body, match string) [][2]int {
 // Each returned signatureEdit describes a byte range in src to splice.
 // When both params and returns are rewritten the function returns two
 // separate edits; applied descending they do not overlap.
-func resolveSignatureEdit(fset *token.FileSet, fn *ast.FuncDecl, src []byte, newParams, newReturns string) ([]signatureEdit, error) {
+func resolveSignatureEdit(fset *token.FileSet, fnType *ast.FuncType, src []byte, newParams, newReturns string) ([]signatureEdit, error) {
 	if strings.TrimSpace(newParams) == "" && strings.TrimSpace(newReturns) == "" {
 		return nil, fmt.Errorf("at least one of params or returns must be provided")
 	}
-	if fn.Type == nil || fn.Type.Params == nil {
+	if fnType == nil || fnType.Params == nil {
 		return nil, fmt.Errorf("function has no parameter list")
 	}
 
@@ -1369,9 +1567,9 @@ func resolveSignatureEdit(fset *token.FileSet, fn *ast.FuncDecl, src []byte, new
 		return nil, fmt.Errorf("invalid params %q: %w", newParams, perr)
 	}
 
-	paramsOpen := fset.Position(fn.Type.Params.Opening).Offset
-	paramsClose := fset.Position(fn.Type.Params.Closing).Offset + 1 // exclusive
-	sigEnd := fset.Position(fn.Type.End()).Offset                   // exclusive
+	paramsOpen := fset.Position(fnType.Params.Opening).Offset
+	paramsClose := fset.Position(fnType.Params.Closing).Offset + 1 // exclusive
+	sigEnd := fset.Position(fnType.End()).Offset                   // exclusive
 
 	var edits []signatureEdit
 	if newParams != "" {
