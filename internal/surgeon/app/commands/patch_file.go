@@ -118,40 +118,44 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		if needle == "" {
 			needle = p.MatchRegex
 		}
+		// effScope is this patch's effective scope. A downgrade to "all" when
+		// the intermediate source is unparseable must apply to THIS patch only
+		// and never leak to later patches (backlog item 15).
+		effScope := scope
 		// Re-parse the CURRENT working source before every patch so exclusion
 		// and identifier ranges reflect the result of prior substitutions.
 		var (
 			excluded []rangePair
 			idents   []rangePair
 		)
-		if scope != "all" {
+		if effScope != "all" {
 			var perr error
 			excluded, idents, perr = collectScopeRanges(req.FilePath, working)
 			if perr != nil {
 				// If the intermediate source is unparseable, fall back to scope=all
 				// for this patch — the final re-parse/gofmt guard still catches
 				// invalid output. We record a warning so callers know.
-				warnings = append(warnings, fmt.Sprintf("patch #%d: scope=%s filter skipped — intermediate source is not parseable (%v)", i+1, scope, perr))
-				scope = "all"
+				warnings = append(warnings, fmt.Sprintf("patch #%d: scope=%s filter skipped — intermediate source is not parseable (%v)", i+1, effScope, perr))
+				effScope = "all"
 			}
 		}
 
 		var (
-			accepted [][2]int
-			filtered [][2]int
-			replaces []string
+			accepted   [][2]int
+			filtered   [][2]int
+			replaces   []string
+			matchCount int // scope-allowed matches, independent of occurrence (item 26)
 		)
 		if p.MatchRegex != "" {
 			re := compiled[i]
-			matchIndex := 0
 			for _, m := range re.FindAllStringSubmatchIndex(working, -1) {
 				start, end := m[0], m[1]
-				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+				if effScope != "all" && !rangeAllowed(start, end, working, effScope, excluded, idents) {
 					filtered = append(filtered, [2]int{start, end})
 					continue
 				}
-				matchIndex++
-				if p.Occurrence > 0 && matchIndex != p.Occurrence {
+				matchCount++
+				if p.Occurrence > 0 && matchCount != p.Occurrence {
 					continue
 				}
 				accepted = append(accepted, [2]int{start, end})
@@ -160,22 +164,20 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 			}
 		} else if p.MatchMode == "normalized" {
 			allMatches := findNormalizedMatches(working, p.Match)
-			matchIndex := 0
 			for _, rng := range allMatches {
 				start, end := rng[0], rng[1]
-				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+				if effScope != "all" && !rangeAllowed(start, end, working, effScope, excluded, idents) {
 					filtered = append(filtered, [2]int{start, end})
 					continue
 				}
-				matchIndex++
-				if p.Occurrence > 0 && matchIndex != p.Occurrence {
+				matchCount++
+				if p.Occurrence > 0 && matchCount != p.Occurrence {
 					continue
 				}
 				accepted = append(accepted, [2]int{start, end})
 				replaces = append(replaces, p.Replace)
 			}
 		} else {
-			matchIndex := 0
 			for from := 0; from < len(working); {
 				idx := strings.Index(working[from:], p.Match)
 				if idx < 0 {
@@ -183,11 +185,11 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 				}
 				start := from + idx
 				end := start + len(p.Match)
-				if scope != "all" && !rangeAllowed(start, end, working, scope, excluded, idents) {
+				if effScope != "all" && !rangeAllowed(start, end, working, effScope, excluded, idents) {
 					filtered = append(filtered, [2]int{start, end})
 				} else {
-					matchIndex++
-					if p.Occurrence > 0 && matchIndex != p.Occurrence {
+					matchCount++
+					if p.Occurrence > 0 && matchCount != p.Occurrence {
 						from = end
 						continue
 					}
@@ -198,11 +200,34 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 			}
 		}
 
+		// Item 26: an occurrence beyond the (positive) match count is a hard
+		// error like patch_function, not a silent no-op with a misleading
+		// "zero matches" warning. When no match is found at all (matchCount==0)
+		// the existing zero-match/all-filtered warnings still apply, matching
+		// patch_file's defensive "zero matches are allowed" contract.
+		if p.Occurrence > 0 && matchCount > 0 && p.Occurrence > matchCount {
+			return domain.PatchFileResult{}, &domain.Error{
+				Code:    "PATCH_FAILED",
+				Message: fmt.Sprintf("patch #%d: occurrence %d requested but only %d match(es) found for %q", i+1, p.Occurrence, matchCount, needle),
+			}
+		}
+
 		total := len(accepted) + len(filtered)
 		hits[i] = len(accepted)
 		// Capture filtered line numbers BEFORE replacements mutate offsets.
 		filteredLines := formatFilteredLines(working, filtered)
 		if len(accepted) > 0 {
+			// Item 4 guard: the match engine guarantees ascending disjoint
+			// ranges; a violation would corrupt the splice (or panic), so
+			// fail loudly instead of writing garbage.
+			for j := 1; j < len(accepted); j++ {
+				if accepted[j][0] < accepted[j-1][1] {
+					return domain.PatchFileResult{}, &domain.Error{
+						Code:    "PATCH_FAILED",
+						Message: fmt.Sprintf("patch #%d: internal error — match engine produced overlapping ranges for %q; please report this", i+1, needle),
+					}
+				}
+			}
 			working = applyRangeReplacements(working, accepted, replaces)
 			// Issue #3 guard: validate THIS patch's replacement landed before
 			// subsequent patches mutate the working source. Sequential patches
@@ -232,9 +257,9 @@ func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFile
 		case total == 0:
 			warnings = append(warnings, fmt.Sprintf("patch #%d: zero matches for %q — no changes from this patch", i+1, needle))
 		case len(accepted) == 0 && len(filtered) > 0:
-			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences matched but all filtered out by scope=%s; no changes from this patch", i+1, len(filtered), scope))
+			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences matched but all filtered out by scope=%s; no changes from this patch", i+1, len(filtered), effScope))
 		case len(filtered) > 0:
-			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences filtered out by scope=%s (lines: %s)", i+1, len(filtered), scope, filteredLines))
+			warnings = append(warnings, fmt.Sprintf("patch #%d: %d occurrences filtered out by scope=%s (lines: %s)", i+1, len(filtered), effScope, filteredLines))
 		}
 	}
 

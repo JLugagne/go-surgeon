@@ -47,7 +47,7 @@ var Catalog = []ToolEntry{
 	{Name: "patch.struct", Category: "edit", Summary: "ops for target=struct: add_field, remove_field, rename_field, retype_field, set_tag, set_doc, auto_tag", Ops: PatchStructOps},
 	{Name: "patch.interface", Category: "edit", Summary: "ops for target=interface: add_method, remove_method, rename_method, retype_method, set_doc, embed, remove_embed", Ops: PatchInterfaceOps},
 	{Name: "patch.decl", Category: "edit", Summary: "ops for target=decl: replace, insert_before, insert_after, delete, wrap", Ops: PatchDeclOps},
-	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after-marker)", Example: `{"file": "foo.go", "identifier": "Handler", "content": "log.Println(\"hi\")", "position": "end-of-body"}`, Related: "patch"},
+	{Name: "insert_call", Category: "edit", Summary: "insert one statement at a marked position inside a function body (before-return / end-of-body / after:<marker>)", Example: `{"file": "foo.go", "function": "Handler", "call": "log.Println(\"hi\")", "position": "after:TODO insert setup here"}`, Related: "patch"},
 	{Name: "create", Category: "edit", Summary: "add a new file, function, or struct (object=file|func|struct)", Example: `{"object": "func", "file": "foo.go", "content": "func Foo() {}"}`, Related: "update, execute_plan"},
 	{Name: "update", Category: "edit", Summary: "whole-declaration replacement (replace_file / update_func / update_struct); prefer patch when editing in place", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo", "content": "func Foo() {}"}`, Related: "patch, create"},
 	{Name: "delete", Category: "edit", Summary: "remove a function, method, or struct (object=func|struct)", Example: `{"object": "func", "file": "foo.go", "identifier": "Foo"}`, Related: "interface"},
@@ -72,7 +72,7 @@ var Catalog = []ToolEntry{
 	{Name: "test_run", Category: "validate", Summary: "run go test and return a compact pass/fail report; affected_by=file narrows to owning package + reverse-deps; verbosity=summary|full controls payload size (auto-summary above 50 tests)", Example: `{"affected_by": "internal/foo/bar.go", "verbosity": "summary"}`, Related: "build_check, test"},
 
 	// BATCH
-	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch", "file": "a.go", "identifier": "Foo", "target": "function", "patch_function_ops": [...]}]}`, Related: "patch, create"},
+	{Name: "execute_plan", Category: "batch", Summary: "apply up to 15 edit actions atomically (create/update/delete/patch_*); use when 3+ edits must land together or roll back together", Example: `{"actions": [{"action": "patch_function", "file": "a.go", "identifier": "Foo", "patch_function_ops": [{"op": "replace", "match": "x", "replace": "y"}]}]}`, Related: "patch, create"},
 	{Name: "batch_query", Category: "batch", Summary: "run up to 10 read-only queries (symbol/overview/find_references/find_definition) in one round-trip; fail-soft per item", Example: `{"queries": [{"op": "overview", "focus": "internal"}, {"op": "symbol", "query": "NewServer"}]}`, Related: "symbol, overview"},
 }
 
@@ -84,7 +84,7 @@ var PatchOps = map[string]ToolOpEntry{
 		Example:     `{"target": "function", "file": "foo.go", "identifier": "Foo", "patches": [{"op": "replace", "match": "x", "replace": "y"}]}`,
 	},
 	"struct": {
-		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc/auto_tag). Single-target shape shown; wrap multiple in items: [{...}] for an atomic batch. auto_tag (bulk-generate snake_case tags for every exported field) cannot be combined with other ops in the same call.",
+		Description: "Edit a struct's field list (add/remove/rename/retype/set_tag/set_doc/auto_tag). Single-target shape shown; wrap multiple in items: [{...}] for an atomic batch. auto_tag (bulk-generate tags for every exported field; json emits camelCase, other formats emit snake_case) cannot be combined with other ops in the same call.",
 		Required:    []string{"target=struct", "file", "identifier", "patches"},
 		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}`,
 	},
@@ -170,7 +170,7 @@ var PatchStructOps = map[string]ToolOpEntry{
 		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "set_doc", "name": "Email", "doc": "Email is the primary contact address."}]}`,
 	},
 	"auto_tag": {
-		Description: "Bulk-generate snake_case struct tags for every exported field of the struct using the given format (e.g. 'json' or 'bson'). For a single field, use set_tag instead. Cannot be combined with other ops in the same patch call (split into two calls).",
+		Description: "Bulk-generate struct tags for every exported field of the struct using the given format: 'json' emits camelCase names, other formats (e.g. 'bson') emit snake_case. For a single field, use set_tag instead. Cannot be combined with other ops in the same patch call (split into two calls).",
 		Required:    []string{"file", "identifier", "patches[].op=auto_tag", "patches[].format"},
 		Example:     `{"target": "struct", "file": "foo.go", "identifier": "User", "patches": [{"op": "auto_tag", "format": "json"}]}`,
 	},
@@ -198,19 +198,19 @@ var PatchInterfaceOps = map[string]ToolOpEntry{
 		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "retype_method", "name": "Read", "signature": "Read(ctx context.Context, p []byte) (int, error)"}]}`,
 	},
 	"set_doc": {
-		Description: "Set or clear the interface-level doc comment (empty string clears).",
-		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].doc"},
-		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "set_doc", "doc": "Reader reads bytes."}]}`,
+		Description: "Set or clear the doc comment on a named member (method or embed) of the interface (empty string clears). Not interface-level — patches[].name selects which member.",
+		Required:    []string{"file", "identifier", "patches[].op=set_doc", "patches[].name", "patches[].doc"},
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "Reader", "patches": [{"op": "set_doc", "name": "Read", "doc": "Read reads bytes."}]}`,
 	},
 	"embed": {
 		Description: "Embed another interface type inside this one (e.g. 'io.Reader'). Mock is regenerated.",
-		Required:    []string{"file", "identifier", "patches[].op=embed", "patches[].name"},
-		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "embed", "name": "io.Reader"}]}`,
+		Required:    []string{"file", "identifier", "patches[].op=embed", "patches[].type"},
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "embed", "type": "io.Reader"}]}`,
 	},
 	"remove_embed": {
 		Description: "Remove an embedded interface by its type literal.",
-		Required:    []string{"file", "identifier", "patches[].op=remove_embed", "patches[].name"},
-		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "remove_embed", "name": "io.Reader"}]}`,
+		Required:    []string{"file", "identifier", "patches[].op=remove_embed", "patches[].type"},
+		Example:     `{"target": "interface", "file": "foo.go", "identifier": "ReadCloser", "patches": [{"op": "remove_embed", "type": "io.Reader"}]}`,
 	},
 }
 

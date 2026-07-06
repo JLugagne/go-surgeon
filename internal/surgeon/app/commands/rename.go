@@ -121,6 +121,13 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 		return domain.RenameResult{}, &domain.Error{Code: "CONFLICT", Message: err.Error()}
 	}
 
+	// Pre-flight: refuse a rename that would silently rebind an existing
+	// reference by shadowing across nested scopes. Such a rename compiles
+	// cleanly, so build_check cannot catch it — we must reject it here.
+	if err := checkNoShadowCapture(fset, pkgs, target, req.NewName); err != nil {
+		return domain.RenameResult{}, &domain.Error{Code: "CONFLICT", Message: err.Error()}
+	}
+
 	locs := collectRenameSites(fset, pkgs, target, req.Symbol.Name)
 	if len(locs) == 0 {
 		return domain.RenameResult{}, &domain.Error{
@@ -151,6 +158,16 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 		result.Warnings = append(result.Warnings, exportChangeWarning)
 	}
 
+	// Buffer every rewritten file and validate all per-site guards before
+	// writing anything. A guard failure on a later file must not leave an
+	// earlier file half-rewritten on disk, so writes are deferred until
+	// the whole batch has passed validation (all-or-nothing at the
+	// validation level).
+	type pendingWrite struct {
+		file    string
+		content []byte
+	}
+	pending := make([]pendingWrite, 0, len(files))
 	for _, file := range files {
 		group := byFile[file]
 		sort.Slice(group, func(i, j int) bool { return group[i].Offset > group[j].Offset })
@@ -176,12 +193,16 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 			}
 			working = append(working[:l.Offset], append([]byte(req.NewName), working[l.EndOffset:]...)...)
 		}
-		if !req.DryRun {
-			if _, writeErr := h.fs.WriteFile(ctx, file, working); writeErr != nil {
-				return domain.RenameResult{}, &domain.Error{Code: "WRITE_ERROR", Message: fmt.Sprintf("write %s: %v", file, writeErr), Err: writeErr}
+		pending = append(pending, pendingWrite{file: file, content: working})
+		result.FilesModified = append(result.FilesModified, file)
+	}
+
+	if !req.DryRun {
+		for _, pw := range pending {
+			if _, writeErr := h.fs.WriteFile(ctx, pw.file, pw.content); writeErr != nil {
+				return domain.RenameResult{}, &domain.Error{Code: "WRITE_ERROR", Message: fmt.Sprintf("write %s: %v", pw.file, writeErr), Err: writeErr}
 			}
 		}
-		result.FilesModified = append(result.FilesModified, file)
 	}
 
 	// Sort for a deterministic report.
@@ -208,6 +229,20 @@ func locateSymbol(fset *token.FileSet, pkgs []*packages.Package, ref domain.Symb
 		pkg *packages.Package
 	}
 	var candidates []cand
+	// Dedup by declaration position + name, not object identity: with
+	// Tests=true the loader returns the same package twice (pkg and
+	// pkg [pkg.test]) and each universe carries its own types.Object
+	// for the same declaration. Pointer comparison would report every
+	// symbol as "ambiguous (2 matches)".
+	seen := make(map[string]struct{})
+	addCandidate := func(obj types.Object, p *packages.Package) {
+		key := renameObjectPosKey(fset, obj)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, cand{obj, p})
+	}
 	for _, p := range pkgs {
 		if p.Types == nil || p.TypesInfo == nil {
 			continue
@@ -217,7 +252,7 @@ func locateSymbol(fset *token.FileSet, pkgs []*packages.Package, ref domain.Symb
 		}
 		if obj := p.Types.Scope().Lookup(ref.Name); obj != nil {
 			if ref.Receiver == "" && renameMatchesFileLine(fset, obj.Pos(), ref) {
-				candidates = append(candidates, cand{obj, p})
+				addCandidate(obj, p)
 			}
 		}
 		for id, obj := range p.TypesInfo.Defs {
@@ -240,16 +275,7 @@ func locateSymbol(fset *token.FileSet, pkgs []*packages.Package, ref domain.Symb
 					continue
 				}
 			}
-			dup := false
-			for _, c := range candidates {
-				if c.obj == obj {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				candidates = append(candidates, cand{obj, p})
-			}
+			addCandidate(obj, p)
 		}
 	}
 
@@ -362,24 +388,46 @@ func collectRenameSites(fset *token.FileSet, pkgs []*packages.Package, target ty
 			continue
 		}
 		for id, obj := range p.TypesInfo.Defs {
-			if obj == nil {
-				continue
-			}
-			if obj == target || (obj.Pos() == target.Pos() && obj.Name() == target.Name() && obj.Pkg() == target.Pkg()) {
+			if renameSameObject(fset, obj, target) {
 				record(id)
 			}
 		}
 		for id, obj := range p.TypesInfo.Uses {
-			if obj == nil {
-				continue
-			}
-			if obj == target || (obj.Pos() == target.Pos() && obj.Name() == target.Name() && obj.Pkg() == target.Pkg()) {
+			if renameSameObject(fset, obj, target) {
 				record(id)
 			}
 		}
 	}
 
 	return out
+}
+
+// renameSameObject matches objects by declaration position + name in
+// the shared fset. Pointer or Pkg() identity would drop matches when
+// Tests=true loads the same package in two universes (pkg vs
+// pkg [pkg.test]) whose *types.Package pointers differ — silently
+// skipping every reference living in the test universe.
+func renameSameObject(fset *token.FileSet, obj, target types.Object) bool {
+	if obj == nil || target == nil {
+		return false
+	}
+	if obj == target {
+		return true
+	}
+	if obj.Name() != target.Name() || !obj.Pos().IsValid() || !target.Pos().IsValid() {
+		return false
+	}
+	po := fset.Position(obj.Pos())
+	pt := fset.Position(target.Pos())
+	return po.Filename != "" && po.Filename == pt.Filename && po.Offset == pt.Offset
+}
+
+// renameObjectPosKey builds a dedup key from an object's declaration
+// position and name — stable across the duplicate package universes
+// Tests=true produces, unlike the *types.Object pointer.
+func renameObjectPosKey(fset *token.FileSet, obj types.Object) string {
+	pos := fset.Position(obj.Pos())
+	return fmt.Sprintf("%s:%d:%s", pos.Filename, pos.Offset, obj.Name())
 }
 
 // checkNoCollision rejects a rename that would collide with an
@@ -408,6 +456,105 @@ func checkNoCollision(target types.Object, newName string) error {
 		}
 	}
 	return fmt.Errorf("cannot rename %q → %q: name %q already declared in the same scope", target.Name(), newName, newName)
+}
+
+// checkNoShadowCapture rejects a rename that would silently rebind an
+// existing identifier by introducing (or being shadowed by) a nested
+// declaration of newName. checkNoCollision only inspects the target's
+// immediate parent scope, so it misses two capture directions that both
+// compile cleanly and therefore evade build_check:
+//
+//	inbound  — a reference to the target lives inside a nested scope that
+//	           already declares newName; after the rename that reference
+//	           binds to the nested declaration instead of the target.
+//	outbound — the target is declared in a nested scope and newName is
+//	           declared in an enclosing scope; after the rename the
+//	           renamed target shadows newName for any reference to it that
+//	           sits within the target's scope.
+func checkNoShadowCapture(fset *token.FileSet, pkgs []*packages.Package, target types.Object, newName string) error {
+	targetScope := target.Parent()
+	if targetScope == nil {
+		// Fields, methods and interface members carry no lexical scope;
+		// shadow capture does not apply to them.
+		return nil
+	}
+
+	for _, p := range pkgs {
+		if p.Types == nil || p.TypesInfo == nil {
+			continue
+		}
+		pkgScope := p.Types.Scope()
+
+		// Inbound: for each reference to the target, resolve newName at
+		// that position. If it already binds to an object declared inside
+		// the target's scope, the rename would capture that reference.
+		for id, obj := range p.TypesInfo.Uses {
+			if !renameSameObject(fset, obj, target) {
+				continue
+			}
+			inner := pkgScope.Innermost(id.Pos())
+			if inner == nil {
+				continue
+			}
+			sc, other := inner.LookupParent(newName, id.Pos())
+			if other == nil || other == target {
+				continue
+			}
+			if scopeIsDescendant(sc, targetScope) {
+				return fmt.Errorf("cannot rename %q → %q: an existing %q declared in a nested scope would capture a reference to %q at %s",
+					target.Name(), newName, newName, target.Name(), fset.Position(id.Pos()))
+			}
+		}
+
+		// Outbound: the renamed target would shadow an enclosing-scope
+		// object named newName for any reference to that object located
+		// inside the target's scope.
+		for id, obj := range p.TypesInfo.Uses {
+			if obj == nil || obj.Name() != newName || obj == target {
+				continue
+			}
+			objScope := obj.Parent()
+			if objScope == nil {
+				continue
+			}
+			if !scopeIsDescendant(targetScope, objScope) {
+				continue // newName not visible throughout the target's scope
+			}
+			if scopeContainsPos(targetScope, id.Pos()) {
+				return fmt.Errorf("cannot rename %q → %q: the renamed symbol would shadow the enclosing %q and capture a reference to it at %s",
+					target.Name(), newName, newName, fset.Position(id.Pos()))
+			}
+		}
+	}
+	return nil
+}
+
+// scopeIsDescendant reports whether ancestor is a strict ancestor of s
+// (i.e. s is nested inside ancestor). Both scopes are assumed to lie on
+// the same lexical chain, which holds when they both enclose a common
+// position.
+func scopeIsDescendant(s, ancestor *types.Scope) bool {
+	for s != nil {
+		s = s.Parent()
+		if s == ancestor {
+			return true
+		}
+	}
+	return false
+}
+
+// scopeContainsPos reports whether pos falls within scope's source
+// extent. Package and file scopes carry no valid position range; they
+// enclose the whole package, so we treat them as containing everything.
+func scopeContainsPos(scope *types.Scope, pos token.Pos) bool {
+	if scope == nil {
+		return false
+	}
+	sp, ep := scope.Pos(), scope.End()
+	if !sp.IsValid() || !ep.IsValid() {
+		return true
+	}
+	return sp <= pos && pos < ep
 }
 
 // isValidGoIdent reports whether s is a legal Go identifier: starts

@@ -30,15 +30,20 @@ type liftedInsertPlan struct {
 // insert_after patch. hitOffset is the body-relative start offset of the
 // matched anchor.
 //
+// targetBody is the body being patched — the function's own body, or the
+// drilled closure body when the identifier is Parent>closure[N] (backlog
+// item 5: lift resolution must be scoped to the closure, not the outer
+// function, or offsets clamp to the closure edges).
+//
 // When the anchor lands inside a nested scope (closure, if-branch, loop,
-// switch case), the insertion is auto-lifted so that it occurs immediately
-// before (or after) the outermost enclosing statement in the target function
-// body. The Lift field on the returned plan records the move, and the caller
-// is expected to populate Lift.Context with the context lines after the file
-// has been assembled.
+// switch case) of targetBody, the insertion is auto-lifted so that it occurs
+// immediately before (or after) the outermost enclosing statement in
+// targetBody. The Lift field on the returned plan records the move, and the
+// caller is expected to populate Lift.Context with the context lines after
+// the file has been assembled.
 func resolveInsertAnchor(
 	fset *token.FileSet,
-	fn *ast.FuncDecl,
+	targetBody *ast.BlockStmt,
 	origBody string,
 	bodyFileStart int,
 	bodyStartLine int,
@@ -48,7 +53,7 @@ func resolveInsertAnchor(
 	hitOffset int,
 ) liftedInsertPlan {
 	hitFileOff := bodyFileStart + hitOffset
-	lt := findLiftTarget(fset, fn, hitFileOff)
+	lt := findLiftTargetInBody(fset, targetBody, hitFileOff)
 
 	codeTrim := strings.TrimSpace(code)
 
@@ -151,20 +156,20 @@ func contextAroundInsertion(afterSrc []byte, insertLineStart, insertedLineCount,
 }
 
 // liftsAgree returns true when every hit in hits maps to the SAME top-level
-// statement in fn.Body (either because they all lie in the same nested scope,
-// or because the same top-level statement wraps each). In that case, the
-// auto-lift position is unambiguous and we can proceed even without an
+// statement in targetBody (either because they all lie in the same nested
+// scope, or because the same top-level statement wraps each). In that case,
+// the auto-lift position is unambiguous and we can proceed even without an
 // explicit occurrence disambiguation.
 //
 // Hits that are already at the top level count as their own statement: if
 // any hit is top-level and another is nested, they cannot agree.
-func liftsAgree(fset *token.FileSet, fn *ast.FuncDecl, bodyFileStart int, hits [][2]int) bool {
+func liftsAgree(fset *token.FileSet, targetBody *ast.BlockStmt, bodyFileStart int, hits [][2]int) bool {
 	if len(hits) == 0 {
 		return false
 	}
 	var shared token.Pos
 	for i, h := range hits {
-		lt := findLiftTarget(fset, fn, bodyFileStart+h[0])
+		lt := findLiftTargetInBody(fset, targetBody, bodyFileStart+h[0])
 		var pos token.Pos
 		if lt.ShouldLift && lt.TopStmt != nil {
 			pos = lt.TopStmt.Pos()
@@ -190,16 +195,16 @@ func liftsAgree(fset *token.FileSet, fn *ast.FuncDecl, bodyFileStart int, hits [
 //
 // Returns a slice of "Lstart-Lend: <first line trimmed>" strings, one per
 // distinct top-level statement that is a candidate lift target.
-func ambiguousLiftCandidates(fset *token.FileSet, fn *ast.FuncDecl, src []byte, bodyFileStart int, hits [][2]int) []string {
+func ambiguousLiftCandidates(fset *token.FileSet, targetBody *ast.BlockStmt, src []byte, bodyFileStart int, hits [][2]int) []string {
 	seen := make(map[token.Pos]bool)
 	var out []string
 	for _, h := range hits {
 		fileOff := bodyFileStart + h[0]
-		lt := findLiftTarget(fset, fn, fileOff)
+		lt := findLiftTargetInBody(fset, targetBody, fileOff)
 		if !lt.ShouldLift {
 			// Top-level hit — also a candidate: describe by its line.
 			var line int
-			if f := fset.File(fn.Pos()); f != nil {
+			if f := fset.File(targetBody.Pos()); f != nil {
 				line = f.Position(f.Pos(fileOff)).Line
 			}
 			key := token.Pos(-line) // negative to avoid collision with TopStmt keys

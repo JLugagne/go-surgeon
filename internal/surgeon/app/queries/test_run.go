@@ -223,6 +223,7 @@ func parseTestRunOutput(stdout []byte) domain.TestRunResult {
 	cases := make(map[caseKey]*domain.TestCaseResult)
 	order := make([]caseKey, 0)
 	packageSet := make(map[string]struct{})
+	pkgFailed := 0
 
 	scanner := bufio.NewScanner(bytes.NewReader(stdout))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -239,8 +240,13 @@ func parseTestRunOutput(stdout []byte) domain.TestRunResult {
 			packageSet[ev.Package] = struct{}{}
 		}
 		if ev.Test == "" {
-			// package-level events (pass/fail/output without Test) are
-			// mostly about build diagnostics — surfaced via RawOutput.
+			// package-level events: a terminal fail without a failing test
+			// case means the package itself failed (usually a compile
+			// error). Count it so Success cannot report a false green; the
+			// details stay in RawOutput.
+			if ev.Action == "fail" || ev.Action == "build-fail" {
+				pkgFailed++
+			}
 			continue
 		}
 		key := caseKey{pkg: ev.Package, name: ev.Test}
@@ -300,8 +306,13 @@ func parseTestRunOutput(stdout []byte) domain.TestRunResult {
 		tests = append(tests, *tc)
 	}
 
+	// Sum only top-level tests: a parent test's Elapsed already includes every
+	// subtest's time, so counting subtests too would double-count.
 	totalSeconds := 0.0
 	for _, t := range tests {
+		if strings.Contains(t.Name, "/") {
+			continue
+		}
 		totalSeconds += float64(t.ElapsedMS) / 1000.0
 	}
 
@@ -313,9 +324,12 @@ func parseTestRunOutput(stdout []byte) domain.TestRunResult {
 	if skipped > 0 {
 		summary = fmt.Sprintf("%d passed, %d failed, %d skipped in %d %s (%.1fs)", passed, failed, skipped, len(packageSet), pkgNoun, totalSeconds)
 	}
+	if pkgFailed > 0 {
+		summary += fmt.Sprintf(" — %d package(s) failed to build or run", pkgFailed)
+	}
 
 	return domain.TestRunResult{
-		Success: failed == 0,
+		Success: failed == 0 && pkgFailed == 0,
 		Tests:   tests,
 		Summary: summary,
 	}

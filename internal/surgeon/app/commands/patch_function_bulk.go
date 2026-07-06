@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
-	"github.com/JLugagne/go-surgeon/internal/surgeon/domain/service"
 )
 
 // patchFunctionBulkMaxItems is the soft cap on the number of items items[] in a
@@ -18,12 +17,17 @@ const patchFunctionBulkMaxItems = 20
 // to many (file, identifier, patches) targets atomically. Semantics mirror
 // PatchStructBulk:
 //
-//   - If any item fails the entire call fails and no file on disk is
-//     modified. The returned error names the offending item's 1-based index.
+//   - Every item is resolved and applied against a single in-memory overlay,
+//     so same-file items compose and each item sees the previous items'
+//     writes exactly as they will be committed.
+//   - If any item fails the entire call fails and no file on disk is modified.
+//     The returned error names the offending item's 1-based index.
 //   - Preview mode returns the aggregated unified diff across all items.
-//   - Non-preview mode first runs a dry-run through PreviewWith to verify
-//     every item applies cleanly; on success it re-runs against the real
-//     filesystem to write.
+//   - Non-preview mode commits the overlay once (running goimports per file)
+//     only after every item resolved cleanly. Resolving all items before any
+//     goimports pass avoids the earlier phase-2 divergence where a real write
+//     of one item shifted line numbers and broke a later same-file at_line
+//     item.
 func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.PatchFunctionBulkRequest) (domain.PatchFunctionBulkResult, error) {
 	if len(req.Items) > patchFunctionBulkMaxItems {
 		return domain.PatchFunctionBulkResult{}, &domain.Error{
@@ -38,29 +42,26 @@ func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.P
 		}
 	}
 
+	previewH, overlay := h.previewHandler()
 	items := make([]domain.PatchFunctionResult, len(req.Items))
-	diff, _, err := h.PreviewWith(ctx, func(sc service.SurgeonCommands) error {
-		for i, it := range req.Items {
-			r, perr := sc.PatchFunction(ctx, domain.PatchFunctionRequest{
-				FilePath:      it.FilePath,
-				Identifier:    it.Identifier,
-				Patches:       it.Patches,
-				Preview:       false,
-				IncludeNested: it.IncludeNested,
-			})
-			if perr != nil {
-				return &domain.Error{
-					Code:    domainErrorCode(perr),
-					Message: fmt.Sprintf("patch (target=function): item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
-					Err:     perr,
-				}
+	for i, it := range req.Items {
+		// Force Preview=false so the write lands in the overlay buffer and
+		// later items on the same file see the updated content.
+		r, perr := previewH.PatchFunction(ctx, domain.PatchFunctionRequest{
+			FilePath:      it.FilePath,
+			Identifier:    it.Identifier,
+			Patches:       it.Patches,
+			Preview:       false,
+			IncludeNested: it.IncludeNested,
+		})
+		if perr != nil {
+			return domain.PatchFunctionBulkResult{}, &domain.Error{
+				Code:    domainErrorCode(perr),
+				Message: fmt.Sprintf("patch (target=function): item #%d (%s:%s) failed: %v", i+1, it.FilePath, it.Identifier, perr),
+				Err:     perr,
 			}
-			items[i] = r
 		}
-		return nil
-	})
-	if err != nil {
-		return domain.PatchFunctionBulkResult{}, err
+		items[i] = r
 	}
 
 	applied := 0
@@ -77,27 +78,16 @@ func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.P
 		}, nil
 	}
 
-	realItems := make([]domain.PatchFunctionResult, len(req.Items))
-	for i, it := range req.Items {
-		r, perr := h.PatchFunction(ctx, domain.PatchFunctionRequest{
-			FilePath:      it.FilePath,
-			Identifier:    it.Identifier,
-			Patches:       it.Patches,
-			Preview:       false,
-			IncludeNested: it.IncludeNested,
-		})
-		if perr != nil {
-			return domain.PatchFunctionBulkResult{}, &domain.Error{
-				Code:    domainErrorCode(perr),
-				Message: fmt.Sprintf("patch (target=function): item #%d (%s:%s) failed during write phase: %v", i+1, it.FilePath, it.Identifier, perr),
-				Err:     perr,
-			}
-		}
-		realItems[i] = r
+	diff, err := overlay.Diff(ctx)
+	if err != nil {
+		return domain.PatchFunctionBulkResult{}, err
+	}
+	if _, err := h.commitOverlay(ctx, overlay, domain.PlanResult{}); err != nil {
+		return domain.PatchFunctionBulkResult{}, err
 	}
 
 	return domain.PatchFunctionBulkResult{
-		Items:   realItems,
+		Items:   items,
 		Applied: applied,
 		Preview: false,
 		Diff:    diff,

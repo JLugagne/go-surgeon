@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JLugagne/go-surgeon/internal/surgeon/domain"
 	"golang.org/x/tools/go/packages"
@@ -211,7 +212,13 @@ func truncateRawOutput(s string) string {
 	if len(s) <= rawOutputCharLimit {
 		return s
 	}
-	return s[:rawOutputCharLimit] + "\n... (output truncated)"
+	// Back the cut off to a rune boundary so we never split a multi-byte rune
+	// (which would otherwise surface as U+FFFD).
+	cut := rawOutputCharLimit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n... (output truncated)"
 }
 
 // limitedBuffer is an io.Writer that drops bytes past `limit`, flagging the
@@ -231,6 +238,11 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if len(p) <= room {
 		b.buf = append(b.buf, p...)
 		return len(p), nil
+	}
+	// Back off to a rune boundary so the truncated tail never splits a
+	// multi-byte rune (which would render as U+FFFD).
+	for room > 0 && !utf8.RuneStart(p[room]) {
+		room--
 	}
 	b.buf = append(b.buf, p[:room]...)
 	b.truncated = true

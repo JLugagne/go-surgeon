@@ -26,7 +26,7 @@ type FunctionPatch struct {
 	Replace    string // for replace: the replacement text
 	Code       string // for insert_before / insert_after: the line to insert
 	Wrap       string // for wrap: template with %s as the matched text
-	// AtLine targets a specific line inside the function body (1-based, relative to the function, matching the line numbers shown by symbol body=true). When FromLine/ToLine are also set, AtLine is ignored. Mutually exclusive with Match/MatchRegex.
+	// AtLine targets a specific line by file-absolute line number (1-based, matching the line numbers shown by symbol body=true). When FromLine/ToLine are also set, AtLine is ignored. Mutually exclusive with Match/MatchRegex.
 	AtLine int
 	// FromLine is the first line of a line range (1-based, inclusive). Mutually exclusive with Match/MatchRegex.
 	FromLine int

@@ -52,6 +52,25 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 		previewH, _ := h.previewHandler()
 		return previewH.UpdateInterface(ctx, child)
 	}
+	// Doc-only updates (content omitted): reuse the existing declaration
+	// text so the doc splice cannot erase the interface itself.
+	if req.Content == "" {
+		src, rerr := h.fs.ReadFile(ctx, req.FilePath)
+		if rerr != nil {
+			return "", nil, &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: rerr}
+		}
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, req.FilePath, src, parser.ParseComments)
+		if perr != nil {
+			return "", nil, &domain.Error{Code: "PARSE_ERROR", Message: "failed to parse file", Err: perr}
+		}
+		offsets, found := findStructOffsets(fset, file, req.Identifier)
+		if !found {
+			return "", nil, &domain.Error{Code: "NODE_NOT_FOUND", Message: fmt.Sprintf("interface %q not found in %s", req.Identifier, req.FilePath)}
+		}
+		req.Content = string(src[offsets.NodeStart:offsets.End])
+	}
+
 	action := domain.Action{
 		Action:     domain.ActionTypeUpdateStruct,
 		FilePath:   req.FilePath,

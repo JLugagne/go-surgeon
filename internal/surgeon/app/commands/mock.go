@@ -128,6 +128,27 @@ func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (
 		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
 
+	// If the file already exists, surgically replace only this mock's
+	// declarations so sibling mocks in the same file survive, mirroring
+	// MockFromSource.replaceMockInFile. Without this a second mock into the
+	// same file destroyed the first. See issue #17.
+	resolvedImports := make(map[string]string, len(usedPkgs))
+	for p, pkg := range usedPkgs {
+		resolvedImports[p] = pkg.Name()
+	}
+	if existingSrc, readErr := h.fs.ReadFile(ctx, req.FilePath); readErr == nil {
+		updated, handled, mergeErr := replaceMockInFile(existingSrc, req.FilePath, receiverName, body.Bytes(), resolvedImports)
+		if mergeErr != nil {
+			return "", fmt.Errorf("failed to update mock in existing file: %w", mergeErr)
+		}
+		if handled {
+			if _, err := h.fs.WriteFile(ctx, req.FilePath, updated); err != nil {
+				return "", fmt.Errorf("failed to write file: %w", err)
+			}
+			return fmt.Sprintf("Generated %s with %d methods in %s", receiverName, iface.NumMethods(), req.FilePath), nil
+		}
+	}
+
 	if _, err := h.fs.WriteFile(ctx, req.FilePath, buf.Bytes()); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}

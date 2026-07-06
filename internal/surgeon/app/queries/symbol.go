@@ -176,12 +176,22 @@ func getRecvType(recv *ast.FieldList) string {
 	if recv == nil || len(recv.List) == 0 {
 		return ""
 	}
-	switch t := recv.List[0].Type.(type) {
+	t := recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	switch e := t.(type) {
 	case *ast.Ident:
-		return t.Name
-	case *ast.StarExpr:
-		if ident, ok := t.X.(*ast.Ident); ok {
-			return ident.Name
+		return e.Name
+	case *ast.IndexExpr:
+		// generic receiver with one type parameter: Store[T]
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.IndexListExpr:
+		// generic receiver with several type parameters: Store[K, V]
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
 		}
 	}
 	return ""
@@ -196,9 +206,9 @@ func (h *SurgeonQueriesHandler) extractFuncResult(fset *token.FileSet, src []byt
 		doc = strings.TrimSpace(fn.Doc.Text())
 	}
 
-	sigEnd := fn.Body.Pos()
-	if sigEnd == token.NoPos {
-		sigEnd = fn.End()
+	sigEnd := fn.End()
+	if fn.Body != nil {
+		sigEnd = fn.Body.Pos()
 	}
 	sigBytes := src[startPos.Offset:fset.Position(sigEnd).Offset]
 	signature := strings.TrimSpace(string(sigBytes))
@@ -451,6 +461,18 @@ func (h *SurgeonQueriesHandler) extractValueResult(fset *token.FileSet, src []by
 	}
 }
 
+// specSpansLine reports whether line falls within spec's source range,
+// including its own doc comment when present.
+func specSpansLine(fset *token.FileSet, spec ast.Spec, doc *ast.CommentGroup, line int) bool {
+	start := spec.Pos()
+	if doc != nil {
+		start = doc.Pos()
+	}
+	startLine := fset.Position(start).Line
+	endLine := fset.Position(spec.End()).Line
+	return line >= startLine && line <= endLine
+}
+
 func (h *SurgeonQueriesHandler) findSymbolAtLine(ctx context.Context, query domain.SymbolQuery) (*domain.SymbolResult, error) {
 	if query.File == "" {
 		return nil, fmt.Errorf("file is required when at_line is set")
@@ -486,24 +508,44 @@ func (h *SurgeonQueriesHandler) findSymbolAtLine(ctx context.Context, query doma
 		if gen, ok := decl.(*ast.GenDecl); ok {
 			switch gen.Tok {
 			case token.TYPE:
+				// Select the spec spanning the line; fall back to the first
+				// spec for group-header/blank lines inside the block.
+				var first *ast.TypeSpec
 				for _, spec := range gen.Specs {
 					ts, ok := spec.(*ast.TypeSpec)
 					if !ok {
 						continue
 					}
-					r := h.extractStructResult(fset, src, f, gen, ts, query.File, outline)
+					if first == nil {
+						first = ts
+					}
+					if specSpansLine(fset, ts, ts.Doc, line) {
+						r := h.extractStructResult(fset, src, f, gen, ts, query.File, outline)
+						return &r, nil
+					}
+				}
+				if first != nil {
+					r := h.extractStructResult(fset, src, f, gen, first, query.File, outline)
 					return &r, nil
 				}
 			case token.VAR, token.CONST:
+				var first *ast.ValueSpec
 				for _, spec := range gen.Specs {
 					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
+					if !ok || len(vs.Names) == 0 {
 						continue
 					}
-					if len(vs.Names) > 0 {
+					if first == nil {
+						first = vs
+					}
+					if specSpansLine(fset, vs, vs.Doc, line) {
 						r := h.extractValueResult(fset, src, f, gen, vs, vs.Names[0], query.File, outline)
 						return &r, nil
 					}
+				}
+				if first != nil {
+					r := h.extractValueResult(fset, src, f, gen, first, first.Names[0], query.File, outline)
+					return &r, nil
 				}
 			}
 		}

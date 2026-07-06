@@ -53,8 +53,9 @@ Run this before editing a function — read the current body first.`,
   # Find a test helper or test function
   go-surgeon symbol setupTestApp --tests --body --dir internal/catalog/app/commands
 
-  # Batch read: helper + one example test (saves a full-file Read)
-  go-surgeon symbol "setupTestApp|TestCreateBook_Success" -t -b -d internal/catalog/app/commands
+  # Batch read: helper + one example test (saves a full-file Read). Alternation
+  # only works with --pattern (regex) — a positional query is matched exactly.
+  go-surgeon symbol --pattern "setupTestApp|TestCreateBook_Success" -t -b -d internal/catalog/app/commands
 
   # Scope the search to a directory
   go-surgeon symbol Validate --dir internal/catalog/domain
@@ -129,13 +130,17 @@ Run this before editing a function — read the current body first.`,
 			}
 
 			var allResults []domain.SymbolResult
+			var firstErr error
 
 			parts := strings.Split(queryStr, ".")
 
 			// 1. Exact Name: "MyFunc"
 			if len(parts) == 1 {
 				query := domain.SymbolQuery{Name: parts[0], Tests: tests, Module: moduleFlag}
-				results, _ := queries.FindSymbols(ctx, query, targetDir)
+				results, err := queries.FindSymbols(ctx, query, targetDir)
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
 				allResults = append(allResults, results...)
 			}
 
@@ -143,24 +148,38 @@ Run this before editing a function — read the current body first.`,
 			if len(parts) == 2 {
 				// Try Receiver.Method
 				query1 := domain.SymbolQuery{Receiver: parts[0], Name: parts[1], Tests: tests, Module: moduleFlag}
-				results1, _ := queries.FindSymbols(ctx, query1, targetDir)
+				results1, err1 := queries.FindSymbols(ctx, query1, targetDir)
+				if err1 != nil && firstErr == nil {
+					firstErr = err1
+				}
 				allResults = append(allResults, results1...)
 
 				// Try pkg.Name
 				query2 := domain.SymbolQuery{PackageName: parts[0], Name: parts[1], Tests: tests, Module: moduleFlag}
-				results2, _ := queries.FindSymbols(ctx, query2, targetDir)
+				results2, err2 := queries.FindSymbols(ctx, query2, targetDir)
+				if err2 != nil && firstErr == nil {
+					firstErr = err2
+				}
 				allResults = append(allResults, results2...)
 			}
 
 			// 3. Three parts: "pkg.Receiver.Method"
 			if len(parts) == 3 {
 				query := domain.SymbolQuery{PackageName: parts[0], Receiver: parts[1], Name: parts[2], Tests: tests, Module: moduleFlag}
-				results, _ := queries.FindSymbols(ctx, query, targetDir)
+				results, err := queries.FindSymbols(ctx, query, targetDir)
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
 				allResults = append(allResults, results...)
 			}
 
 			results := allResults
 			if len(results) == 0 {
+				// Only surface the error when no query form produced results — one
+				// failing form must not mask hits from a successful one.
+				if firstErr != nil {
+					return firstErr
+				}
 				fmt.Printf("No matches found for '%s'.\n", queryStr)
 				fmt.Printf("Hint: run 'go-surgeon graph -s -d %s' to list available symbols, or check the Receiver.Method format.\n", targetDir)
 				return nil

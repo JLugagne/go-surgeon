@@ -90,7 +90,19 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 	// 4. Generate the missing methods
 	var newContent bytes.Buffer
 	var generatedMethodNames []string
+	// Types declared in the target package must stay unqualified — a stub in
+	// `package store` referencing `store.ID` does not compile. Compare each
+	// type's package against the target package path, mirroring Mock (#19).
+	// Foreign packages keep their qualifier and are resolved by goimports on
+	// write. See issue #18.
+	targetPkgPath := h.detectPackagePath(ctx, req.FilePath)
 	qualifier := func(p *types.Package) string {
+		if p == nil {
+			return ""
+		}
+		if targetPkgPath != "" && p.Path() == targetPkgPath {
+			return ""
+		}
 		return p.Name()
 	}
 
@@ -128,7 +140,7 @@ func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.Implement
 			continue
 		}
 
-		params := types.TypeString(sig.Params(), qualifier)
+		params := formatTupleParams(sig, qualifier)
 		results := types.TypeString(sig.Results(), qualifier)
 
 		methodStr := fmt.Sprintf("\n// %s implements %s.\nfunc (r %s) %s%s %s {\n\t// TODO(go-surgeon): implement %s\n\tpanic(\"not implemented\")\n}\n",
@@ -246,9 +258,9 @@ func extractFuncResult(fset *token.FileSet, src []byte, fn *ast.FuncDecl, path, 
 		doc = strings.TrimSpace(fn.Doc.Text())
 	}
 
-	sigEnd := fn.Body.Pos()
-	if sigEnd == token.NoPos {
-		sigEnd = fn.End()
+	sigEnd := fn.End()
+	if fn.Body != nil {
+		sigEnd = fn.Body.Pos()
 	}
 	sigBytes := src[startPos.Offset:fset.Position(sigEnd).Offset]
 	signature := strings.TrimSpace(string(sigBytes))
@@ -324,4 +336,31 @@ func findModulePathFromDir(dir string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// formatTupleParams renders a signature's parameter list, restoring the
+// "..." on the final parameter of variadic signatures — types.TypeString
+// prints the tuple's last param as a plain slice, which compiles but does
+// not satisfy the interface.
+func formatTupleParams(sig *types.Signature, qualifier types.Qualifier) string {
+	tup := sig.Params()
+	parts := make([]string, tup.Len())
+	for i := 0; i < tup.Len(); i++ {
+		v := tup.At(i)
+		name := v.Name()
+		if name == "" {
+			name = fmt.Sprintf("p%d", i)
+		}
+		typStr := ""
+		if sig.Variadic() && i == tup.Len()-1 {
+			if sl, ok := v.Type().(*types.Slice); ok {
+				typStr = "..." + types.TypeString(sl.Elem(), qualifier)
+			}
+		}
+		if typStr == "" {
+			typStr = types.TypeString(v.Type(), qualifier)
+		}
+		parts[i] = name + " " + typStr
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
 }

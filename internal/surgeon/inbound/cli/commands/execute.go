@@ -29,16 +29,48 @@ Inside this YAML the original action names remain valid.
 
 Plan file schema:
   actions:
-    - action: create_file | replace_file
+    - action: create_file | replace_file | delete_file
               add_func | update_func | delete_func
               add_struct | update_struct | delete_struct
               add_interface | update_interface | delete_interface
+              update_decl | insert_call
+              patch_function | patch_struct | patch_interface | patch_file | patch_decl
       file:       <target file path>
-      identifier: <FuncName or Receiver.Method, for update/delete>
+      identifier: <FuncName or Receiver.Method, for update/delete/patch>
       content: |
         <raw Go source, no package declaration or imports>
       mock_file: <mock output path, for add/update_interface>
       mock_name: <mock struct name, for add/update_interface>
+      position:  <before-return | end-of-body | after:<marker>, for insert_call>
+
+In-place patch actions carry their operations in a dedicated list field
+(same shapes as the MCP patch tool):
+    - action: patch_function        # or patch_decl (reuses this shape)
+      file: <target file path>
+      identifier: <FuncName or Receiver.Method>
+      patch_function_ops:           # patch_decl_ops for patch_decl
+        - op: replace               # replace|insert_before|insert_after|delete|wrap|set_signature
+          match: "old text"
+          replace: "new text"
+    - action: patch_struct
+      file: <target file path>
+      identifier: <StructName>
+      patch_struct_ops:
+        - op: add_field             # add_field|remove_field|rename_field|retype_field|set_tag|set_doc
+          name: Timeout
+          type: time.Duration
+          tag: 'json:"timeout"'
+    - action: patch_interface
+      file: <target file path>
+      identifier: <InterfaceName>
+      patch_interface_ops:
+        - op: add_method            # add_method|remove_method|rename_method|retype_method|set_doc|embed|remove_embed
+          signature: Close() error
+    - action: patch_file
+      file: <target file path>
+      patch_file_ops:
+        - match: "old"              # or match_regex; replace supports $1 with match_regex
+          replace: "new"
 
 There is no limit on the number of actions per plan file.`,
 		Example: `  # Execute a plan from a file

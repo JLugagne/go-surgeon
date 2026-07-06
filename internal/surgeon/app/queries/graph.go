@@ -102,7 +102,14 @@ func (h *SurgeonQueriesHandler) Graph(ctx context.Context, opts domain.GraphOpti
 	if !symbols || recursive {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return err
+				// Skip an unreadable file or directory instead of aborting the
+				// whole walk. Returning SkipDir on a directory (Walk already
+				// won't descend into one it couldn't read) lets the overview
+				// still report every sibling package.
+				if info != nil && info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if info.IsDir() {
 				name := info.Name()
@@ -496,6 +503,9 @@ func estimateTokens(packages []domain.GraphPackage) int {
 //  3. Strip symbol signatures (keep file paths)
 //  4. Strip file lists (keep package paths only)
 //  5. Truncate package list from the end
+//
+// Whenever a content-losing level (symbols, files or packages dropped) fires, a
+// trailing marker package is appended so callers never lose content silently.
 func truncateToTokenBudget(packages []domain.GraphPackage, budget int) []domain.GraphPackage {
 	if estimateTokens(packages) <= budget {
 		return packages
@@ -518,26 +528,58 @@ func truncateToTokenBudget(packages []domain.GraphPackage, budget int) []domain.
 	}
 
 	// Level 3: strip symbols, keep file paths.
+	symbolFilesStripped := 0
 	for i := range packages {
 		for j := range packages[i].Files {
+			if len(packages[i].Files[j].Symbols) > 0 {
+				symbolFilesStripped++
+			}
 			packages[i].Files[j].Symbols = nil
 		}
 	}
 	if estimateTokens(packages) <= budget {
-		return packages
+		return withTruncationMarker(packages, 0, 0, symbolFilesStripped, budget)
 	}
 
 	// Level 4: strip files entirely.
+	filesOmitted := 0
 	for i := range packages {
+		filesOmitted += len(packages[i].Files)
 		packages[i].Files = nil
 	}
 	if estimateTokens(packages) <= budget {
-		return packages
+		return withTruncationMarker(packages, 0, filesOmitted, symbolFilesStripped, budget)
 	}
 
 	// Level 5: truncate package list.
+	packagesOmitted := 0
 	for len(packages) > 1 && estimateTokens(packages) > budget {
 		packages = packages[:len(packages)-1]
+		packagesOmitted++
 	}
-	return packages
+	return withTruncationMarker(packages, packagesOmitted, filesOmitted, symbolFilesStripped, budget)
+}
+
+// withTruncationMarker appends a synthetic package whose Path carries a
+// human-readable notice of what token-budget truncation dropped. It returns the
+// list unchanged when nothing content-bearing was omitted. The marker rides in
+// the Path field, the same channel the module header already uses.
+func withTruncationMarker(packages []domain.GraphPackage, packagesOmitted, filesOmitted, symbolFilesStripped, budget int) []domain.GraphPackage {
+	var parts []string
+	if packagesOmitted > 0 {
+		parts = append(parts, fmt.Sprintf("%d package(s)", packagesOmitted))
+	}
+	if filesOmitted > 0 {
+		parts = append(parts, fmt.Sprintf("file lists (%d file(s))", filesOmitted))
+	} else if symbolFilesStripped > 0 {
+		parts = append(parts, fmt.Sprintf("symbols from %d file(s)", symbolFilesStripped))
+	}
+	if len(parts) == 0 {
+		return packages
+	}
+	marker := domain.GraphPackage{
+		Path: fmt.Sprintf("(truncated to fit token_budget=%d: omitted %s — raise token_budget for full detail)",
+			budget, strings.Join(parts, ", ")),
+	}
+	return append(packages, marker)
 }
