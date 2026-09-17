@@ -286,7 +286,7 @@ func (h *SurgeonQueriesHandler) ComputeAffectedPackages(ctx context.Context, fil
 	if err != nil {
 		return nil, fmt.Errorf("getwd: %w", err)
 	}
-	loaded, err := h.loader.Load(ctx, cwd, tests)
+	loaded, err := h.loader.LoadGraph(ctx, cwd, tests)
 	if err != nil {
 		return nil, fmt.Errorf("load packages: %w", err)
 	}
