@@ -1,6 +1,6 @@
 module github.com/JLugagne/go-surgeon
 
-go 1.26.5
+go 1.26.8
 
 require (
 	github.com/creativeprojects/go-selfupdate v1.6.0
