@@ -26,6 +26,8 @@ import (
 // Typed vars without an initializer (`var x int`) are rejected with
 // NODE_NOT_FOUND — there is no value to patch.
 func (h *ExecutePlanHandler) PatchDecl(ctx context.Context, req domain.PatchDeclRequest) (domain.PatchDeclResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
 	if err != nil {
 		return domain.PatchDeclResult{}, &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}

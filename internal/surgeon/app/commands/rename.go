@@ -147,6 +147,8 @@ func (h *ExecutePlanHandler) Rename(ctx context.Context, req domain.RenameReques
 		files = append(files, f)
 	}
 	sort.Strings(files)
+	ctx, unlock := h.lockFiles(ctx, files...)
+	defer unlock()
 
 	result := domain.RenameResult{
 		OldName: req.Symbol.Name,
@@ -236,7 +238,7 @@ func locateSymbol(fset *token.FileSet, pkgs []*packages.Package, ref domain.Symb
 	// symbol as "ambiguous (2 matches)".
 	seen := make(map[string]struct{})
 	addCandidate := func(obj types.Object, p *packages.Package) {
-		key := renameObjectPosKey(fset, obj)
+		key := renameObjectPosKey(fset, obj, ref)
 		if _, dup := seen[key]; dup {
 			return
 		}
@@ -422,11 +424,12 @@ func renameSameObject(fset *token.FileSet, obj, target types.Object) bool {
 	return po.Filename != "" && po.Filename == pt.Filename && po.Offset == pt.Offset
 }
 
-// renameObjectPosKey builds a dedup key from an object's declaration
-// position and name — stable across the duplicate package universes
-// Tests=true produces, unlike the *types.Object pointer.
-func renameObjectPosKey(fset *token.FileSet, obj types.Object) string {
+// renameObjectPosKey builds the dedup key for candidate declarations. For methods with a receiver hint the identity is file:line:name:receiver: go/packages can report the same declaration twice (plain and test-augmented universes, or a type-checker object whose Pos points at the receiver on the same line) with slightly different byte offsets. Offsets made those report as ambiguous (2 matches) at the same file:line (issue #36). Methods on one receiver cannot share a line, so this key is collision-free for them. Everything else keeps the precise offset-based key so two genuinely distinct declarations are never collapsed.
+func renameObjectPosKey(fset *token.FileSet, obj types.Object, ref domain.SymbolRef) string {
 	pos := fset.Position(obj.Pos())
+	if ref.Receiver != "" {
+		return fmt.Sprintf("%s:%d:%s:%s", pos.Filename, pos.Line, obj.Name(), ref.Receiver)
+	}
 	return fmt.Sprintf("%s:%d:%s", pos.Filename, pos.Offset, obj.Name())
 }
 

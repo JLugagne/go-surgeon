@@ -15,6 +15,8 @@ import (
 
 // AddInterface appends an interface type declaration to a file and optionally generates a mock.
 func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath, req.MockFile)
+	defer unlock()
 	if req.Preview {
 		child := req
 		child.Preview = false
@@ -46,6 +48,8 @@ func (h *ExecutePlanHandler) AddInterface(ctx context.Context, req domain.Interf
 
 // UpdateInterface replaces an existing interface type declaration and regenerates its mock.
 func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath, req.MockFile)
+	defer unlock()
 	if req.Preview {
 		child := req
 		child.Preview = false
@@ -125,6 +129,8 @@ func (h *ExecutePlanHandler) UpdateInterface(ctx context.Context, req domain.Int
 // MockFile — but leaves the file itself in place (even if empty) so other
 // mocks that might share the file are not disturbed.
 func (h *ExecutePlanHandler) DeleteInterface(ctx context.Context, req domain.InterfaceActionRequest) (string, []string, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath, req.MockFile)
+	defer unlock()
 	if req.Preview {
 		child := req
 		child.Preview = false

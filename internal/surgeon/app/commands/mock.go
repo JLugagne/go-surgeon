@@ -17,6 +17,8 @@ import (
 
 // Mock generates a function-field mock struct that satisfies an interface.
 func (h *ExecutePlanHandler) Mock(ctx context.Context, req domain.MockRequest) (string, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	if req.Interface == "" || req.Receiver == "" || req.FilePath == "" {
 		return "", fmt.Errorf("interface, receiver, and file path are required")
 	}

@@ -190,7 +190,7 @@ func TestToolsList(t *testing.T) {
 	}
 
 	expected := []string{
-		"overview", "symbol", "build_check", "test_run",
+		"overview", "symbol", "read", "build_check", "test_run",
 		"create", "update", "delete",
 		"interface",
 		"insert_call",
@@ -1939,4 +1939,8 @@ func TestDerive_InterfaceFromType_MockNameWithoutMockFile(t *testing.T) {
 	})
 	require.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "mock_file and mock_name")
+}
+
+func (m *mockQueries) ReadFile(ctx context.Context, req domain.ReadFileRequest) (domain.ReadFileResult, error) {
+	return domain.ReadFileResult{}, nil
 }

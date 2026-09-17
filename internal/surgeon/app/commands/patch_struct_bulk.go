@@ -31,6 +31,12 @@ const patchStructBulkMaxItems = 20
 //     rather than a second per-item pass over goimports-transformed disk
 //     content, so what is committed matches what was resolved.
 func (h *ExecutePlanHandler) PatchStructBulk(ctx context.Context, req domain.PatchStructBulkRequest) (domain.PatchStructBulkResult, error) {
+	bulkPaths := make([]string, 0, len(req.Items))
+	for _, it := range req.Items {
+		bulkPaths = append(bulkPaths, it.FilePath)
+	}
+	ctx, unlock := h.lockFiles(ctx, bulkPaths...)
+	defer unlock()
 	if len(req.Items) > patchStructBulkMaxItems {
 		return domain.PatchStructBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",

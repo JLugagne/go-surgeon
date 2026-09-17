@@ -67,6 +67,7 @@ func Setup(version string) Runner {
 		rootCmd.AddCommand(
 			clicommands.NewGraphCommand(queriesHandler),
 			clicommands.NewSymbolCommand(queriesHandler),
+			clicommands.NewReadCommand(queriesHandler),
 			clicommands.NewFindDefinitionCommand(queriesHandler),
 			clicommands.NewFindReferencesCommand(queriesHandler),
 			clicommands.NewRenameSymbolCommand(executePlanHandler),

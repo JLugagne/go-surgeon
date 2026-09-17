@@ -14,6 +14,8 @@ import (
 )
 
 func (h *ExecutePlanHandler) TagStruct(ctx context.Context, req domain.TagRequest) error {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	if req.Preview {
 		child := req
 		child.Preview = false

@@ -35,4 +35,5 @@ type SurgeonQueries interface {
 	TestRun(ctx context.Context, req domain.TestRunRequest) (domain.TestRunResult, error)
 	FindReferences(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
 	FindDefinition(ctx context.Context, query domain.ReferencesQuery) (domain.ReferencesResult, error)
+	ReadFile(ctx context.Context, req domain.ReadFileRequest) (domain.ReadFileResult, error)
 }

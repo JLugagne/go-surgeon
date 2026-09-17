@@ -31,6 +31,7 @@ var Catalog = []ToolEntry{
 	// EXPLORE
 	{Name: "overview", Category: "explore", Summary: "list packages + symbols across a project; START HERE on unfamiliar codebases", Example: `{"dir": "internal", "symbols": true}`, Related: "symbol"},
 	{Name: "symbol", Category: "explore", Summary: "read one declaration (query='Name'/'Receiver.Method') or list matches by regex (pattern='...')", Example: `{"query": "NewServer", "body": true}`, Related: "overview, find_definition"},
+	{Name: "read", Category: "explore", Summary: "read a whole Go file or a line range with line numbers, same numbering as symbol body=true", Example: `{"file": "internal/foo.go", "from_line": 1, "to_line": 40}`, Related: "symbol, overview"},
 
 	// REFS
 	{Name: "find_definition", Category: "refs", Summary: "type-aware: locate a symbol's declaration across packages", Example: `{"name": "NewServer"}`, Related: "symbol, find_references"},

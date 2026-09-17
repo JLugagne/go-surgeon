@@ -16,6 +16,8 @@ import (
 // applied atomically. When the patched op changes the method set and
 // mock_file / mock_name are provided, the mock is regenerated.
 func (h *ExecutePlanHandler) PatchInterface(ctx context.Context, req domain.PatchInterfaceRequest) (domain.PatchInterfaceResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath, req.MockFile)
+	defer unlock()
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
 	if err != nil {
 		return domain.PatchInterfaceResult{}, &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}

@@ -26,6 +26,7 @@ type ExecutePlanHandler struct {
 	fs         filesystem.FileSystem
 	ifaceCache *ifaceLRU
 	loader     *loader.Loader
+	locks      *fileLocks
 }
 
 // NewExecutePlanHandler creates a new ExecutePlanHandler.
@@ -34,6 +35,7 @@ func NewExecutePlanHandler(fs filesystem.FileSystem) *ExecutePlanHandler {
 		fs:         fs,
 		ifaceCache: newIfaceLRU(50),
 		loader:     loader.New(),
+		locks:      newFileLocks(),
 	}
 }
 
@@ -54,6 +56,8 @@ func (h *ExecutePlanHandler) Loader() *loader.Loader {
 }
 
 func (h *ExecutePlanHandler) Handle(ctx context.Context, plan domain.Plan) (domain.PlanResult, error) {
+	ctx, unlock := h.lockFiles(ctx, planLockPaths(plan)...)
+	defer unlock()
 	if len(plan.Actions) == 0 {
 		return domain.PlanResult{}, domain.ErrEmptyPlan
 	}
@@ -286,6 +290,9 @@ func (h *ExecutePlanHandler) handleASTAction(ctx context.Context, action domain.
 	var updatedSrc []byte
 	var warnings []string
 
+	if err := validateUpdateContent(action); err != nil {
+		return nil, nil, err
+	}
 	switch action.Action {
 	case domain.ActionTypeUpdateFunc:
 		offsets, ok := findFuncOffsets(fset, f, action.Identifier)
@@ -979,6 +986,7 @@ func insertCallIntoFunc(fset *token.FileSet, f *ast.File, src []byte, identifier
 
 	// Build the line to insert (trimmed call + newline).
 	line := indent + callTrimmed + "\n"
+	insertAt, line = ensureLineBoundary(string(src), insertAt, line)
 
 	result := make([]byte, 0, len(src)+len(line))
 	result = append(result, src[:insertAt]...)
@@ -1205,4 +1213,41 @@ func (h *ExecutePlanHandler) commitOverlay(ctx context.Context, overlay *preview
 	res.FilesModified = len(res.Files)
 	res.AddedImports = addedImports
 	return res, nil
+}
+
+// validateUpdateContent rejects update content that declares more than one
+// top-level declaration. update targets exactly one declaration, and
+// splicing multi-declaration content used to silently displace or
+// duplicate its siblings (issue #35). Empty content (doc-only edits) is
+// left untouched.
+// validateUpdateContent rejects update content that declares more than one
+// top-level declaration. update targets exactly one declaration, and
+// splicing multi-declaration content used to silently displace or
+// duplicate its siblings (issue #35). Empty content (doc-only edits) is
+// left untouched.
+func validateUpdateContent(action domain.Action) error {
+	var content, kind, label string
+	switch action.Action {
+	case domain.ActionTypeUpdateFunc:
+		content, kind, label = action.Content, "function", "update_func"
+	case domain.ActionTypeUpdateStruct:
+		content, kind, label = normalizeStructContent(action.Content), "type", "update_struct"
+	default:
+		return nil
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "content.go", "package p\n"+content, parser.SkipObjectResolution)
+	if err != nil {
+		return &domain.Error{Code: "PARSE_ERROR", Message: fmt.Sprintf("%s: content is not valid Go: %v", label, err)}
+	}
+	if len(f.Decls) != 1 {
+		return &domain.Error{
+			Code:    "INVALID_ARGUMENT",
+			Message: fmt.Sprintf("%s expects exactly one %s declaration in content; got %d. Update replaces a single declaration — split the extra declarations into separate actions (execute_plan can batch them).", label, kind, len(f.Decls)),
+		}
+	}
+	return nil
 }

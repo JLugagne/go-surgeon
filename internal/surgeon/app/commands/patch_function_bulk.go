@@ -29,6 +29,12 @@ const patchFunctionBulkMaxItems = 20
 //     of one item shifted line numbers and broke a later same-file at_line
 //     item.
 func (h *ExecutePlanHandler) PatchFunctionBulk(ctx context.Context, req domain.PatchFunctionBulkRequest) (domain.PatchFunctionBulkResult, error) {
+	bulkPaths := make([]string, 0, len(req.Items))
+	for _, it := range req.Items {
+		bulkPaths = append(bulkPaths, it.FilePath)
+	}
+	ctx, unlock := h.lockFiles(ctx, bulkPaths...)
+	defer unlock()
 	if len(req.Items) > patchFunctionBulkMaxItems {
 		return domain.PatchFunctionBulkResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",

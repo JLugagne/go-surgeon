@@ -35,6 +35,8 @@ import (
 //   - zero-match patches are allowed and recorded as Warnings (so callers
 //     can issue defensive renames without a hard error).
 func (h *ExecutePlanHandler) PatchFile(ctx context.Context, req domain.PatchFileRequest) (domain.PatchFileResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	if !strings.HasSuffix(req.FilePath, ".go") {
 		return domain.PatchFileResult{}, &domain.Error{
 			Code:    "INVALID_ARGUMENT",

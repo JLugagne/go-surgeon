@@ -157,6 +157,8 @@ func qualifyTypeExpr(expr ast.Expr, src []byte, fset *token.FileSet, pkgName str
 }
 
 func (h *ExecutePlanHandler) GenerateTest(ctx context.Context, filePath, identifier string) (string, error) {
+	ctx, unlock := h.lockFiles(ctx, filePath)
+	defer unlock()
 	src, err := h.fs.ReadFile(ctx, filePath)
 	if err != nil {
 		return "", &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}

@@ -15,6 +15,8 @@ import (
 )
 
 func (h *ExecutePlanHandler) ExtractInterface(ctx context.Context, req domain.ExtractInterfaceRequest) (string, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath, req.OutPath, req.MockFile)
+	defer unlock()
 	if req.Preview {
 		child := req
 		child.Preview = false

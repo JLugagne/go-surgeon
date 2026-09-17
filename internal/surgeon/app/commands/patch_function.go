@@ -48,6 +48,8 @@ const (
 // (offset-stable), then applied atomically — if any resolution fails, nothing
 // is written.
 func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.PatchFunctionRequest) (domain.PatchFunctionResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
 	if err != nil {
 		return domain.PatchFunctionResult{}, &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}
@@ -138,6 +140,10 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 	bodyStartLine := fset.Position(targetBody.Lbrace).Line
 	rbraceOff := fset.Position(targetBody.Rbrace).Offset // offset of '}'
 	origBody := string(src[lbraceOff+1 : rbraceOff])
+	bodyLabel := "function body"
+	if targetLit != nil {
+		bodyLabel = "closure body"
+	}
 
 	// Build the closure-exclusion range set used to restrict text matches to
 	// the body's own top-level region (ignoring anything nested inside a
@@ -243,7 +249,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 				if p.Op == domain.PatchOpInsertAfter && end > start {
 					anchor = lineStartOffset(origBody, end-1)
 				}
-				plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, anchor)
+				plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, anchor, bodyLabel)
 				edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1}
 				if plan.Lift != nil {
 					autoLifts = append(autoLifts, *plan.Lift)
@@ -337,7 +343,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 					start, end := deletionRange(origBody, h[0], h[1])
 					extraEdits = append(extraEdits, resolvedEdit{start: start, end: end, replacement: "", patch: i + 1})
 				case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
-					plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, h[0])
+					plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, h[0], bodyLabel)
 					extraEdits = append(extraEdits, resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1})
 					if plan.Lift != nil {
 						autoLifts = append(autoLifts, *plan.Lift)
@@ -455,7 +461,7 @@ func (h *ExecutePlanHandler) PatchFunction(ctx context.Context, req domain.Patch
 			replaceChecks = append(replaceChecks, replaceValidation{Index: i + 1, Replacement: repl, Match: origBody[hit[0]:hit[1]], PreBody: origBody})
 
 		case domain.PatchOpInsertBefore, domain.PatchOpInsertAfter:
-			plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0])
+			plan := resolveInsertAnchor(fset, targetBody, origBody, lbraceOff+1, bodyStartLine, i+1, p.Op, p.Code, hit[0], bodyLabel)
 			edits[i] = resolvedEdit{start: plan.Start, end: plan.End, replacement: plan.Line, patch: i + 1}
 			if plan.Lift != nil {
 				autoLifts = append(autoLifts, *plan.Lift)

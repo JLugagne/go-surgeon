@@ -53,3 +53,7 @@ func TestSymbolCommand_QueryError_Surfaced(t *testing.T) {
 	require.Error(t, err, "a failing query must not masquerade as 'no matches': %s", out.String())
 	assert.Contains(t, err.Error(), "directory does not exist")
 }
+
+func (f *fakeQueries) ReadFile(ctx context.Context, req domain.ReadFileRequest) (domain.ReadFileResult, error) {
+	return domain.ReadFileResult{}, nil
+}

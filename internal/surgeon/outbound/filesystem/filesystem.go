@@ -3,7 +3,6 @@ package filesystem
 import (
 	"context"
 	"fmt"
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -100,7 +99,11 @@ func (f *FileSystem) MkdirAll(ctx context.Context, path string) error {
 	if warning != "" {
 		fmt.Fprintln(os.Stderr, "go-surgeon: "+warning)
 	}
-	return os.MkdirAll(resolved, 0755)
+	if err := os.MkdirAll(resolved, 0755); err != nil {
+		return err
+	}
+	invalidateModuleIndex()
+	return nil
 }
 
 // DeleteFile removes a file from disk. Path is normalized against the
@@ -113,7 +116,11 @@ func (f *FileSystem) DeleteFile(ctx context.Context, path string) error {
 	if warning != "" {
 		fmt.Fprintln(os.Stderr, "go-surgeon: "+warning)
 	}
-	return os.Remove(resolved)
+	if err := os.Remove(resolved); err != nil {
+		return err
+	}
+	invalidateModuleIndex()
+	return nil
 }
 
 // warnUnresolvedImports parses the Go source and warns to stderr about any
@@ -125,79 +132,7 @@ func warnUnresolvedImports(path string, src []byte) {
 	if err != nil {
 		return
 	}
-
-	imported := make(map[string]bool)
-	for _, imp := range f.Imports {
-		name := ""
-		if imp.Name != nil {
-			name = imp.Name.Name
-		} else {
-			p := strings.Trim(imp.Path.Value, `"`)
-			parts := strings.Split(p, "/")
-			name = parts[len(parts)-1]
-		}
-		imported[name] = true
-	}
-
-	// Collect all locally declared identifiers so we don't mistake variable names
-	// (e.g. "sc", "cmdBuf") for unresolved package names.
-	declared := make(map[string]bool)
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.AssignStmt:
-			if v.Tok == token.DEFINE {
-				for _, lhs := range v.Lhs {
-					if id, ok := lhs.(*ast.Ident); ok {
-						declared[id.Name] = true
-					}
-				}
-			}
-		case *ast.ValueSpec:
-			for _, name := range v.Names {
-				declared[name.Name] = true
-			}
-		case *ast.Field:
-			for _, name := range v.Names {
-				declared[name.Name] = true
-			}
-		case *ast.RangeStmt:
-			if id, ok := v.Key.(*ast.Ident); ok {
-				declared[id.Name] = true
-			}
-			if v.Value != nil {
-				if id, ok := v.Value.(*ast.Ident); ok {
-					declared[id.Name] = true
-				}
-			}
-		case *ast.TypeSpec:
-			declared[v.Name.Name] = true
-		case *ast.FuncDecl:
-			if v.Name != nil {
-				declared[v.Name.Name] = true
-			}
-		}
-		return true
-	})
-
-	// Collect package-qualified identifiers not backed by an import.
-	unresolved := make(map[string]bool)
-	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		pkg := ident.Name
-		if !imported[pkg] && pkg != f.Name.Name && !declared[pkg] {
-			unresolved[pkg] = true
-		}
-		return true
-	})
-
-	for pkg := range unresolved {
+	for pkg := range collectUnresolvedQualifiers(f) {
 		fmt.Fprintf(os.Stderr, "WARNING: goimports could not resolve package %q referenced in %s — you may need to add the import manually.\n", pkg, path)
 	}
 }
@@ -228,10 +163,16 @@ func applyGoImports(path string, content []byte) ([]byte, []string) {
 		return content, nil
 	}
 	before := parseImportPaths(path, content)
-	formatted, err := imports.Process(path, content, nil)
+
+	// Prefer packages of the current module over the global package index:
+	// goimports would otherwise happily add an unrelated third-party module
+	// (or nothing at all) when a local package shares the qualifier's name.
+	localized, localAdded := resolveLocalImports(path, content)
+
+	formatted, err := imports.Process(path, localized, nil)
 	if err != nil {
-		warnUnresolvedImports(path, content)
-		return content, nil
+		warnUnresolvedImports(path, localized)
+		return localized, localAdded
 	}
 	after := parseImportPaths(path, formatted)
 	var addedImports []string

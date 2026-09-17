@@ -19,6 +19,8 @@ import (
 
 // Implement generates and appends missing interface methods to a struct.
 func (h *ExecutePlanHandler) Implement(ctx context.Context, req domain.ImplementRequest) ([]domain.SymbolResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	if req.Interface == "" || req.Receiver == "" || req.FilePath == "" {
 		return nil, fmt.Errorf("interface, receiver, and file path are required")
 	}

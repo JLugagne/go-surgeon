@@ -41,6 +41,7 @@ func NewServer(commands service.SurgeonCommands, queries service.SurgeonQueries)
 	)
 
 	registerQueryTools(s, queries)
+	registerReadTool(s, queries)
 	registerActionTools(s, commands)
 	registerInterfaceTools(s, commands)
 	registerInsertCallTool(s, commands)

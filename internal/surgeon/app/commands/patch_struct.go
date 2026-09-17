@@ -16,6 +16,8 @@ import (
 // All patches are resolved against the original element list (name-stable),
 // then applied atomically — if any resolution fails, nothing is written.
 func (h *ExecutePlanHandler) PatchStruct(ctx context.Context, req domain.PatchStructRequest) (domain.PatchStructResult, error) {
+	ctx, unlock := h.lockFiles(ctx, req.FilePath)
+	defer unlock()
 	src, err := h.fs.ReadFile(ctx, req.FilePath)
 	if err != nil {
 		return domain.PatchStructResult{}, &domain.Error{Code: "READ_ERROR", Message: "failed to read file", Err: err}

@@ -51,6 +51,7 @@ func resolveInsertAnchor(
 	op domain.PatchOp,
 	code string,
 	hitOffset int,
+	bodyLabel string,
 ) liftedInsertPlan {
 	hitFileOff := bodyFileStart + hitOffset
 	lt := findLiftTargetInBody(fset, targetBody, hitFileOff)
@@ -58,15 +59,17 @@ func resolveInsertAnchor(
 	codeTrim := strings.TrimSpace(code)
 
 	if !lt.ShouldLift {
-		// Anchor is already at the function's top level.
+		// Anchor is already at the target body's top level.
 		indent := lineIndent(origBody, hitOffset)
 		line := indent + codeTrim + "\n"
 		if op == domain.PatchOpInsertBefore {
 			ls := lineStartOffset(origBody, hitOffset)
-			return liftedInsertPlan{Start: ls, End: ls, Line: line, LineCount: 1}
+			ls, line = ensureLineBoundary(origBody, ls, line)
+			return liftedInsertPlan{Start: ls, End: ls, Line: line, LineCount: insertLineCount(line)}
 		}
 		le := lineEndOffset(origBody, hitOffset)
-		return liftedInsertPlan{Start: le, End: le, Line: line, LineCount: 1}
+		le, line = ensureLineBoundary(origBody, le, line)
+		return liftedInsertPlan{Start: le, End: le, Line: line, LineCount: insertLineCount(line)}
 	}
 
 	// Lift: translate top-level statement bounds into body-relative coords
@@ -88,10 +91,12 @@ func resolveInsertAnchor(
 	var anchorLineInFile int
 	if op == domain.PatchOpInsertBefore {
 		start = lineStartOffset(origBody, bs)
+		start, line = ensureLineBoundary(origBody, start, line)
 		end = start
 		anchorLineInFile = lt.TopLine
 	} else {
 		start = lineEndOffset(origBody, be-1)
+		start, line = ensureLineBoundary(origBody, start, line)
 		end = start
 		// Final line of the top-level statement.
 		anchorLineInFile = fset.Position(lt.TopStmt.End()).Line
@@ -101,13 +106,16 @@ func resolveInsertAnchor(
 	if innerLine == 0 {
 		innerLine = bodyStartLine + strings.Count(origBody[:hitOffset], "\n")
 	}
+	if bodyLabel == "" {
+		bodyLabel = "function body"
+	}
 
 	info := &domain.AutoLiftInfo{
 		PatchIndex: patchIdx,
 		LiftedFrom: fmt.Sprintf("%s at L%d", lt.InnerLabel, innerLine),
-		LiftedTo:   fmt.Sprintf("function body at L%d", anchorLineInFile),
+		LiftedTo:   fmt.Sprintf("%s at L%d", bodyLabel, anchorLineInFile),
 	}
-	return liftedInsertPlan{Start: start, End: end, Line: line, LineCount: 1, Lift: info}
+	return liftedInsertPlan{Start: start, End: end, Line: line, LineCount: insertLineCount(line), Lift: info}
 }
 
 // contextAroundInsertion returns a ±radius-non-blank-line window around the
@@ -240,4 +248,44 @@ func extractFileLine(src []byte, off int) string {
 		end++
 	}
 	return string(src[start:end])
+}
+
+// ensureLineBoundary makes an insertion offset line-safe: it never splices
+// text onto the tail of a previous line (notably the body's opening
+// brace), and it never adds a spurious blank line when the body already
+// starts on a fresh line. It returns the adjusted body-relative offset
+// and the (possibly newline-prefixed) line to insert.
+func ensureLineBoundary(body string, start int, line string) (int, string) {
+	if start < 0 {
+		start = 0
+	}
+	if start > len(body) {
+		start = len(body)
+	}
+	if start == 0 {
+		if len(body) == 0 {
+			return 0, line
+		}
+		if body[0] == '\n' {
+			// Body content starts on the next line: insert after it instead
+			// of welding to the opening brace.
+			return 1, line
+		}
+		// Single-line body: put the insertion on its own line.
+		return 0, "\n" + line
+	}
+	if body[start-1] != '\n' {
+		return start, "\n" + line
+	}
+	return start, line
+}
+
+// insertLineCount reports how many physical lines the insert text spans;
+// always at least one.
+func insertLineCount(line string) int {
+	n := strings.Count(line, "\n")
+	if n < 1 {
+		return 1
+	}
+	return n
 }
